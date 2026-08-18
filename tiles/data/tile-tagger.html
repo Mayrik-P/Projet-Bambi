@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tile Tagger — ThunderRoad In The Pocket</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #1b1b1d; color: #eee; display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    padding: 10px 16px; background: #26262a; display: flex; gap: 16px;
+    align-items: flex-end; flex-wrap: wrap; border-bottom: 1px solid #3a3a3f;
+  }
+  header h1 { font-size: 16px; margin: 0 16px 0 0; white-space: nowrap; }
+  header label { font-size: 11px; color: #aaa; display: flex; flex-direction: column; gap: 3px; }
+  header input[type=text], header select {
+    background: #111; color: #eee; border: 1px solid #444; border-radius: 3px; padding: 5px 6px; font-size: 13px;
+  }
+  header input[type=text] { width: 150px; }
+  main { flex: 1; display: flex; overflow: hidden; }
+  #stage-wrap {
+    flex: 1; overflow: auto; background: #0e0e10; display: flex;
+    align-items: flex-start; justify-content: center; padding: 24px;
+  }
+  #placeholder { color: #777; padding: 80px 40px; text-align: center; font-size: 14px; line-height: 1.6; }
+  #stage { max-width: 1150px; width: 100%; }
+  svg { width: 100%; height: auto; display: block; background: #333; }
+  polygon.cell { cursor: pointer; transition: filter .1s; }
+  polygon.cell:hover { filter: brightness(1.3); }
+  aside {
+    width: 320px; flex-shrink: 0; background: #221f22; border-left: 1px solid #3a3a3f;
+    padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px;
+  }
+  section h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+    color: #c9a34e; margin: 0 0 10px; border-bottom: 1px solid #3a3a3f; padding-bottom: 6px;
+  }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .row label { flex: 1.3; font-size: 11.5px; color: #ccc; }
+  .row input[type=range] { flex: 1.6; }
+  .row input[type=number] { width: 62px; background: #111; color: #eee; border: 1px solid #444; border-radius: 3px; padding: 3px; font-size: 12px; }
+  button {
+    background: #c9a34e; border: none; color: #1b1b1d; font-weight: 600;
+    padding: 9px 12px; border-radius: 4px; cursor: pointer; font-size: 12.5px; width: 100%;
+  }
+  button.secondary { background: #3a3a3f; color: #eee; margin-top: 6px; }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .4; cursor: default; }
+  .terrain-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .terrain-btns button { padding: 11px 6px; font-size: 12px; background: #3a3a3f; color: #eee; }
+  .terrain-btns button.active { background: #c9a34e; color: #1b1b1d; }
+  textarea {
+    width: 100%; height: 200px; background: #111; color: #9f9;
+    font-family: ui-monospace, monospace; font-size: 10.5px; border: 1px solid #444; border-radius: 3px; margin-top: 8px;
+  }
+  .hint { font-size: 11px; color: #999; line-height: 1.5; margin: 6px 0 0; }
+  #cellinfo { font-size: 13px; margin-bottom: 10px; min-height: 18px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 12px 0 0; }
+  #progress { font-size: 12.5px; }
+  #progressBarOuter { height: 6px; background: #111; border-radius: 3px; margin-top: 6px; overflow: hidden; }
+  #progressBarInner { height: 100%; background: #c9a34e; width: 0%; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🏷️ Tile Tagger</h1>
+  <label>Scan de la tuile (PNG)
+    <input type="file" id="fileInput" accept="image/*">
+  </label>
+  <label>Format
+    <select id="formatSelect">
+      <option value="vendetta" selected>Vendetta (8 colonnes)</option>
+      <option value="ignition">Ignition (4 colonnes)</option>
+    </select>
+  </label>
+  <label>Identifiant
+    <input type="text" id="tileId" placeholder="vendetta-01a">
+  </label>
+  <label>Nom
+    <input type="text" id="tileName" placeholder="The Parking Lot">
+  </label>
+  <label>Extension
+    <input type="text" id="tileExt" value="base">
+  </label>
+</header>
+
+<main>
+  <div id="stage-wrap">
+    <div id="placeholder">Charge le scan d'une tuile détourée (PNG) pour commencer le calibrage et le tagging.</div>
+    <div id="stage" style="display:none;">
+      <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </div>
+
+  <aside>
+    <section id="calib-section">
+      <h2>Calibrage de la grille</h2>
+      <div class="row"><label>Haut de grille</label><input type="range" id="r_gameTop"><input type="number" id="n_gameTop"></div>
+      <div class="row"><label>Hauteur de rangée</label><input type="range" id="r_rowH"><input type="number" id="n_rowH"></div>
+      <div class="row"><label>Largeur de case</label><input type="range" id="r_cellSlot"><input type="number" id="n_cellSlot"></div>
+      <div class="row"><label>Décalage quinconce</label><input type="range" id="r_quin"><input type="number" id="n_quin"></div>
+      <div class="row"><label>Profondeur encoche</label><input type="range" id="r_notch"><input type="number" id="n_notch"></div>
+      <p class="hint">Ajuste jusqu'à ce que les lignes blanches collent exactement aux vraies séparations dorées de la tuile, et que chaque triangle rouge tombe bien au centre d'une case.</p>
+      <button class="secondary" id="btnResetCalib">Réinitialiser le calibrage</button>
+      <button class="secondary" id="btnExportCalib">Copier le calibrage</button>
+    </section>
+
+    <section id="cell-section">
+      <h2>Case sélectionnée</h2>
+      <div id="cellinfo">Clique une case sur l'image.</div>
+      <div class="terrain-btns">
+        <button data-terrain="road">Route</button>
+        <button data-terrain="off_road">Hors-piste</button>
+        <button data-terrain="mud">Boue</button>
+        <button data-terrain="impassable">Infranchissable</button>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="hazardCheck">
+        <label for="hazardCheck">Case Hazard (double triangle rouge)</label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Progression</h2>
+      <div id="progress">0 / 0 cases taguées</div>
+      <div id="progressBarOuter"><div id="progressBarInner"></div></div>
+    </section>
+
+    <section>
+      <h2>Export</h2>
+      <button id="btnExport">Générer les données de la tuile</button>
+      <textarea id="output" readonly placeholder="Le code généré apparaîtra ici..."></textarea>
+      <button class="secondary" id="btnCopy">Copier le code</button>
+    </section>
+  </aside>
+</main>
+
+<script>
+const COLS_BY_FORMAT = { vendetta: 8, ignition: 4 };
+const ROWS = 6;
+
+const el = (id) => document.getElementById(id);
+const fileInput = el('fileInput'), formatSelect = el('formatSelect');
+const tileId = el('tileId'), tileName = el('tileName'), tileExt = el('tileExt');
+const placeholder = el('placeholder'), stage = el('stage'), svg = el('svg');
+const cellinfo = el('cellinfo'), hazardCheck = el('hazardCheck');
+const progress = el('progress'), progressBarInner = el('progressBarInner');
+const output = el('output');
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+let imgURL = null, imgEl = null;
+let imgW = 0, imgH = 0;
+let format = 'vendetta';
+let COLS = COLS_BY_FORMAT[format];
+let calib = { gameTop: 0, rowH: 0, cellSlot: 0, quin: 0, notch: 0 };
+let grid = [];
+let selected = null; // { row, col }
+
+const TERRAIN_FILL = {
+  road: 'rgba(255,255,255,0.15)',
+  off_road: 'rgba(255,150,40,0.38)',
+  mud: 'rgba(140,40,20,0.5)',
+  impassable: 'rgba(0,0,0,0.65)'
+};
+
+// ---------------------------------------------------------------
+// Grille de données
+// ---------------------------------------------------------------
+function initGrid() {
+  grid = [];
+  for (let r = 0; r < ROWS; r++) {
+    const row = [];
+    for (let c = 0; c < COLS; c++) row.push({ terrain: null, hazard: false });
+    grid.push(row);
+  }
+  selected = null;
+  updateCellPanel();
+}
+
+// ---------------------------------------------------------------
+// Calibrage : mêmes formules géométriques que l'éditeur de plateau
+// précédent (cellPoly / quinconce / notch), avec des constantes
+// recalculées pour la taille réelle de CETTE image (les tuiles
+// détourées de Mayrik n'ont pas le même ratio que l'ancien export
+// d'impression). Valeurs de départ = estimation, à affiner à l'œil
+// avec les sliders tant que ça ne colle pas encore parfaitement.
+// ---------------------------------------------------------------
+function defaultCalib() {
+  const gameTop = imgH * 0.1406;
+  const rowH = (imgH - gameTop) / ROWS;
+  const cellSlot = imgW / (COLS + 2 * 0.1978);
+  const quin = cellSlot * 0.1978;
+  const notch = cellSlot * 0.1014;
+  calib = { gameTop, rowH, cellSlot, quin, notch };
+}
+
+function setupCalibControls() {
+  const specs = {
+    gameTop: { min: 0, max: imgH * 0.4 },
+    rowH: { min: imgH * 0.05, max: imgH * 0.35 },
+    cellSlot: { min: imgW * 0.04, max: imgW * 0.35 },
+    quin: { min: 0, max: imgW * 0.15 },
+    notch: { min: 0, max: imgW * 0.1 }
+  };
+  for (const key in specs) {
+    const r = el('r_' + key), n = el('n_' + key);
+    r.min = specs[key].min; r.max = specs[key].max; r.step = 0.5;
+    n.step = 0.5;
+    r.oninput = () => { calib[key] = parseFloat(r.value); syncCalibInputs(); render(); };
+    n.oninput = () => { calib[key] = parseFloat(n.value) || 0; syncCalibInputs(); render(); };
+  }
+  syncCalibInputs();
+}
+
+function syncCalibInputs() {
+  for (const key in calib) {
+    el('r_' + key).value = calib[key];
+    el('n_' + key).value = Math.round(calib[key] * 10) / 10;
+  }
+}
+
+// ---------------------------------------------------------------
+// Géométrie des cases (chevron/quinconce) — identique en substance
+// à cellPoly() de l'éditeur de plateau, adaptée aux constantes
+// calibrées ici.
+// ---------------------------------------------------------------
+function cellPoly(col, row) {
+  const rowTop = calib.gameTop + row * calib.rowH;
+  const rowBot = rowTop + calib.rowH;
+  const mid = (rowTop + rowBot) / 2;
+  const avgLeft = (imgW - COLS * calib.cellSlot) / 2;
+  const left = (row % 2 === 0) ? avgLeft - calib.quin : avgLeft + calib.quin;
+  const x0 = left + col * calib.cellSlot;
+  const rx = x0 + calib.cellSlot + calib.notch;
+  // Même forme en chevron (angle rentrant à gauche) pour TOUTES les
+  // colonnes, y compris la première — pas de cas particulier pour la
+  // colonne 0 : la case de jeu n'a pas la pointe sortante de l'encoche
+  // physique de découpe du bord de la tuile (silhouette du composant,
+  // pas la case elle-même).
+  return [[x0, rowTop], [x0 + calib.cellSlot, rowTop], [rx, mid], [x0 + calib.cellSlot, rowBot], [x0, rowBot], [x0 + calib.notch, mid]];
+}
+function pts2s(p) { return p.map(v => v[0].toFixed(1) + ',' + v[1].toFixed(1)).join(' '); }
+
+// ---------------------------------------------------------------
+// Rendu SVG
+// ---------------------------------------------------------------
+function render() {
+  svg.setAttribute('viewBox', `0 0 ${imgW} ${imgH}`);
+  svg.innerHTML = '';
+
+  const image = document.createElementNS(SVGNS, 'image');
+  image.setAttribute('href', imgURL);
+  image.setAttribute('x', 0); image.setAttribute('y', 0);
+  image.setAttribute('width', imgW); image.setAttribute('height', imgH);
+  svg.appendChild(image);
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const cell = grid[r][c];
+      const poly = document.createElementNS(SVGNS, 'polygon');
+      poly.setAttribute('points', pts2s(cellPoly(c, r)));
+      poly.setAttribute('class', 'cell');
+      poly.setAttribute('fill', cell.terrain ? TERRAIN_FILL[cell.terrain] : 'transparent');
+      const isSel = selected && selected.row === r && selected.col === c;
+      poly.setAttribute('stroke', isSel ? '#fff' : (cell.hazard ? '#e2261c' : 'rgba(255,255,255,0.55)'));
+      poly.setAttribute('stroke-width', isSel ? 5 : (cell.hazard ? 4 : 1.5));
+      poly.setAttribute('stroke-dasharray', cell.terrain ? '' : '6,5');
+      poly.dataset.row = r; poly.dataset.col = c;
+      poly.addEventListener('click', () => selectCell(r, c));
+      svg.appendChild(poly);
+    }
+  }
+  updateProgress();
+}
+
+function selectCell(r, c) {
+  selected = { row: r, col: c };
+  updateCellPanel();
+  render();
+}
+
+function updateCellPanel() {
+  if (!selected) {
+    cellinfo.textContent = 'Clique une case sur l\'image.';
+    hazardCheck.checked = false;
+    hazardCheck.disabled = true;
+    document.querySelectorAll('.terrain-btns button').forEach(b => { b.classList.remove('active'); b.disabled = true; });
+    return;
+  }
+  const { row, col } = selected;
+  const cell = grid[row][col];
+  cellinfo.textContent = `Rangée ${row + 1}, colonne ${col + 1}`;
+  hazardCheck.disabled = false;
+  hazardCheck.checked = cell.hazard;
+  document.querySelectorAll('.terrain-btns button').forEach(b => {
+    b.disabled = false;
+    b.classList.toggle('active', b.dataset.terrain === cell.terrain);
+  });
+}
+
+document.querySelectorAll('.terrain-btns button').forEach(b => {
+  b.addEventListener('click', () => {
+    if (!selected) return;
+    grid[selected.row][selected.col].terrain = b.dataset.terrain;
+    updateCellPanel();
+    render();
+  });
+});
+hazardCheck.addEventListener('change', () => {
+  if (!selected) return;
+  grid[selected.row][selected.col].hazard = hazardCheck.checked;
+  render();
+});
+
+function updateProgress() {
+  let tagged = 0, total = ROWS * COLS;
+  grid.forEach(row => row.forEach(cell => { if (cell.terrain) tagged++; }));
+  progress.textContent = `${tagged} / ${total} cases taguées`;
+  progressBarInner.style.width = (100 * tagged / total) + '%';
+}
+
+// ---------------------------------------------------------------
+// Chargement de l'image
+// ---------------------------------------------------------------
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (imgURL) URL.revokeObjectURL(imgURL);
+  imgURL = URL.createObjectURL(file);
+  const tmp = new Image();
+  tmp.onload = () => {
+    imgW = tmp.naturalWidth; imgH = tmp.naturalHeight;
+    defaultCalib();
+    setupCalibControls();
+    initGrid();
+    placeholder.style.display = 'none';
+    stage.style.display = 'block';
+    render();
+  };
+  tmp.src = imgURL;
+
+  // Pré-remplit l'identifiant depuis le nom de fichier (sans extension)
+  const base = file.name.replace(/\.[a-zA-Z0-9]+$/, '');
+  if (!tileId.value) tileId.value = base;
+  const guessedFormat = base.startsWith('ignition') ? 'ignition' : 'vendetta';
+  formatSelect.value = guessedFormat;
+  format = guessedFormat;
+  COLS = COLS_BY_FORMAT[format];
+});
+
+formatSelect.addEventListener('change', () => {
+  if (grid.some(row => row.some(c => c.terrain || c.hazard))) {
+    if (!confirm('Changer de format réinitialise le tagging en cours sur cette tuile. Continuer ?')) {
+      formatSelect.value = format;
+      return;
+    }
+  }
+  format = formatSelect.value;
+  COLS = COLS_BY_FORMAT[format];
+  if (imgW) {
+    defaultCalib();
+    setupCalibControls();
+    initGrid();
+    render();
+  }
+});
+
+el('btnResetCalib').addEventListener('click', () => {
+  if (!imgW) return;
+  defaultCalib();
+  syncCalibInputs();
+  render();
+});
+
+el('btnExportCalib').addEventListener('click', () => {
+  const text =
+`// Calibrage verrouillé pour les tuiles ${format} détourées à ${imgW}×${imgH}px
+const CALIBRATION_${format.toUpperCase()} = {
+  imgW: ${imgW}, imgH: ${imgH},
+  gameTop: ${calib.gameTop.toFixed(1)},
+  rowH: ${calib.rowH.toFixed(1)},
+  cellSlot: ${calib.cellSlot.toFixed(1)},
+  quin: ${calib.quin.toFixed(1)},
+  notch: ${calib.notch.toFixed(1)}
+};`;
+  navigator.clipboard.writeText(text).then(() => alert('Calibrage copié — envoie-le pour qu\'il devienne la valeur par défaut.'));
+});
+
+// ---------------------------------------------------------------
+// Export des données de la tuile
+// ---------------------------------------------------------------
+el('btnExport').addEventListener('click', () => {
+  const id = tileId.value.trim() || 'tuile-sans-nom';
+  const name = tileName.value.trim() || '(nom non renseigné)';
+  const ext = tileExt.value.trim() || 'base';
+  const gridStr = grid.map(row =>
+    '    [' + row.map(cell =>
+      `{ terrain: ${cell.terrain ? 'TERRAIN.' + cell.terrain.toUpperCase() : 'null'}, hazard: ${cell.hazard} }`
+    ).join(', ') + ']'
+  ).join(',\n');
+
+  const text =
+`// ${name} — généré par l'outil de tagging, à relire avant usage
+const TILE_${id.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()} = {
+  id: "${id}",
+  name: "${name}",
+  format: "${format}",
+  extension: "${ext}",
+  cols: ${COLS},
+  rows: ${ROWS},
+  grid: [
+${gridStr}
+  ]
+};
+`;
+  output.value = text;
+});
+
+el('btnCopy').addEventListener('click', () => {
+  if (!output.value) return;
+  navigator.clipboard.writeText(output.value).then(() => alert('Code copié dans le presse-papier.'));
+});
+</script>
+</body>
+</html>
