@@ -963,20 +963,21 @@ function drawHazardToken(injectedValue = null) {
 // fichiers tiles/data/*.js) — fait le pont entre le format exporté
 // par l'outil et celui utilisé en jeu par le moteur.
 // -----------------------------------------------------------------
-// L'outil de tagging exporte, pour chaque case, `hazard: true/false`
-// — une propriété FIXE du design de la vraie tuile physique (case
-// marquée du double triangle rouge, oui/non). Le moteur, lui, utilise
-// déjà `cell.hazard` pour tout autre chose : le jeton ACTUELLEMENT
+// L'outil de tagging exporte directement `hazardSpace: true/false`
+// pour chaque case — une propriété FIXE du design de la vraie tuile
+// physique (case marquée du double triangle rouge, oui/non). Nom
+// choisi précisément pour ne jamais être confondu avec `cell.hazard`,
+// que le moteur utilise pour tout autre chose : le jeton ACTUELLEMENT
 // posé sur la case (null tant qu'aucun jeton n'y a été placé, sinon
-// une valeur de HAZARD_TYPES). Pour ne jamais confondre ces deux sens
-// différents du même mot, le flag fixe est renommé `hazardSpace` dès
-// l'instanciation de la tuile — `hazard` reste réservé au jeton
-// dynamique, exactement comme avant sur les tuiles de test.
+// une valeur de HAZARD_TYPES). instantiateTile() n'a donc plus qu'à
+// recopier hazardSpace tel quel, et à initialiser hazard à null (le
+// jeton dynamique, lui, doit toujours repartir vide à chaque nouvelle
+// instanciation — voir populateTileHazards() juste après).
 function instantiateTile(rawTileData) {
   const grid = rawTileData.grid.map((row) =>
     row.map((cell) => ({
       terrain: cell.terrain,
-      hazardSpace: !!cell.hazard,
+      hazardSpace: !!cell.hazardSpace,
       hazard: null // jeton actuel — vide tant que populateTileHazards() ne l'a pas rempli
     }))
   );

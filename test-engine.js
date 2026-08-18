@@ -2128,7 +2128,7 @@ const rawTile114 = {
   cols: 2,
   rows: 1,
   grid: [
-    [{ terrain: TERRAIN.ROAD, hazard: true }, { terrain: TERRAIN.OFF_ROAD, hazard: false }]
+    [{ terrain: TERRAIN.ROAD, hazardSpace: true }, { terrain: TERRAIN.OFF_ROAD, hazardSpace: false }]
   ]
 };
 const instantiated114 = instantiateTile(rawTile114);
@@ -2150,9 +2150,9 @@ const rawTile115 = {
   id: "vendetta-99b", name: "test tile 2", format: "vendetta", extension: "base",
   cols: 3, rows: 1,
   grid: [[
-    { terrain: TERRAIN.ROAD, hazard: true },
-    { terrain: TERRAIN.ROAD, hazard: false },
-    { terrain: TERRAIN.ROAD, hazard: true }
+    { terrain: TERRAIN.ROAD, hazardSpace: true },
+    { terrain: TERRAIN.ROAD, hazardSpace: false },
+    { terrain: TERRAIN.ROAD, hazardSpace: true }
   ]]
 };
 const instantiated115 = instantiateTile(rawTile115);
@@ -2170,9 +2170,9 @@ console.log("Case 2 (hazardSpace=true, attendu 'wreck') :", instantiated115.grid
 // -----------------------------------------------------------------
 section("Test 116 — createTileProgressionState() pose les hazards de départ sur les vraies tuiles");
 
-const rearRaw116 = { id: "r116", name: "r", format: "vendetta", extension: "base", cols: 1, rows: 1, grid: [[{ terrain: TERRAIN.ROAD, hazard: true }]] };
-const middleRaw116 = { id: "m116", name: "m", format: "vendetta", extension: "base", cols: 1, rows: 1, grid: [[{ terrain: TERRAIN.ROAD, hazard: false }]] };
-const leadRaw116 = { id: "l116", name: "l", format: "vendetta", extension: "base", cols: 1, rows: 1, grid: [[{ terrain: TERRAIN.ROAD, hazard: true }]] };
+const rearRaw116 = { id: "r116", name: "r", format: "vendetta", extension: "base", cols: 1, rows: 1, grid: [[{ terrain: TERRAIN.ROAD, hazardSpace: true }]] };
+const middleRaw116 = { id: "m116", name: "m", format: "vendetta", extension: "base", cols: 1, rows: 1, grid: [[{ terrain: TERRAIN.ROAD, hazardSpace: false }]] };
+const leadRaw116 = { id: "l116", name: "l", format: "vendetta", extension: "base", cols: 1, rows: 1, grid: [[{ terrain: TERRAIN.ROAD, hazardSpace: true }]] };
 
 const rear116 = instantiateTile(rearRaw116);
 const middle116 = instantiateTile(middleRaw116);
@@ -2210,7 +2210,7 @@ let progState117 = createTileProgressionState(rear117, middle117, lead117);
 const nextLeadRaw117 = { id: "n117", name: "n", format: "vendetta", extension: "base", cols: 8, rows: 6, grid: [] };
 for (let r = 0; r < 6; r++) {
   const row = [];
-  for (let c = 0; c < 8; c++) row.push({ terrain: TERRAIN.ROAD, hazard: c === 2 }); // 1 seule case marquée par rangée, colonne 2
+  for (let c = 0; c < 8; c++) row.push({ terrain: TERRAIN.ROAD, hazardSpace: c === 2 }); // 1 seule case marquée par rangée, colonne 2
   nextLeadRaw117.grid.push(row);
 }
 const nextLead117 = instantiateTile(nextLeadRaw117);
