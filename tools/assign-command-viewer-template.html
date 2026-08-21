@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Revue Assign+Command — Nouvelle IA</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 16px; }
+  #wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 16px; color: #ffb347; }
+  .badges { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
+  .badge { background: #2c2c36; padding: 4px 10px; border-radius: 6px; }
+  .die { display: inline-block; background: #3a3a46; border-radius: 4px; padding: 2px 7px; margin-right: 3px; font-weight: bold; }
+  svg { width: 100%; height: auto; background: #26262e; border-radius: 8px; }
+  #decision { margin-top: 12px; padding: 12px; background: #2c2c36; border-radius: 8px; font-size: 14px; line-height: 1.5; }
+  #decision b { color: #ffb347; }
+  .nav { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
+  button { background: #ffb347; border: none; color: #1e1e24; padding: 8px 16px; border-radius: 6px; font-weight: bold; cursor: pointer; }
+  button:disabled { opacity: 0.3; cursor: default; }
+  #counter { font-size: 13px; color: #aaa; }
+  .legend { font-size: 12px; color: #999; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>Revue qualitative — décisions Assign+Command de la nouvelle IA</h1>
+  <div class="badges">
+    <span class="badge" id="roundBadge"></span>
+    <span class="badge" id="turnBadge"></span>
+    <span class="badge" id="roadDieBadge"></span>
+    <span class="badge" id="commandUsedBadge"></span>
+    <span class="badge">Pool Mayrik : <span id="dicePool"></span></span>
+  </div>
+  <div class="badges" id="activatedRow"></div>
+  <div class="badges" id="damageRow"></div>
+  <svg id="board" viewBox="0 0 900 500"></svg>
+  <div id="decision"></div>
+  <div class="legend">Cercle jaune = voiture activée par la décision. Cercle rouge pointillé = cible d'une Command (Airstrike/Repair). Case rouge hachurée = Impassable. Triangle sombre = hazard non révélé.</div>
+  <div class="nav">
+    <button id="prevBtn">◀ Précédent</button>
+    <span id="counter"></span>
+    <button id="nextBtn">Suivant ▶</button>
+  </div>
+</div>
+<script>
+const CASES = __CASES_JSON__;
+let current = 0;
+
+const CELL_W = 34, CELL_H = 40, QUIN = 6, NOTCH = 4;
+
+function cellPoly(col, row) {
+  const rowTop = 20 + row * CELL_H;
+  const rowBot = rowTop + CELL_H;
+  const mid = (rowTop + rowBot) / 2;
+  const left = (row % 2 === 0) ? 10 - QUIN : 10 + QUIN;
+  const x0 = left + col * CELL_W;
+  const rx = x0 + CELL_W + NOTCH;
+  return [[x0, rowTop], [x0 + CELL_W, rowTop], [rx, mid], [x0 + CELL_W, rowBot], [x0, rowBot], [x0 + NOTCH, mid]];
+}
+function pts2s(p) { return p.map(v => v[0].toFixed(1) + ',' + v[1].toFixed(1)).join(' '); }
+function cellCenter(col, row) {
+  const p = cellPoly(col, row);
+  const cx = (p[0][0] + p[1][0] + p[3][0] + p[4][0]) / 4 + NOTCH / 2;
+  const cy = (p[0][1] + p[3][1]) / 2;
+  return { cx, cy };
+}
+
+const TERRAIN_FILL = { road: "#4a4a55", off_road: "#7a5c3a", mud: "#3d2a1a", impassable: "#5c2020" };
+const OWNER_COLOR = { "Mayrik": "#3b82c9", "IA-Adverse": "#c93b3b" };
+
+function render() {
+  const c = CASES[current];
+  const svg = document.getElementById("board");
+  const w = 10 + c.board.cols * CELL_W + 20;
+  const h = 20 + c.board.rows * CELL_H + 10;
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  let html = "";
+
+  for (let row = 0; row < c.board.rows; row++) {
+    for (let col = 0; col < c.board.cols; col++) {
+      const cell = c.board.grid[row][col];
+      const poly = cellPoly(col, row);
+      const fill = TERRAIN_FILL[cell.terrain] || "#444";
+      html += `<polygon points="${pts2s(poly)}" fill="${fill}" stroke="#111" stroke-width="0.6"/>`;
+      if (cell.terrain === "impassable") {
+        const { cx, cy } = cellCenter(col, row);
+        html += `<line x1="${cx-10}" y1="${cy-10}" x2="${cx+10}" y2="${cy+10}" stroke="#ff6666" stroke-width="1.5"/>`;
+        html += `<line x1="${cx-10}" y1="${cy+10}" x2="${cx+10}" y2="${cy-10}" stroke="#ff6666" stroke-width="1.5"/>`;
+      }
+      if (cell.hazard === "hidden") {
+        const { cx, cy } = cellCenter(col, row);
+        html += `<polygon points="${cx},${cy-6} ${cx-6},${cy+5} ${cx+6},${cy+5}" fill="#222" stroke="#888" stroke-width="0.7"/>`;
+      }
+      const { cx, cy } = cellCenter(col, row);
+      html += `<text x="${cx - 12}" y="${cy - 12}" font-size="5" fill="#888">${col},${row}</text>`;
+    }
+  }
+
+  c.cars.forEach((car) => {
+    if (car.col === null) return; // pas encore entrée, non affichée
+    const { cx, cy } = cellCenter(car.col, car.row);
+    const isActive = car.id === c.activeCarId;
+    const isTarget = c.command && c.command.targetId === car.id;
+    const color = OWNER_COLOR[car.owner];
+    html += `<g>
+      ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5"/>` : ""}
+      ${isTarget ? `<circle cx="${cx}" cy="${cy}" r="18" fill="none" stroke="#ff3b3b" stroke-width="2" stroke-dasharray="3,2"/>` : ""}
+      <rect x="${cx-12}" y="${cy-10}" width="24" height="20" rx="4" fill="${color}" stroke="#000" stroke-width="1" ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
+      <text x="${cx}" y="${cy+4}" font-size="11" fill="#fff" text-anchor="middle" font-weight="bold">${car.size[0].toUpperCase()}</text>
+      ${car.status === "inoperable" ? `<line x1="${cx-12}" y1="${cy-10}" x2="${cx+12}" y2="${cy+10}" stroke="#fff" stroke-width="1.5"/>` : ""}
+      ${car.damageCount > 0 ? `<circle cx="${cx+10}" cy="${cy-8}" r="5" fill="#ffb347"/><text x="${cx+10}" y="${cy-5}" font-size="7" text-anchor="middle" fill="#111">${car.damageCount}</text>` : ""}
+    </g>`;
+  });
+
+  // Destination visée par la décision — marqueur en losange vert
+  // pointillé, distinct du cercle jaune (voiture activée) et du
+  // cercle rouge (cible d'une Command), pour que Mayrik puisse juger
+  // le dé/la Command EN CONNAISSANT la case réellement visée par
+  // l'IA (demande explicite : juger un choix de dé sans connaître sa
+  // destination laissait le jugement incomplet).
+  if (c.destination) {
+    const { cx: dx, cy: dy } = cellCenter(c.destination.col, c.destination.row);
+    html += `<g>
+      <polygon points="${dx},${dy-14} ${dx+14},${dy} ${dx},${dy+14} ${dx-14},${dy}" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-dasharray="4,3"/>
+      <text x="${dx}" y="${dy-18}" font-size="9" fill="#4ade80" text-anchor="middle" font-weight="bold">DEST.</text>
+    </g>`;
+  }
+
+  svg.innerHTML = html;
+
+  document.getElementById("roundBadge").textContent = `Round ${c.round}`;
+  document.getElementById("turnBadge").textContent = `Tour ${c.turnInRound}/3 ce round`;
+  document.getElementById("roadDieBadge").textContent = `Dé Road ce round : ${c.roadDie}`;
+  document.getElementById("commandUsedBadge").textContent = `Commande déjà utilisée ce round : ${c.commandUsedBeforeThisTurn ? "OUI" : "non"}`;
+  document.getElementById("dicePool").innerHTML = c.pool.map((d) => `<span class="die">${d}</span>`).join("");
+
+  const mayrikCars = c.cars.filter((car) => car.owner === "Mayrik");
+  const activated = mayrikCars.filter((car) => car.movedThisRound).map((car) => car.size.toUpperCase());
+  const notActivated = mayrikCars.filter((car) => !car.movedThisRound).map((car) => car.size.toUpperCase());
+  document.getElementById("activatedRow").innerHTML =
+    `<span class="badge">Déjà activées ce round : ${activated.length ? activated.join(", ") : "aucune"}</span>` +
+    `<span class="badge">Pas encore activées : ${notActivated.length ? notActivated.join(", ") : "aucune"}</span>`;
+
+  document.getElementById("damageRow").innerHTML = c.cars
+    .filter((car) => car.status !== "eliminated")
+    .map((car) => `<span class="badge">${car.owner === "Mayrik" ? "🔵" : "🔴"} ${car.size} : ${car.damageCount} dégât(s)${car.status === "inoperable" ? " [INOPÉRABLE]" : ""}</span>`)
+    .join("");
+
+  const activeCar = c.cars.find((car) => car.id === c.activeCarId);
+  let text = `<b>Décision de la nouvelle IA :</b> dé <b>${c.dieValue}</b> assigné à la ${activeCar.size.toUpperCase()} bleue entourée en jaune`;
+  text += c.isEntry ? " (entrée en jeu)." : ".";
+  if (c.command) {
+    text += ` En plus : Command <b>${c.command.type}</b> (dé ${c.command.dieValue})`;
+    if (c.command.targetId) {
+      const t = c.cars.find((car) => car.id === c.command.targetId);
+      text += t ? ` ciblant la ${t.size} ${t.owner === "Mayrik" ? "bleue" : "rouge"} (entourée en rouge pointillé)` : "";
+    }
+    text += ".";
+  }
+  if (c.isCoast) {
+    text += ` <br><b>Coast</b> : avance fixe d'1 case, direction non pré-calculée par le score (destination réelle décidée à l'exécution).`;
+  } else if (c.destination) {
+    text += ` <br><b>Destination visée</b> (losange vert) : (${c.destination.col},${c.destination.row})`;
+    text += c.destination.slam ? " — <b>termine sur un Slam</b>." : ".";
+    if (c.destination.eliminated) text += " ⚠️ Cette trajectoire simulée finit ÉLIMINÉE (case Impassable ou sortie de plateau).";
+  }
+  text += `<br>Bleu = tes voitures, Rouge = l'IA adverse.`;
+  document.getElementById("decision").innerHTML = text;
+
+  document.getElementById("counter").textContent = `Cas ${current + 1} / ${CASES.length}`;
+  document.getElementById("prevBtn").disabled = current === 0;
+  document.getElementById("nextBtn").disabled = current === CASES.length - 1;
+}
+
+document.getElementById("prevBtn").addEventListener("click", () => { if (current > 0) { current--; render(); } });
+document.getElementById("nextBtn").addEventListener("click", () => { if (current < CASES.length - 1) { current++; render(); } });
+
+render();
+</script>
+</body>
+</html>
