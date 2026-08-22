@@ -137,7 +137,7 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
 
   const result = playTurnAssignMoveWithProgression(
     progressionState, car, effectiveDieValue, decision.destination.path || [], allCars, allChoppers, playerNames,
-    { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, roadDieValue: roundState.roadDie, ...slamOptions }
+    { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
   );
   log.push(...(result.log || []));
   if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
