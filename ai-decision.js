@@ -1,9 +1,9 @@
 /**
  * ai-decision.js — Nouveau système de décision IA pour Thunder Road
- * In The Pocket, construit en repartant de zéro (session du <date>),
- * suite à l'abandon complet de l'ancien `ai-scoring.js` (Utility AI à
- * 15 facteurs, jugé trop complexe et instable après plusieurs
- * correctifs empilés).
+ * In The Pocket, construit en repartant de zéro (voir l'historique
+ * Git du dépôt pour la date exacte du pivot), suite à l'abandon
+ * complet de l'ancien `ai-scoring.js` (Utility AI à 15 facteurs, jugé
+ * trop complexe et instable après plusieurs correctifs empilés).
  *
  * MÉTHODE : ce module traduit fidèlement l'arbre de décision fourni
  * par Mayrik (PDF "Arbre de décision attribution de dés pour
@@ -53,7 +53,6 @@ const {
   computeAiStepCost,
   isAiHiddenHazard,
   findFrontmostCar,
-  findRearmostCar,
   findAiAirstrikePlacement
 } = engine;
 
@@ -261,7 +260,7 @@ function computeReachableDestinations(board, car, dieValue, allCars, allChoppers
 // cases dangereuses adjacentes à la case de Slam (proxy statique du
 // risque de rebond défavorable, sans calcul de probabilité exacte).
 //
-// Règle d'acceptation (formulée par Mayrik, session du <date>) :
+// Règle d'acceptation (formulée par Mayrik, confirmée sur l'arbre) :
 //   - Cible strictement PLUS PETITE que la voiture activée →
 //     toujours accepter, quel que soit le nombre de cases
 //     dangereuses adjacentes.
