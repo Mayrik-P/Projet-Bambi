@@ -2,8 +2,7 @@ Copyright © 2026 Mayrik Padey. All rights reserved.
 
 This repository contains the source code and original artwork (including
 scans made by the author) for ThunderRoad In The Pocket, a fan-made
-solo mobile adaptation of Thunder Road: Vendetta, whose free distribution
-is authorized by the game's publisher (Restoration Games, LLC).
+solo mobile adaptation of Thunder Road: Vendetta (Restoration Games, LLC).
 
 Unless prior written permission is granted by the author, no part of this
 repository — source code, images, or any other file it contains — may be
