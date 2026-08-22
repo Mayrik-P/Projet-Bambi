@@ -34,7 +34,7 @@
   <div class="badges" id="damageRow"></div>
   <svg id="board" viewBox="0 0 900 500"></svg>
   <div id="decision"></div>
-  <div class="legend">Cercle jaune = voiture activée par la décision. Cercle rouge pointillé = cible d'une Command (Airstrike/Repair). Case rouge hachurée = Impassable. Triangle sombre = hazard non révélé.</div>
+  <div class="legend">Cercle jaune = voiture activée par la décision. Cercle rouge pointillé = cible d'une Command (Airstrike/Repair). Cercle orange pointillé (plus large) = cible du Tir. Losange vert = destination visée. Case rouge hachurée = Impassable. Triangle sombre = hazard non révélé.</div>
   <div class="nav">
     <button id="prevBtn">◀ Précédent</button>
     <span id="counter"></span>
@@ -99,11 +99,13 @@ function render() {
     if (car.col === null) return; // pas encore entrée, non affichée
     const { cx, cy } = cellCenter(car.col, car.row);
     const isActive = car.id === c.activeCarId;
-    const isTarget = c.command && c.command.targetId === car.id;
+    const isCommandTarget = c.command && c.command.targetId === car.id;
+    const isShotTarget = c.shotTargetId === car.id;
     const color = OWNER_COLOR[car.owner];
     html += `<g>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5"/>` : ""}
-      ${isTarget ? `<circle cx="${cx}" cy="${cy}" r="18" fill="none" stroke="#ff3b3b" stroke-width="2" stroke-dasharray="3,2"/>` : ""}
+      ${isCommandTarget ? `<circle cx="${cx}" cy="${cy}" r="18" fill="none" stroke="#ff3b3b" stroke-width="2" stroke-dasharray="3,2"/>` : ""}
+      ${isShotTarget ? `<circle cx="${cx}" cy="${cy}" r="21" fill="none" stroke="#ff9f1c" stroke-width="2" stroke-dasharray="2,3"/>` : ""}
       <rect x="${cx-12}" y="${cy-10}" width="24" height="20" rx="4" fill="${color}" stroke="#000" stroke-width="1" ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
       <text x="${cx}" y="${cy+4}" font-size="11" fill="#fff" text-anchor="middle" font-weight="bold">${car.size[0].toUpperCase()}</text>
       ${car.status === "inoperable" ? `<line x1="${cx-12}" y1="${cy-10}" x2="${cx+12}" y2="${cy+10}" stroke="#fff" stroke-width="1.5"/>` : ""}
@@ -152,18 +154,27 @@ function render() {
     text += ` En plus : Command <b>${c.command.type}</b> (dé ${c.command.dieValue})`;
     if (c.command.targetId) {
       const t = c.cars.find((car) => car.id === c.command.targetId);
-      text += t ? ` ciblant la ${t.size} ${t.owner === "Mayrik" ? "bleue" : "rouge"} (entourée en rouge pointillé)` : "";
+      text += t ? ` ciblant la ${t.size} ${t.owner === "Mayrik" ? "bleue" : "rouge"} (cercle rouge pointillé)` : "";
     }
     text += ".";
   }
   if (c.isCoast) {
-    text += ` <br><b>Coast</b> : avance fixe d'1 case, direction non pré-calculée par le score (destination réelle décidée à l'exécution).`;
+    text += ` <br><b>Coast</b> : avance fixe d'1 case${c.destination ? ` vers (${c.destination.col},${c.destination.row})` : ""}.`;
   } else if (c.destination) {
     text += ` <br><b>Destination visée</b> (losange vert) : (${c.destination.col},${c.destination.row})`;
-    text += c.destination.slam ? " — <b>termine sur un Slam</b>." : ".";
-    if (c.destination.eliminated) text += " ⚠️ Cette trajectoire simulée finit ÉLIMINÉE (case Impassable ou sortie de plateau).";
+    if (c.destination.terminalReason === "slam" || c.slam) text += " — <b>termine sur un Slam</b>.";
+    else if (c.destination.terminalReason === "eliminated-impassable") text += " ⚠️ Cette trajectoire simulée finit ÉLIMINÉE (case Impassable).";
+    else if (c.destination.terminalReason === "eliminated-edge") text += " ⚠️ Cette trajectoire simulée finit ÉLIMINÉE (sortie de plateau par un bord latéral/arrière).";
+    else if (c.destination.terminalReason === "eliminated-chopper") text += " ⚠️ Cette trajectoire simulée finit ÉLIMINÉE (case occupée par un chopper).";
+    else if (c.destination.terminalReason === "exits-front") text += " — sort par l'AVANT du plateau (tuile suivante inconnue au moment de la décision).";
+    else text += ".";
+    if (c.destination.dangerousCellsCrossed > 0) text += ` (${c.destination.dangerousCellsCrossed} case(s) dangereuse(s) traversée(s) sur le trajet.)`;
   }
-  text += `<br>Bleu = tes voitures, Rouge = l'IA adverse.`;
+  if (c.shotTargetId) {
+    const st = c.cars.find((car) => car.id === c.shotTargetId);
+    text += st ? ` <br><b>Tir</b> sur la ${st.size} ${st.owner === "Mayrik" ? "bleue" : "rouge"} (cercle orange pointillé).` : "";
+  }
+  text += `<br>Bleu = tes voitures, Rouge = l'IA adverse. Branche de l'arbre active ce tour : <b>${c.finishLineActive ? "Finish Line en place" : "Finish Line pas encore en place"}</b>.`;
   document.getElementById("decision").innerHTML = text;
 
   document.getElementById("counter").textContent = `Cas ${current + 1} / ${CASES.length}`;
