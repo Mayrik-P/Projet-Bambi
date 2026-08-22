@@ -309,6 +309,28 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
   assert(d5.command === null, "FinishLineRush/Coast : aucune Command possible sur un tour de Coast");
   assert(d5.destination.stepsUsed === 1, "FinishLineRush/Coast : distance fixe de 1 case, quelle que soit la face du dé assigné");
 }
+{
+  // MISE À JOUR DE L'ARBRE (nouveau PDF fourni par Mayrik) : le Coast
+  // de la branche Finish Line recherche maintenant explicitement "la
+  // case d'arrivée la moins dangereuse" parmi les destinations à 1
+  // pas — pas juste la première trouvée. On place un hazard face
+  // caché sur la case front-left pour vérifier que le Coast l'évite
+  // au profit d'une case front/front-right sans hazard.
+  const board = emptyBoard();
+  const progressionStateFL = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 }, finishLineTile: {} };
+  const carFront = createCar("A", CAR_SIZE.SMALL, 20, 2);
+  carFront.movedThisRound = true; // aucune voiture opérable "pas encore activée" ce round -> Coast
+  const engineFrontArc = engine.getFrontArc({ col: carFront.col, row: carFront.row });
+  const dangerousCell = engineFrontArc[0]; // front-left
+  board.grid[dangerousCell.row][dangerousCell.col].hazard = "unknown"; // jeton face caché
+  const allCars6 = [carFront];
+  const dicePool6 = { A: [4] };
+  const roundState6 = { commandUsedThisRound: { A: false } };
+  const d6 = ai.decideAssignAndCommand(progressionStateFL, board, allCars6, [], dicePool6, "A", roundState6);
+  assert(d6.isCoast === true, "FinishLineRush/Coast+hazard : toujours un Coast");
+  assert(!(d6.destination.col === dangerousCell.col && d6.destination.row === dangerousCell.row), "FinishLineRush/Coast : la case la moins dangereuse est retenue, la case avec hazard face caché est évitée");
+  assert(d6.destination.dangerousCellsCrossed === 0, "FinishLineRush/Coast : la destination retenue ne traverse aucune case dangereuse quand une alternative saine existe");
+}
 
 
 // -----------------------------------------------------------------

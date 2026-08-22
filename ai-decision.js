@@ -824,11 +824,14 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
   // Cas particulier formalisé avec Mayrik : si toutes les voitures
   // opérables ont déjà été activées ce round, on réactive en Coast
   // (dé = 1, comme tout Coast) la voiture opérable la plus EN AVANT
-  // vers la ligne d'arrivée — pas besoin d'une branche séparée dans
-  // l'arbre, ce même nœud d'assignation la résout déjà sans avoir à
-  // la nommer explicitement. Aucune Command n'est possible sur un
-  // tour de Coast (rulebook p.8 : "You may NOT assign a die to a
-  // command on a turn you are coasting").
+  // vers la ligne d'arrivée, "et on recherche la case d'arrivée la
+  // moins dangereuse" (texte de l'arbre, mise à jour de Mayrik) —
+  // parmi les destinations "normal" atteignables à 1 pas, on retient
+  // celle qui traverse le MOINS de cases dangereuses. Pas besoin
+  // d'une branche séparée dans l'arbre, ce même nœud d'assignation la
+  // résout déjà sans avoir à la nommer explicitement. Aucune Command
+  // n'est possible sur un tour de Coast (rulebook p.8 : "You may NOT
+  // assign a die to a command on a turn you are coasting").
   const myOperableCars = allCars.filter((c) => c.owner === playerName && c.status === CAR_STATUS.OPERABLE);
   const notYetActivated = myOperableCars.filter((c) => !c.movedThisRound);
 
@@ -838,7 +841,18 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
     const car = frontmostEligibleCar(eligibleForCoast);
     const dieValue = myPool[0]; // "il vaut 1" = distance fixe, la face du dé physique importe peu
     const dests = computeReachableDestinations(board, car, 1, allCars, allChoppers);
-    const destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
+    const normalDests = dests.filter((d) => d.terminalReason === "normal");
+    let destination;
+    if (normalDests.length > 0) {
+      // "on recherche la case d'arrivée la moins dangereuse" — parmi
+      // les destinations normales, celle qui traverse le moins de
+      // cases dangereuses (jetons cachés ou hazards révélés classés
+      // dangereux, cf. isDangerousCell).
+      normalDests.sort((a, b) => a.dangerousCellsCrossed - b.dangerousCellsCrossed);
+      destination = normalDests[0];
+    } else {
+      destination = dests.find((d) => d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
+    }
     const shotTarget = chooseShootTarget(destination.col, destination.row, playerName, allCars);
     return { car, dieValue, command: null, destination, shotTarget, isEntry: false, isCoast: true, slam: destination.terminalReason === "slam" };
   }
