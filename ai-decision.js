@@ -427,19 +427,11 @@ if (typeof module !== "undefined" && module.exports) {
 // SECTION 4 — RÉPARTITION DES DÉS EN LOTS (niveau round, pas tour)
 // ===================================================================
 // Traduction de : "Création d'un nombre de lots de dés égal au nombre
-// de véhicule[s] [...] non encore activé[s]. Les lots doivent créer
-// des valeurs de dé additionnées les plus équilibrées possible."
-//
-// HYPOTHÈSE D'INTERPRÉTATION (à confirmer avec Mayrik) : le texte de
-// l'arbre dit littéralement "véhicule NON Opérable non encore
-// activé", mais ce nœud n'est atteint QUE depuis les branches "3" et
-// "2" du compteur "véhicules OPÉRABLES et non activés" — une voiture
-// inopérable ne peut de toute façon recevoir aucun dé de mouvement
-// (aucune Command autre que Repair ne s'applique à elle). Lu comme
-// une coquille de rédaction (Mayrik a lui-même prévenu de ce risque)
-// et interprété ici comme "nombre de véhicules OPÉRABLES non encore
-// activés" — cohérent avec le nombre de lots réellement nécessaires
-// (3 lots si 3 véhicules opérables restent, 2 lots si 2 restent).
+// de véhicule Opérable non encore activé. Les lots doivent créer des
+// valeurs de dé additionnées les plus équilibrées possible."
+// (Coquille "non Opérable" de la version initiale de l'arbre corrigée
+// par Mayrik — nombre de lots = véhicules OPÉRABLES non encore
+// activés, confirmé.)
 //
 // Recherche EXHAUSTIVE de la meilleure partition (nombre de dés
 // toujours ≤ 5 en pratique — 4 dés de round + jamais plus d'1 dé
@@ -602,23 +594,22 @@ if (typeof module !== "undefined" && module.exports) {
 // SECTION 6 — DÉCISION DE COMMAND (branches 1/2/3 véhicules opérables)
 // ===================================================================
 // Traduction directe des sous-arbres de Mayrik pour chaque branche.
-// GARDE-FOU ARCHITECTURAL AJOUTÉ (absent du dessin de l'arbre, mais
-// imposé par la règle absolue du jeu — p.8, "ONCE PER ROUND") : une
-// seule Command par round, jamais deux. Le dessin de l'arbre ne
-// redessine pas explicitement cette vérification dans les branches
-// 3/2/1 — elle est donc ajoutée ici comme garde-fou systématique
-// plutôt que silencieusement supposée. À confirmer avec Mayrik que
-// ce n'était pas déjà implicite dans sa tête en dessinant l'arbre.
+// GARDE-FOU : une seule Command par round, jamais deux (règle
+// absolue du jeu, rulebook p.8 "ONCE PER ROUND", confirmé). Le pool
+// de dés du round reste toujours fixé à 4 quel que soit le nombre de
+// véhicules opérables restants, donc un simple check "dés restants >
+// véhicules restants" ne suffirait pas à garantir la limite si
+// l'équipe est réduite — le flag explicite (`commandUsedThisRound`)
+// est nécessaire. L'arbre a depuis été mis à jour par Mayrik pour
+// remplacer son ancien nœud dice-math par ce même check explicite.
 //
 // candidateCars = liste des voitures opérables ET pas encore activées
 // ce round, pour CE joueur (déjà filtrée par l'appelant).
 function decideCommandForActivatedCar(car, progressionState, myInoperableCars, myOperableCars, dicePoolRemaining, allCars, myOwner) {
   if (myInoperableCars.length > 0 && dicePoolRemaining.includes(6)) {
     // "Un des véhicules Inopérable de l'équipe est-il en tête de
-    // course ?" -> Repair celui en tête, sinon le plus en arrière.
-    // INTERPRÉTATION (à confirmer) : condition inverse lue comme la
-    // négation directe (aucun de mes inopérables en tête -> réparer
-    // le plus en arrière, le plus menacé positionnellement).
+    // course ?" -> Repair celui en tête, sinon le plus en arrière
+    // (négation directe, confirmée par l'arbre).
     const alive = myInoperableCars.filter((c) => c.status !== CAR_STATUS.ELIMINATED);
     if (alive.length > 0) {
       const allAliveOfMine = [...myOperableCars, ...alive].filter((c) => c.status !== CAR_STATUS.ELIMINATED);
@@ -823,17 +814,34 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
   if (myPool.length === 0) return null;
   const finishColStart = progressionState.rearTile.cols + progressionState.middleTile.cols + progressionState.leadTile.cols;
 
-  // "Reste-il un nombre de dés non jouées dans le pôle > à nombre de
-  // voitures non éliminées n'ayant pas encore jouée ?" — s'il n'y a
-  // pas de dé "en trop" (donc pas de Command possible ce tour), on
-  // retombe sur la logique générale (pas de ruée spéciale possible).
+  // "On assigne le dé le plus gros à la voiture de cette équipe la
+  // plus en avant de la course n'ayant pas encore été activée ce
+  // round." La Finish Line, une fois en place, reste en place pour
+  // le reste de la partie : cette branche ne redescend JAMAIS vers
+  // decideNoFinishLine (ce serait réinjecter artificiellement une
+  // réponse "non" à la toute première question de l'arbre alors que
+  // l'état réel du plateau dit toujours "oui").
+  //
+  // Cas particulier formalisé avec Mayrik : si toutes les voitures
+  // opérables ont déjà été activées ce round, on réactive en Coast
+  // (dé = 1, comme tout Coast) la voiture opérable la plus EN AVANT
+  // vers la ligne d'arrivée — pas besoin d'une branche séparée dans
+  // l'arbre, ce même nœud d'assignation la résout déjà sans avoir à
+  // la nommer explicitement. Aucune Command n'est possible sur un
+  // tour de Coast (rulebook p.8 : "You may NOT assign a die to a
+  // command on a turn you are coasting").
   const myOperableCars = allCars.filter((c) => c.owner === playerName && c.status === CAR_STATUS.OPERABLE);
   const notYetActivated = myOperableCars.filter((c) => !c.movedThisRound);
-  if (!(myPool.length > notYetActivated.length)) {
-    return decideNoFinishLine(progressionState, board, allCars, allChoppers, dicePool, playerName, roundState);
-  }
+
   if (notYetActivated.length === 0) {
-    return decideNoFinishLine(progressionState, board, allCars, allChoppers, dicePool, playerName, roundState);
+    const eligibleForCoast = myOperableCars.filter((c) => c.coastCount < 2);
+    if (eligibleForCoast.length === 0) return null; // plus aucun tour possible ce round pour ce joueur
+    const car = frontmostEligibleCar(eligibleForCoast);
+    const dieValue = myPool[0]; // "il vaut 1" = distance fixe, la face du dé physique importe peu
+    const dests = computeReachableDestinations(board, car, 1, allCars, allChoppers);
+    const destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
+    const shotTarget = chooseShootTarget(destination.col, destination.row, playerName, allCars);
+    return { car, dieValue, command: null, destination, shotTarget, isEntry: false, isCoast: true, slam: destination.terminalReason === "slam" };
   }
 
   const car = frontmostEligibleCar(notYetActivated);

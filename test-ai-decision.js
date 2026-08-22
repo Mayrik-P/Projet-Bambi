@@ -285,6 +285,30 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
   assert(d4.destination.col >= 24, "FinishLineRush : ligne d'arrivée atteinte grâce au Drift quand toutes les directions de départ sont bloquées");
   assert(d4.command && d4.command.type === "drift", "FinishLineRush : Command Drift bien programmée (Nitro ne peut rien résoudre ici, blocage positionnel)");
 }
+{
+  // CORRECTIF (relecture complète de l'arbre avec Mayrik) : la Finish
+  // Line, une fois en place, reste en place pour le reste de la
+  // partie — decideFinishLineRush ne doit JAMAIS rebasculer vers
+  // decideNoFinishLine, y compris quand toutes les voitures opérables
+  // ont déjà été activées ce round (ex-garde-fou "pool > véhicules
+  // restants", supprimé car il provoquait cette bascule à tort). Dans
+  // ce cas, on réactive en Coast la voiture opérable la plus EN AVANT
+  // vers l'arrivée — jamais de Command sur un tour de Coast.
+  const board = emptyBoard();
+  const progressionStateFL = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 }, finishLineTile: {} };
+  const carFront = createCar("A", CAR_SIZE.SMALL, 20, 2);
+  const carRear = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  carFront.movedThisRound = true;
+  carRear.movedThisRound = true; // aucune voiture opérable "pas encore activée" ce round
+  const allCars5 = [carFront, carRear];
+  const dicePool5 = { A: [2, 2] }; // pool == nombre de véhicules (ex-garde-fou aurait basculé à tort)
+  const roundState5 = { commandUsedThisRound: { A: false } };
+  const d5 = ai.decideAssignAndCommand(progressionStateFL, board, allCars5, [], dicePool5, "A", roundState5);
+  assert(d5.isCoast === true, "FinishLineRush/Coast : toutes voitures déjà activées -> réactivation en Coast, pas de bascule vers decideNoFinishLine");
+  assert(d5.car === carFront, "FinishLineRush/Coast : c'est la voiture la plus EN AVANT qui est réactivée (objectif ligne d'arrivée), pas la plus en arrière");
+  assert(d5.command === null, "FinishLineRush/Coast : aucune Command possible sur un tour de Coast");
+  assert(d5.destination.stepsUsed === 1, "FinishLineRush/Coast : distance fixe de 1 case, quelle que soit la face du dé assigné");
+}
 
 
 // -----------------------------------------------------------------
