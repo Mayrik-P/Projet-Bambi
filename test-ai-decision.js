@@ -440,5 +440,103 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
   assert(!!stillSlamOption, "computeReachableDestinations : le Slam sur ce 1er véhicule reste une option valide si on choisit de s'arrêter là");
 }
 
+// -----------------------------------------------------------------
+// SECTION 10 — chooseGeneralTrajectory : nouvelle cascade (2e arbre
+// de Mayrik, clarifiée et validée cas par cas avec un viewer visuel
+// avant implémentation — voir tools/analyze-new-trajectory.js et
+// tools/trajectory-comparison.html pour la démarche de validation)
+// -----------------------------------------------------------------
+function getTerrainAt(board, dest) {
+  const space = engine.getSpace(board, dest.col, dest.row);
+  return space ? space.terrain : null;
+}
+{
+  // Palier 1 (bonus Road) : une destination atteignable UNIQUEMENT en
+  // acceptant le bonus Road (roadDieValue) doit être préférée à une
+  // destination plus proche mais SANS bonus, tant que le trajet total
+  // (base + extension) reste propre et sur route. Cf. Cas 2/3 validés
+  // avec Mayrik : le bonus Road était systématiquement ignoré par
+  // l'ancienne heuristique.
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 0, 2);
+  const allCars = [car];
+  const withoutBonus = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 0);
+  const withBonus = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 2);
+  assert(withoutBonus.destination.col === 2, "chooseGeneralTrajectory : sans dé Road fourni, pas de bonus, arrêt normal au bout du dé assigné");
+  assert(withBonus.destination.col === 4, "chooseGeneralTrajectory : bonus Road exploité quand tout le trajet (base+extension) reste sur route et propre");
+  assert(!!withBonus.roadBonusPath && withBonus.roadBonusPath.length === 2, "chooseGeneralTrajectory : le chemin d'extension du bonus est bien renvoyé séparément (nécessaire à l'exécution réelle)");
+}
+{
+  // Préférence de terrain PARMI les candidats bonus : Route > Off-Road > Mud,
+  // un palier ne cédant au suivant que si celui-ci permet une progression
+  // strictement meilleure (cf. arbre : cascade droite). Le blocage du
+  // "front" direct force plusieurs candidats bonus à colonne égale,
+  // certains sur Route, un sur Mud : la Route doit gagner.
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 0, 2);
+  const frontCell = engine.getFrontArc({ col: 0, row: 2 }).find((a) => a.name === "front");
+  board.grid[frontCell.row][frontCell.col].terrain = TERRAIN.IMPASSABLE;
+  board.grid[1][3].terrain = TERRAIN.MUD; // (3,1) devient Mud ; (3,0) reste Route, même colonne
+  const result = ai.chooseGeneralTrajectory(board, car, 2, [car], [], false, 2);
+  assert(getTerrainAt(board, result.destination) === TERRAIN.ROAD, "chooseGeneralTrajectory : une case Route à distance équivalente est préférée à une case Mud parmi les candidats bonus");
+}
+{
+  // Palier 2 (sans bonus, départage par danger d'arrivée GRADUÉ) :
+  // entre deux destinations propres à la même colonne, celle dont le
+  // voisinage (arc avant+arrière) est moins dangereux doit gagner —
+  // même si aucune des deux ne traverse de hazard sur son propre
+  // chemin (dangerousCellsCrossed=0 pour les deux).
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.LARGE, 5, 2);
+  const frontCell = engine.getFrontArc({ col: 5, row: 2 }).find((a) => a.name === "front");
+  board.grid[frontCell.row][frontCell.col].terrain = TERRAIN.IMPASSABLE;
+  const enemy = createCar("B", CAR_SIZE.MEDIUM, 6, 4); // en arc arrière d'un seul des candidats à égalité
+  const allCars = [car, enemy];
+  const result = ai.chooseGeneralTrajectory(board, car, 3, allCars, [], false, 0);
+  const rearOfChosen = engine.getRearArc({ col: result.destination.col, row: result.destination.row });
+  const enemyBehindChosen = rearOfChosen.some((r) => r.col === enemy.col && r.row === enemy.row);
+  assert(!enemyBehindChosen, "chooseGeneralTrajectory : parmi des destinations à égalité de progression, celle avec le voisinage le moins dangereux (pas d'adversaire en arc arrière) est préférée");
+}
+{
+  // Palier 3 (chemin forcé) : priorité à un Slam contre un adversaire
+  // STRICTEMENT plus petit quand plusieurs candidats forcés sont à
+  // égalité de danger de chemin — choix délibéré plutôt que subi (cf.
+  // Cas 5 : lacune repérée par Mayrik, corrigée ici).
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.LARGE, 0, 2);
+  const smallEnemy = createCar("B", CAR_SIZE.SMALL, 1, 2); // Slam accessible en 1 pas, strictement plus petit
+  for (let c = 0; c < 3; c++) {
+    for (let r = 0; r < 6; r++) {
+      if (!(c === 1 && r === 2)) board.grid[r][c].terrain = TERRAIN.IMPASSABLE;
+    }
+  }
+  const allCars = [car, smallEnemy];
+  const result = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 0);
+  assert(result.destination.terminalReason === "slam" && result.slam, "chooseGeneralTrajectory : Slam contre un adversaire plus petit choisi comme destination quand c'est la seule voie forcée disponible");
+  assert(result.destination.slamTarget.id === smallEnemy.id, "chooseGeneralTrajectory : la cible du Slam est bien le plus petit adversaire disponible");
+}
+{
+  // Reciblage Slam sur l'arc arrière (mécanisme PRÉEXISTANT, non
+  // modifié) : toujours actif quand aucun bonus Road n'a été utilisé.
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 0, 2);
+  const smallEnemy = createCar("B", CAR_SIZE.SMALL, 1, 3); // rear-right de la destination naturelle (2,2), plus petit
+  const allCars = [car, smallEnemy];
+  const result = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 0);
+  assert(result.slam === true && result.destination.col === 1 && result.destination.row === 3, "chooseGeneralTrajectory : reciblage sur l'arc arrière toujours actif sans bonus Road (mécanisme préexistant préservé)");
+}
+{
+  // LIMITE CONNUE ET DOCUMENTÉE : le reciblage sur l'arc arrière ne
+  // s'applique PAS quand un bonus Road a été utilisé (l'arc arrière
+  // du point d'arrêt de base n'a plus de sens une fois prolongé par
+  // le bonus). Test de RÉGRESSION pour cette limite assumée.
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 0, 2);
+  const smallEnemy = createCar("B", CAR_SIZE.SMALL, 1, 3); // serait en arc arrière du point de base (2,2)
+  const allCars = [car, smallEnemy];
+  const result = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 2); // bonus actif
+  assert(result.destination.terminalReason === "normal" && !result.slam, "chooseGeneralTrajectory : le reciblage arc arrière est bien ignoré (limite documentée) quand un bonus Road est utilisé");
+}
+
 console.log(`\n${passed} test(s) passé(s), ${failed} échec(s).`);
 if (failed > 0) process.exit(1);

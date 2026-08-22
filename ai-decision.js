@@ -5,14 +5,17 @@
  * complet de l'ancien `ai-scoring.js` (Utility AI à 15 facteurs, jugé
  * trop complexe et instable après plusieurs correctifs empilés).
  *
- * MÉTHODE : ce module traduit fidèlement l'arbre de décision fourni
- * par Mayrik (PDF "Arbre de décision attribution de dés pour
- * l'automate ThunderRoadVendetta"), validé main dans la main avec
- * lui avant toute implémentation. L'arbre encode déjà l'ordre des
- * priorités stratégiques (validé sur table de jeu physique) — ce
- * module ne réinvente PAS la stratégie, il la rend robuste et
- * exhaustive là où un arbre papier ne peut pas tout couvrir (cas
- * limites, égalités non dessinées).
+ * MÉTHODE : ce module traduit fidèlement les deux arbres de décision
+ * fournis par Mayrik — l'un pour l'attribution des dés, Command et
+ * choix de véhicule ("Arbre de décision pour l'automate
+ * ThundeRoad:Vendetta"), l'autre spécifiquement pour le choix de
+ * trajectoire/destination ("Arbre de décision trajectoire", section
+ * 3B ci-dessous) — validés main dans la main avec lui, cas par cas
+ * avec un viewer visuel pour le second, avant toute implémentation.
+ * Les arbres encodent déjà l'ordre des priorités stratégiques (validé
+ * sur table de jeu physique et sur cas réels) — ce module ne réinvente
+ * PAS la stratégie, il la rend robuste et exhaustive là où un arbre
+ * papier ne peut pas tout couvrir (cas limites, égalités non dessinées).
  *
  * ARCHITECTURE EN 3 COUCHES (voir la synthèse partagée avec Mayrik) :
  *   1. REACHABILITY (ce fichier, section 1) — pour une voiture et un
@@ -371,31 +374,197 @@ function chooseShootTarget(fromCol, fromRow, myOwner, allCars) {
 }
 
 // ===================================================================
-// SECTION 3B - RECHERCHE GENERALE DE TRAJECTOIRE
+// SECTION 3B — CASCADE DE CHOIX DE TRAJECTOIRE/DESTINATION
 // ===================================================================
-function chooseGeneralTrajectory(board, car, dieValue, allCars, allChoppers, driftAvailable = false) {
-  const candidates = computeReachableDestinations(board, car, dieValue, allCars, allChoppers, driftAvailable);
-  const progressable = candidates.filter((c) => c.terminalReason === "normal" || c.terminalReason === "exits-front");
+// Traduction directe du 2e arbre de Mayrik ("Arbre de décision
+// trajectoire"), clarifié point par point et validé cas par cas avec
+// un viewer visuel avant implémentation (voir tools/). Remplace
+// l'ancienne heuristique "plus loin, puis moins dangereux" par :
+//
+//   1. Parmi les destinations ATTEIGNABLES SANS TRAVERSER AUCUN
+//      hazard dangereux ("propres"), si certaines restent ENTIÈREMENT
+//      sur route (allRoad), on regarde si le bonus Road (dé Road,
+//      mouvement supplémentaire qui n'a PAS besoin de rester sur
+//      route, p.9) permet d'aller encore plus loin proprement.
+//      Préférence de terrain Route > Off-Road > Mud parmi les
+//      destinations "avec bonus".
+//   2. Sinon, le bonus est abandonné ENTIÈREMENT (pas de nouvelle
+//      tentative palier par palier) : meilleure destination "propre"
+//      SANS bonus, tous terrains confondus, départagée par proximité
+//      puis par danger d'arrivée GRADUÉ (table de Mayrik : somme des
+//      valeurs de danger des 6 cases adjacentes — arc avant+arrière —
+//      à la destination, terrain nu inclus car pertinent pour le tour
+//      suivant en cas de Slam).
+//   3. Si aucune destination propre n'existe (chemin forcé), la plus
+//      avancée parmi les normales/Slam, départagée par le danger
+//      CUMULÉ du CHEMIN traversé (hazards uniquement, terrain nu
+//      exclu — déjà capturé par le coût de déplacement). En cas
+//      d'égalité, priorité à un Slam contre un adversaire STRICTEMENT
+//      plus petit (choix délibéré plutôt que subi — réutilise la même
+//      règle de taille que le score de Slam, section 2).
+//   4. Dernier recours : n'importe quelle case autre qu'Impassable ;
+//      à défaut, la trajectoire la plus longue vers une Impassable.
+//
+// RÈGLE IMMUABLE (Mayrik) : à ce calcul, et uniquement ici, un
+// véhicule adverse occupé compte comme un hazard dangereux — jamais
+// recherché activement comme destination (seul le palier 3 peut y
+// mener, en dernier recours). Une bonne opportunité de Slam qui se
+// présente quand même est reciblée APRÈS coup, via le mécanisme
+// séparé ci-dessous (arc arrière de la destination déjà choisie) —
+// deux mécanismes distincts, jamais mélangés.
+//
+// LIMITE CONNUE, documentée plutôt que masquée : le reciblage Slam
+// sur l'arc arrière ne s'applique qu'aux destinations SANS bonus Road
+// — il réutilise l'ensemble `candidates` calculé pour le seul dé de
+// mouvement de base, dont l'arc arrière n'a pas de sens une fois la
+// voiture déplacée plus loin par le bonus. À rouvrir si besoin.
 
-  let destination;
-  if (progressable.length > 0) {
-    progressable.sort((a, b) => (b.col - a.col) || (a.dangerousCellsCrossed - b.dangerousCellsCrossed));
-    destination = progressable[0];
-  } else {
-    const slams = candidates.filter((c) => c.terminalReason === "slam");
-    const acceptedSlam = slams.find((c) => evaluateSlamCandidate(c, dieValue, car.size, board).accept);
-    if (acceptedSlam) {
-      destination = acceptedSlam;
-    } else if (slams.length > 0) {
-      slams.sort((a, b) => b.stepsUsed - a.stepsUsed);
-      destination = slams[0];
-    } else {
-      destination = candidates[0];
+// Valeur de danger d'un HAZARD spécifiquement (véhicule adverse —
+// règle immuable —, jeton face caché, ou jeton révélé classé
+// dangereux) ; 0 si la case n'a aucun hazard. Le terrain nu, lui,
+// est traité séparément par chaque appelant selon le contexte (une
+// case Road/Off-Road/Mud pèse dans le danger d'ARRIVÉE mais pas dans
+// le danger du CHEMIN traversé — cf. clarification Mayrik).
+function hazardValueOfCell(board, col, row, allCars) {
+  const space = getSpace(board, col, row);
+  if (!space) return 0;
+  if (getCarAt(allCars, col, row)) return 6;
+  if (space.hazard !== null) return 6;
+  if (space.revealedHazard === HAZARD_TYPES.OIL_SLICK) return space.terrain === TERRAIN.MUD ? 4 : 3;
+  return 0;
+}
+
+// Table de danger (Mayrik) : seuls les types déjà implémentés dans
+// engine.js (Fire!/Desert Glace/Ramp/Pit Trap attendent leurs
+// extensions futures).
+function dangerValueOfCell(board, col, row, allCars) {
+  const space = getSpace(board, col, row);
+  if (space === null || space === undefined) return 10; // Bordure de plateau
+  if (space.terrain === TERRAIN.IMPASSABLE) return 9;
+  const hazardValue = hazardValueOfCell(board, col, row, allCars);
+  if (hazardValue > 0) return hazardValue;
+  if (space.terrain === TERRAIN.ROAD) return 0;
+  if (space.terrain === TERRAIN.OFF_ROAD) return 1;
+  if (space.terrain === TERRAIN.MUD) return 2;
+  return 0;
+}
+
+// Danger de la case d'ARRIVÉE = somme des 6 cases adjacentes (arc
+// avant + arrière), terrain nu inclus (un Slam peut y repositionner
+// la voiture au tour suivant).
+function arrivalDanger(board, col, row, allCars) {
+  const neighbors = [...getFrontArc({ col, row }), ...getRearArc({ col, row })];
+  return neighbors.reduce((sum, n) => sum + dangerValueOfCell(board, n.col, n.row, allCars), 0);
+}
+
+// Danger du CHEMIN traversé = somme des cases HAZARD uniquement
+// (terrain nu exclu, déjà capturé par le coût de déplacement).
+function pathHazardDanger(board, car, path, allCars) {
+  let col = car.col, row = car.row, sum = 0;
+  for (const stepName of path) {
+    const step = getFrontArc({ col, row }).find((a) => a.name === stepName);
+    if (!step) break;
+    col = step.col; row = step.row;
+    const space = getSpace(board, col, row);
+    if (space === null || space === undefined || space.terrain === TERRAIN.IMPASSABLE) continue;
+    sum += hazardValueOfCell(board, col, row, allCars);
+  }
+  return sum;
+}
+
+const TERRAIN_PREFERENCE_ORDER = [TERRAIN.ROAD, TERRAIN.OFF_ROAD, TERRAIN.MUD];
+
+// Parmi des candidats déjà "propres", préférence Route > Off-Road >
+// Mud, chaque palier ne cédant au suivant que s'il permet une
+// progression strictement meilleure (cascade de l'arbre).
+function pickByTerrainPreference(candidates, board) {
+  const byTerrain = { [TERRAIN.ROAD]: [], [TERRAIN.OFF_ROAD]: [], [TERRAIN.MUD]: [] };
+  for (const c of candidates) {
+    const space = getSpace(board, c.col, c.row);
+    const terrain = space ? space.terrain : null;
+    if (byTerrain[terrain]) byTerrain[terrain].push(c);
+  }
+  let best = null;
+  for (const terrain of TERRAIN_PREFERENCE_ORDER) {
+    const group = byTerrain[terrain];
+    if (group.length === 0) continue;
+    const bestOfGroup = group.reduce((a, b) => (b.col > a.col ? b : a));
+    if (!best || bestOfGroup.col > best.col) best = bestOfGroup;
+  }
+  return best;
+}
+
+function chooseGeneralTrajectory(board, car, dieValue, allCars, allChoppers, driftAvailable = false, roadDieValue = 0) {
+  const candidates = computeReachableDestinations(board, car, dieValue, allCars, allChoppers, driftAvailable);
+  // "exits-front" (sortie par l'avant du plateau) compte comme une
+  // progression valide au même titre que "normal" — en contexte
+  // Finish Line, c'est le franchissement de la ligne d'arrivée
+  // elle-même (l'issue la plus favorable possible) ; sinon, c'est une
+  // avancée vers une tuile future encore inconnue, déjà traitée comme
+  // un progrès valable par l'ancien système. Le bonus Road, en
+  // revanche, ne s'applique qu'à un arrêt normal SUR la tuile (une
+  // sortie de plateau termine déjà le mouvement, rien à prolonger).
+  const cleanNormal = candidates.filter((c) => c.terminalReason === "normal" && c.dangerousCellsCrossed === 0);
+  const cleanProgress = candidates.filter((c) => (c.terminalReason === "normal" || c.terminalReason === "exits-front") && c.dangerousCellsCrossed === 0);
+
+  // --- Palier 1 : bonus Road, si applicable -------------------------
+  let destination = null;
+  let roadBonusPath = null;
+  if (roadDieValue > 0) {
+    const bonusEligible = cleanNormal.filter((c) => c.allRoad);
+    const bonusCandidates = [];
+    for (const base of bonusEligible) {
+      const extCar = { ...car, col: base.col, row: base.row };
+      const ext = computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable);
+      for (const e of ext) {
+        if ((e.terminalReason !== "normal" && e.terminalReason !== "exits-front") || e.dangerousCellsCrossed > 0) continue;
+        bonusCandidates.push({ col: e.col, row: e.row, basePath: base.path, extPath: e.path });
+      }
+    }
+    const chosenBonus = pickByTerrainPreference(bonusCandidates, board);
+    if (chosenBonus) {
+      destination = { col: chosenBonus.col, row: chosenBonus.row, stepsUsed: chosenBonus.basePath.length + chosenBonus.extPath.length, terminalReason: "normal", slamTarget: null, path: chosenBonus.basePath };
+      roadBonusPath = chosenBonus.extPath;
     }
   }
 
+  // --- Palier 2 : sans bonus, propre, tous terrains -----------------
+  if (!destination && cleanProgress.length > 0) {
+    const bestCol = Math.max(...cleanProgress.map((c) => c.col));
+    const atBestCol = cleanProgress
+      .filter((c) => c.col === bestCol)
+      .map((c) => ({ c, danger: arrivalDanger(board, c.col, c.row, allCars) }))
+      .sort((a, b) => a.danger - b.danger);
+    destination = atBestCol[0].c;
+  }
+
+  // --- Palier 3 : chemin forcé (aucune destination propre) ----------
+  if (!destination) {
+    const anyNormalOrSlam = candidates.filter((c) => c.terminalReason === "normal" || c.terminalReason === "slam" || c.terminalReason === "exits-front");
+    if (anyNormalOrSlam.length > 0) {
+      const bestCol = Math.max(...anyNormalOrSlam.map((c) => c.col));
+      const atBestCol = anyNormalOrSlam.filter((c) => c.col === bestCol);
+      const scored = atBestCol.map((c) => ({ c, danger: pathHazardDanger(board, car, c.path, allCars) }));
+      const minDanger = Math.min(...scored.map((s) => s.danger));
+      const tied = scored.filter((s) => s.danger === minDanger);
+      const preferredSlam = tied.find((s) => s.c.terminalReason === "slam" && s.c.slamTarget && SIZE_RANK[s.c.slamTarget.size] < SIZE_RANK[car.size]);
+      destination = (preferredSlam || tied[0]).c;
+    }
+  }
+
+  // --- Palier 4 : dernier recours ------------------------------------
+  if (!destination) {
+    const notImpassable = candidates.filter((c) => c.terminalReason !== "eliminated-impassable");
+    destination = notImpassable.length > 0
+      ? notImpassable.reduce((a, b) => (b.col > a.col ? b : a))
+      : candidates.reduce((a, b) => (b.stepsUsed > a.stepsUsed ? b : a));
+  }
+
+  // --- Reciblage Slam sur l'arc arrière (mécanisme existant, INCHANGÉ,
+  // limité aux destinations sans bonus Road — cf. limite documentée
+  // en tête de section) ----------------------------------------------
   let slam = destination.terminalReason === "slam";
-  if (destination.terminalReason === "normal") {
+  if (destination.terminalReason === "normal" && !roadBonusPath) {
     const rearArc = getRearArc({ col: destination.col, row: destination.row });
     for (const r of rearArc) {
       const rearCandidate = candidates.find((c) => c.col === r.col && c.row === r.row && c.terminalReason === "slam");
@@ -415,7 +584,7 @@ function chooseGeneralTrajectory(board, car, dieValue, allCars, allChoppers, dri
     ? chooseShootTarget(destination.col, destination.row, car.owner, allCars)
     : null;
 
-  return { destination, shotTarget, slam };
+  return { destination, shotTarget, slam, roadBonusPath };
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -767,18 +936,20 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
   let effectiveDieValue = movementDieFinal;
   if (command && command.type === "nitro") effectiveDieValue += command.dieValue;
 
-  let destination, shotTarget, slam;
+  let destination, shotTarget, slam, roadBonusPath;
   if (car.col === null) {
     const row = chooseAiEntryRow(board, car, allCars, allChoppers);
     destination = { col: 0, row, stepsUsed: 0, terminalReason: "normal", slamTarget: null };
     shotTarget = null;
     slam = false;
+    roadBonusPath = null;
   } else {
     const driftActive = !!(command && command.type === "drift");
-    const traj = chooseGeneralTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActive);
+    const traj = chooseGeneralTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActive, roundState.roadDie || 0);
     destination = traj.destination;
     shotTarget = traj.shotTarget;
     slam = traj.slam;
+    roadBonusPath = traj.roadBonusPath;
   }
 
   return {
@@ -789,7 +960,8 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
     shotTarget,
     isEntry: car.col === null,
     isCoast: false,
-    slam
+    slam,
+    roadBonusPath
   };
 }
 
@@ -963,8 +1135,8 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
     }
   }
 
-  const traj = chooseGeneralTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActiveForRest);
-  return { car, dieValue: biggestDie, command, destination: traj.destination, shotTarget: traj.shotTarget, isEntry: car.col === null, isCoast: false, slam: traj.slam };
+  const traj = chooseGeneralTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActiveForRest, roundState.roadDie || 0);
+  return { car, dieValue: biggestDie, command, destination: traj.destination, shotTarget: traj.shotTarget, isEntry: car.col === null, isCoast: false, slam: traj.slam, roadBonusPath: traj.roadBonusPath };
 }
 
 if (typeof module !== "undefined" && module.exports) {
