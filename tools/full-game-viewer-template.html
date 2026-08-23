@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Partie complète — 3 IA</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 16px; }
+  #wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 16px; color: #ffb347; margin-bottom: 4px; }
+  .badges { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
+  .badge { background: #2c2c36; padding: 4px 10px; border-radius: 6px; }
+  .die { display: inline-block; background: #3a3a46; border-radius: 4px; padding: 2px 7px; margin-right: 3px; font-weight: bold; }
+  svg { width: 100%; height: auto; background: #26262e; border-radius: 8px; }
+  #log { margin-top: 12px; padding: 12px; background: #2c2c36; border-radius: 8px; font-size: 13px; line-height: 1.6; }
+  #log b { color: #ffb347; }
+  #log div.line { margin-bottom: 2px; }
+  .nav { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; gap: 8px; }
+  button { background: #ffb347; border: none; color: #1e1e24; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; }
+  button:disabled { opacity: 0.3; cursor: default; }
+  button.secondary { background: #3a3a46; color: #eee; }
+  #counter { font-size: 13px; color: #aaa; }
+  .legend { font-size: 12px; color: #999; margin-top: 8px; }
+  #winnerBanner { display: none; margin-top: 10px; padding: 10px; background: #ffb347; color: #1e1e24; border-radius: 8px; font-weight: bold; text-align: center; }
+  .damageList { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>Partie complète — self-play 3 IA</h1>
+  <div class="badges">
+    <span class="badge" id="roundBadge"></span>
+    <span class="badge" id="playerBadge"></span>
+    <span class="badge" id="roadDieBadge"></span>
+    <span class="badge" id="commandUsedBadge"></span>
+    <span class="badge">Pool (avant ce tour) : <span id="dicePool"></span></span>
+  </div>
+  <svg id="board" viewBox="0 0 900 500"></svg>
+  <div id="log"></div>
+  <div class="damageList" id="damageRow"></div>
+  <div id="winnerBanner"></div>
+  <div class="legend">🔵 IA-Bleue · 🔴 IA-Rouge · 🟢 IA-Verte. Cercle jaune = voiture activée ce tour. Cercle rouge pointillé = cible d'une Command. Cercle orange pointillé = cible d'un tir. Triangle noir = chopper. Case rouge hachurée = Impassable. Triangle sombre = hazard non révélé.</div>
+  <div class="nav">
+    <button class="secondary" id="firstBtn">⏮ Début</button>
+    <button id="prevBtn">◀ Tour précédent</button>
+    <span id="counter"></span>
+    <button id="nextBtn">Tour suivant ▶</button>
+    <button class="secondary" id="lastBtn">Fin ⏭</button>
+  </div>
+</div>
+<script>
+const GAME = __GAME_JSON__;
+const TURNS = GAME.turns;
+let current = 0;
+
+const CELL_W = 34, CELL_H = 40, QUIN = 6, NOTCH = 4;
+
+function cellPoly(col, row) {
+  const rowTop = 20 + row * CELL_H;
+  const rowBot = rowTop + CELL_H;
+  const mid = (rowTop + rowBot) / 2;
+  const left = (row % 2 === 0) ? 10 - QUIN : 10 + QUIN;
+  const x0 = left + col * CELL_W;
+  const rx = x0 + CELL_W + NOTCH;
+  return [[x0, rowTop], [x0 + CELL_W, rowTop], [rx, mid], [x0 + CELL_W, rowBot], [x0, rowBot], [x0 + NOTCH, mid]];
+}
+function pts2s(p) { return p.map(v => v[0].toFixed(1) + ',' + v[1].toFixed(1)).join(' '); }
+function cellCenter(col, row) {
+  const p = cellPoly(col, row);
+  const cx = (p[0][0] + p[1][0] + p[3][0] + p[4][0]) / 4 + NOTCH / 2;
+  const cy = (p[0][1] + p[3][1]) / 2;
+  return { cx, cy };
+}
+
+const TERRAIN_FILL = { road: "#4a4a55", off_road: "#7a5c3a", mud: "#3d2a1a", impassable: "#5c2020" };
+const OWNER_COLOR = { "IA-Bleue": "#3b82c9", "IA-Rouge": "#c93b3b", "IA-Verte": "#2fae5a" };
+const OWNER_DOT = { "IA-Bleue": "🔵", "IA-Rouge": "🔴", "IA-Verte": "🟢" };
+
+function render() {
+  const t = TURNS[current];
+  const svg = document.getElementById("board");
+  const w = 10 + t.board.cols * CELL_W + 20;
+  const h = 20 + t.board.rows * CELL_H + 10;
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  let html = "";
+
+  for (let row = 0; row < t.board.rows; row++) {
+    for (let col = 0; col < t.board.cols; col++) {
+      const cell = t.board.grid[row][col];
+      const poly = cellPoly(col, row);
+      const fill = TERRAIN_FILL[cell.terrain] || "#444";
+      html += `<polygon points="${pts2s(poly)}" fill="${fill}" stroke="#111" stroke-width="0.6"/>`;
+      if (cell.terrain === "impassable") {
+        const { cx, cy } = cellCenter(col, row);
+        html += `<line x1="${cx-10}" y1="${cy-10}" x2="${cx+10}" y2="${cy+10}" stroke="#ff6666" stroke-width="1.5"/>`;
+        html += `<line x1="${cx-10}" y1="${cy+10}" x2="${cx+10}" y2="${cy-10}" stroke="#ff6666" stroke-width="1.5"/>`;
+      }
+      if (cell.hazard === "hidden") {
+        const { cx, cy } = cellCenter(col, row);
+        html += `<polygon points="${cx},${cy-6} ${cx-6},${cy+5} ${cx+6},${cy+5}" fill="#222" stroke="#888" stroke-width="0.7"/>`;
+      }
+    }
+  }
+
+  const decision = t.decision;
+  t.cars.forEach((car) => {
+    if (car.col === null) return;
+    const { cx, cy } = cellCenter(car.col, car.row);
+    const isActive = decision && car.id === decision.activeCarId;
+    const isCommandTarget = decision && decision.command && decision.command.targetId === car.id;
+    const isShotTarget = decision && decision.shotTargetId === car.id;
+    const color = OWNER_COLOR[car.owner];
+    html += `<g>
+      ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5"/>` : ""}
+      ${isCommandTarget ? `<circle cx="${cx}" cy="${cy}" r="18" fill="none" stroke="#ff3b3b" stroke-width="2" stroke-dasharray="3,2"/>` : ""}
+      ${isShotTarget ? `<circle cx="${cx}" cy="${cy}" r="21" fill="none" stroke="#ff9f1c" stroke-width="2" stroke-dasharray="2,3"/>` : ""}
+      <rect x="${cx-12}" y="${cy-10}" width="24" height="20" rx="4" fill="${color}" stroke="#000" stroke-width="1" ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
+      <text x="${cx}" y="${cy+4}" font-size="11" fill="#fff" text-anchor="middle" font-weight="bold">${car.size[0].toUpperCase()}</text>
+      ${car.status === "inoperable" ? `<line x1="${cx-12}" y1="${cy-10}" x2="${cx+12}" y2="${cy+10}" stroke="#fff" stroke-width="1.5"/>` : ""}
+      ${car.damageCount > 0 ? `<circle cx="${cx+10}" cy="${cy-8}" r="5" fill="#ffb347"/><text x="${cx+10}" y="${cy-5}" font-size="7" text-anchor="middle" fill="#111">${car.damageCount}</text>` : ""}
+    </g>`;
+  });
+
+  (t.choppers || []).forEach((ch) => {
+    if (ch.col === null) return;
+    const { cx, cy } = cellCenter(ch.col, ch.row);
+    const color = OWNER_COLOR[ch.owner];
+    html += `<polygon points="${cx},${cy-9} ${cx-9},${cy+7} ${cx+9},${cy+7}" fill="#111" stroke="${color}" stroke-width="2"/>`;
+  });
+
+  svg.innerHTML = html;
+
+  document.getElementById("roundBadge").textContent = `Round ${t.round}`;
+  document.getElementById("playerBadge").textContent = `${OWNER_DOT[t.player] || ""} ${t.player} joue`;
+  document.getElementById("roadDieBadge").textContent = `Dé Road ce round : ${t.roadDie}`;
+  document.getElementById("commandUsedBadge").textContent = `Command déjà utilisée par ${t.player} ce round : ${t.commandUsedBefore ? "OUI" : "non"}`;
+  document.getElementById("dicePool").innerHTML = t.poolBefore.map((d) => `<span class="die">${d}</span>`).join("");
+
+  document.getElementById("log").innerHTML = t.log.map((l) => `<div class="line">${l}</div>`).join("");
+
+  document.getElementById("damageRow").innerHTML = t.cars
+    .filter((car) => car.status !== "eliminated")
+    .map((car) => `<span class="badge">${OWNER_DOT[car.owner] || ""} ${car.size} : ${car.damageCount} dégât(s)${car.status === "inoperable" ? " [INOPÉRABLE]" : ""}</span>`)
+    .join("");
+
+  const isLast = current === TURNS.length - 1;
+  const banner = document.getElementById("winnerBanner");
+  if (isLast && GAME.winner) {
+    banner.style.display = "block";
+    banner.textContent = `🏁 Partie terminée : victoire de ${GAME.winner} (${GAME.endReason}).`;
+  } else if (isLast && !GAME.winner) {
+    banner.style.display = "block";
+    banner.textContent = `Partie interrompue sans vainqueur (limite de tours atteinte).`;
+  } else {
+    banner.style.display = "none";
+  }
+
+  document.getElementById("counter").textContent = `Tour ${current + 1} / ${TURNS.length}`;
+  document.getElementById("prevBtn").disabled = current === 0;
+  document.getElementById("nextBtn").disabled = current === TURNS.length - 1;
+  document.getElementById("firstBtn").disabled = current === 0;
+  document.getElementById("lastBtn").disabled = current === TURNS.length - 1;
+}
+
+document.getElementById("prevBtn").addEventListener("click", () => { if (current > 0) { current--; render(); } });
+document.getElementById("nextBtn").addEventListener("click", () => { if (current < TURNS.length - 1) { current++; render(); } });
+document.getElementById("firstBtn").addEventListener("click", () => { current = 0; render(); });
+document.getElementById("lastBtn").addEventListener("click", () => { current = TURNS.length - 1; render(); });
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowRight") document.getElementById("nextBtn").click();
+  if (e.key === "ArrowLeft") document.getElementById("prevBtn").click();
+});
+
+render();
+</script>
+</body>
+</html>
