@@ -57,7 +57,7 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
   if (!decision) {
     log.push(`${currentPlayer} : rien à jouer → passe forcée.`);
     log.push(...advanceTurn(roundState, allCars).log);
-    return { ok: true, log, passed: true };
+    return { ok: true, log, passed: true, decision: null };
   }
 
   // --- CONTRÔLES DE LÉGALITÉ ---
@@ -114,25 +114,25 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
 
   if (decision.isEntry) {
     const result = playTurnAssignEnterWithProgression(
-      progressionState, car, effectiveDieValue, decision.destination.row, [], allCars, allChoppers, playerNames,
-      { roundNumber: roundState.roundNumber, roadDieValue: roundState.roadDie, ...slamOptions }
+      progressionState, car, effectiveDieValue, decision.destination.entryRow, decision.destination.path || [], allCars, allChoppers, playerNames,
+      { roundNumber: roundState.roundNumber, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
     );
     log.push(...(result.log || []));
     if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log };
+    return { ...result, log, decision };
   }
 
   if (isCoastTurn) {
     const result = playTurnCoastWithProgression(progressionState, car, decision.destination.path || [], allCars, allChoppers, playerNames, { roundNumber: roundState.roundNumber });
     log.push(...(result.log || []));
     if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log };
+    return { ...result, log, decision };
   }
 
   if (car.status !== CAR_STATUS.OPERABLE) {
     log.push(`${car.id} devenue inopérable pendant la Command → fin du tour.`);
     log.push(...advanceTurn(roundState, allCars).log);
-    return { ok: true, log, car };
+    return { ok: true, log, car, decision };
   }
 
   const result = playTurnAssignMoveWithProgression(
@@ -141,7 +141,7 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
   );
   log.push(...(result.log || []));
   if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-  return { ...result, log };
+  return { ...result, log, decision };
 }
 
 function checkStateIntegrity(board, allCars) {
