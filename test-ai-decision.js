@@ -8,7 +8,7 @@
 const engine = require("./engine.js");
 const ai = require("./ai-decision.js");
 
-const { TERRAIN, CAR_SIZE, createTestTile, createBoard, createCar } = engine;
+const { TERRAIN, CAR_SIZE, createTestTile, createBoard, createCar, createCarOffBoard } = engine;
 
 let passed = 0, failed = 0;
 function assert(condition, label) {
@@ -536,6 +536,110 @@ function getTerrainAt(board, dest) {
   const allCars = [car, smallEnemy];
   const result = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 2); // bonus actif
   assert(result.destination.terminalReason === "normal" && !result.slam, "chooseGeneralTrajectory : le reciblage arc arrière est bien ignoré (limite documentée) quand un bonus Road est utilisé");
+}
+
+// -----------------------------------------------------------------
+// SECTION 8 — ENTRÉE EN JEU (p.9) : computeReachableEntryDestinations
+// et chooseEntryTrajectory
+// -----------------------------------------------------------------
+// CORRECTIF SESSION (bug signalé par Mayrik) : l'entrée était codée
+// en dur sur la seule case d'entrée (stepsUsed:0, aucune suite de
+// trajectoire), perdant tout le mouvement restant à chaque entrée —
+// contraire à p.9 : "Each car's initial move is onto one of the
+// spaces on the back edge of the rear tile" (l'entrée coûte le
+// premier point de mouvement comme une case normale, PUIS le trajet
+// continue avec les points restants).
+
+// 1. Régression directe du bug signalé : sur route partout, un dé
+// de 4 doit amener la voiture BIEN AU-DELÀ de la colonne 0 (avant :
+// bloquée sur col 0 quel que soit le dé).
+{
+  const board = emptyBoard();
+  const car = createCarOffBoard("A", CAR_SIZE.MEDIUM);
+  const dests = ai.computeReachableEntryDestinations(board, 4, [car], []);
+  const normal = dests.filter((d) => d.terminalReason === "normal");
+  assert(normal.length > 0, "computeReachableEntryDestinations : au moins une destination normale");
+  assert(normal.some((d) => d.col > 0), "computeReachableEntryDestinations : RÉGRESSION DU BUG — le mouvement continue bien au-delà de la colonne 0 (avant : toujours bloqué à col 0)");
+  assert(normal.every((d) => d.stepsUsed === 4), "computeReachableEntryDestinations : le budget entier du dé est consommé (entrée + continuation), pas seulement 1 pas");
+  assert(dests.some((d) => d.entryRow !== undefined), "computeReachableEntryDestinations : chaque candidat porte bien sa rangée d'entrée (entryRow)");
+}
+
+// 2. Coût de terrain à l'entrée : case de colonne 0 en boue (coût 2)
+// avec un dé de 2 → doit s'arrêter PILE à l'entrée (budget épuisé par
+// le coût de terrain, pas par une continuation).
+{
+  const board = emptyBoard();
+  for (let r = 0; r < board.rows; r++) board.grid[r][0].terrain = TERRAIN.MUD;
+  const car = createCarOffBoard("A", CAR_SIZE.MEDIUM);
+  const dests = ai.computeReachableEntryDestinations(board, 2, [car], []);
+  const atCol0 = dests.filter((d) => d.col === 0 && d.terminalReason === "normal");
+  assert(atCol0.length > 0, "computeReachableEntryDestinations : entrée en boue avec dé=2 reste candidate");
+  assert(atCol0.every((d) => d.stepsUsed === 1), "computeReachableEntryDestinations : le coût de terrain (boue=2) de l'entrée absorbe tout le dé en 1 seul pas");
+}
+
+// 3. Exception boue à 1 point restant (p.7) : dé=1 sur case de boue
+// doit quand même permettre d'entrer (coût réduit à 1 par l'exception).
+{
+  const board = emptyBoard();
+  for (let r = 0; r < board.rows; r++) board.grid[r][0].terrain = TERRAIN.MUD;
+  const car = createCarOffBoard("A", CAR_SIZE.MEDIUM);
+  const dests = ai.computeReachableEntryDestinations(board, 1, [car], []);
+  assert(dests.some((d) => d.col === 0 && d.terminalReason === "normal"), "computeReachableEntryDestinations : exception boue p.7 — entrer avec dé=1 reste possible malgré le coût normal de 2");
+}
+
+// 4. Case de colonne 0 déjà occupée : doit apparaître comme candidat
+// de Slam (comme n'importe quelle case occupée), pas être filtrée.
+{
+  const board = emptyBoard();
+  const occupant = createCar("B", CAR_SIZE.SMALL, 0, 2);
+  const car = createCarOffBoard("A", CAR_SIZE.MEDIUM);
+  const dests = ai.computeReachableEntryDestinations(board, 3, [car, occupant], []);
+  const slam = dests.find((d) => d.col === 0 && d.row === 2 && d.terminalReason === "slam");
+  assert(!!slam, "computeReachableEntryDestinations : entrer sur une case occupée est un candidat de Slam valide");
+  assert(slam.slamTarget && slam.slamTarget.owner === "B", "computeReachableEntryDestinations : le slamTarget pointe vers le bon véhicule");
+  assert(slam.stepsUsed === 1, "computeReachableEntryDestinations : le Slam à l'entrée arrête net (1 pas, pas le dé entier)");
+}
+
+// 5. chooseEntryTrajectory bout-en-bout : sur route partout, la
+// destination finale doit refléter une vraie progression (col > 0),
+// pas un arrêt artificiel à l'entrée.
+{
+  const board = emptyBoard();
+  const car = createCarOffBoard("A", CAR_SIZE.LARGE);
+  const traj = ai.chooseEntryTrajectory(board, car, 4, [car], [], false, 0);
+  assert(traj.destination.col > 0, "chooseEntryTrajectory : la destination choisie progresse bien au-delà de la colonne 0");
+  assert(traj.destination.terminalReason === "normal", "chooseEntryTrajectory : arrêt normal (budget épuisé), pas un Slam ou une élimination sur ce plateau vide");
+  assert(traj.shotTarget === null, "chooseEntryTrajectory : jamais de tir sur un tour d'entrée (round 1)");
+}
+
+// 6. Bonus Road à l'entrée : entrée sur route + dé Road disponible →
+// la trajectoire doit se prolonger au-delà de ce que le seul dé
+// assigné permettrait (mécanisme déjà supporté côté moteur, jamais
+// branché côté décision avant ce correctif).
+{
+  const board = emptyBoard(); // route partout
+  const car = createCarOffBoard("A", CAR_SIZE.MEDIUM);
+  const withoutBonus = ai.chooseEntryTrajectory(board, car, 2, [car], [], false, 0);
+  const withBonus = ai.chooseEntryTrajectory(board, car, 2, [car], [], false, 5);
+  assert(withBonus.roadBonusPath !== null, "chooseEntryTrajectory : bonus Road bien détecté et appliqué à une entrée 100% route");
+  assert(withBonus.destination.col > withoutBonus.destination.col, "chooseEntryTrajectory : le bonus Road prolonge bien la progression au-delà du dé assigné seul");
+}
+
+// 7. Intégration complète via decideNoFinishLine : une voiture pas
+// encore entrée (col === null) doit recevoir isEntry:true ET une
+// destination qui progresse réellement (pas juste la case d'entrée).
+{
+  const board = emptyBoard();
+  const progressionState = { rearTile: { cols: 8 } };
+  const entering = createCarOffBoard("A", CAR_SIZE.MEDIUM);
+  const already = createCar("A", CAR_SIZE.SMALL, 4, 1);
+  already.movedThisRound = true; // seule 'entering' reste éligible ce tour
+  const allCars = [entering, already];
+  const dicePool = { A: [5, 3, 2, 1] };
+  const roundState = { commandUsedThisRound: { A: false }, turnsThisRound: { A: 0 } };
+  const d = ai.decideAssignAndCommand(progressionState, board, allCars, [], dicePool, "A", roundState);
+  assert(d.isEntry === true, "decideNoFinishLine (intégration) : isEntry bien signalé pour une voiture hors plateau");
+  assert(d.destination.col > 0, "decideNoFinishLine (intégration) : RÉGRESSION DU BUG — la destination d'entrée progresse réellement, ne reste plus bloquée à col 0");
 }
 
 console.log(`\n${passed} test(s) passé(s), ${failed} échec(s).`);

@@ -52,7 +52,6 @@ const {
   getRearArc,
   getCarAt,
   isChopperOccupied,
-  chooseAiEntryRow,
   computeAiStepCost,
   isAiHiddenHazard,
   findFrontmostCar,
@@ -133,11 +132,30 @@ function isDangerousCell(space) {
  * sa place.
  */
 function computeReachableDestinations(board, car, dieValue, allCars, allChoppers, driftAvailable = false) {
+  const explorer = createReachabilityExplorer(board, allCars, allChoppers, driftAvailable);
+  explorer.visit(car.col, car.row, dieValue, 0, true, 0, [], false);
+  return [...explorer.results.values()];
+}
+
+// Fabrique partagée de l'exploration de trajectoire — factorise la
+// géométrie et les règles de terrain (bord, impassable, occupant,
+// hazard, chopper, coût de déplacement) entre DEUX usages distincts :
+//   1. computeReachableDestinations (ci-dessus) — voiture déjà sur le
+//      plateau, arc avant classique à 3 cases depuis sa position.
+//   2. computeReachableEntryDestinations (plus bas) — voiture qui
+//      entre en jeu (p.9 : "Each car's initial move is onto one of
+//      the spaces on the back edge of the rear tile"), dont le
+//      "premier pas" n'est PAS un arc avant à 3 cases mais TOUTES les
+//      cases de la colonne 0 (modèle de Mayrik : le hors-plateau est
+//      une case virtuelle unique reliée à toute la colonne 0).
+// AUCUNE règle de terrain n'est dupliquée entre les deux : seule la
+// façon de produire le tout premier "pas" diffère.
+function createReachabilityExplorer(board, allCars, allChoppers, driftAvailable) {
   const results = new Map(); // clé "col,row" -> meilleur candidat pour cette case
 
-  function record(col, row, stepsUsed, dangerousCellsCrossed, allRoad, terminalReason, slamTarget, path) {
+  function record(col, row, stepsUsed, dangerousCellsCrossed, allRoad, terminalReason, slamTarget, path, extra) {
     const key = `${col},${row}`;
-    const candidate = { col, row, stepsUsed, dangerousCellsCrossed, allRoad, terminalReason, slamTarget: slamTarget || null, path };
+    const candidate = { col, row, stepsUsed, dangerousCellsCrossed, allRoad, terminalReason, slamTarget: slamTarget || null, path, ...(extra || {}) };
     const existing = results.get(key);
     if (!existing) {
       results.set(key, candidate);
@@ -160,96 +178,137 @@ function computeReachableDestinations(board, car, dieValue, allCars, allChoppers
     }
   }
 
-  function visit(col, row, pointsRemaining, dangerousCellsCrossed, allRoad, stepsUsed, pathSoFar, driftUsed) {
-    const arc = getFrontArc({ col, row });
-    for (const step of arc) {
-      const space = getSpace(board, step.col, step.row);
-      const nextPath = [...pathSoFar, step.name];
+  // Traite UN pas déjà identifié (case candidate), quelle que soit son
+  // origine. `appendToPath` distingue le pas d'ENTRÉE (jamais inclus
+  // dans `path` — moveCarEnteringBoard prend la rangée d'entrée à
+  // part, `path` ne liste que la CONTINUATION après l'entrée) d'un
+  // pas normal d'arc avant (toujours ajouté à `path`).
+  function handleStep(step, pointsRemaining, dangerousCellsCrossed, allRoad, stepsUsed, pathSoFar, driftUsed, appendToPath, extra) {
+    const space = getSpace(board, step.col, step.row);
+    const nextPath = appendToPath ? [...pathSoFar, step.name] : pathSoFar;
 
-      if (space === null) {
-        // Bord GAUCHE/DROIT : sortie du plateau = élimination (p.6).
-        record(step.col, step.row, stepsUsed + 1, dangerousCellsCrossed, allRoad, "eliminated-edge", null, nextPath);
-        continue;
-      }
-      if (space === undefined) {
-        // Bord AVANT (col >= cols) : la voiture continuerait sur la
-        // tuile suivante, dont le contenu est inconnu au moment de
-        // la décision (elle n'est piochée qu'à l'exécution réelle,
-        // p.11) — on ne peut pas prédire plus loin, donc on
-        // enregistre ce point comme un arrêt de planification, pas
-        // une élimination ni une case normale.
-        record(step.col, step.row, stepsUsed + 1, dangerousCellsCrossed, allRoad, "exits-front", null, nextPath);
-        continue;
-      }
+    if (space === null) {
+      // Bord GAUCHE/DROIT : sortie du plateau = élimination (p.6).
+      record(step.col, step.row, stepsUsed + 1, dangerousCellsCrossed, allRoad, "eliminated-edge", null, nextPath, extra);
+      return;
+    }
+    if (space === undefined) {
+      // Bord AVANT (col >= cols) : la voiture continuerait sur la
+      // tuile suivante, dont le contenu est inconnu au moment de
+      // la décision (elle n'est piochée qu'à l'exécution réelle,
+      // p.11) — on ne peut pas prédire plus loin, donc on
+      // enregistre ce point comme un arrêt de planification, pas
+      // une élimination ni une case normale.
+      record(step.col, step.row, stepsUsed + 1, dangerousCellsCrossed, allRoad, "exits-front", null, nextPath, extra);
+      return;
+    }
 
-      if (space.terrain === TERRAIN.IMPASSABLE) {
-        record(step.col, step.row, stepsUsed + 1, dangerousCellsCrossed, allRoad, "eliminated-impassable", null, nextPath);
-        continue;
-      }
+    if (space.terrain === TERRAIN.IMPASSABLE) {
+      record(step.col, step.row, stepsUsed + 1, dangerousCellsCrossed, allRoad, "eliminated-impassable", null, nextPath, extra);
+      return;
+    }
 
-      const occupant = getCarAt(allCars, step.col, step.row);
-      if (occupant) {
-        // Entrer sur une case occupée arrête TOUJOURS le mouvement si
-        // on choisit de s'arrêter LÀ (p.9) — toujours enregistré comme
-        // candidat de Slam valide, Drift ou pas.
-        record(step.col, step.row, stepsUsed + 1, dangerousCellsCrossed, allRoad, "slam", occupant, nextPath);
+    const occupant = getCarAt(allCars, step.col, step.row);
+    if (occupant) {
+      // Entrer sur une case occupée arrête TOUJOURS le mouvement si
+      // on choisit de s'arrêter LÀ (p.9) — toujours enregistré comme
+      // candidat de Slam valide, Drift ou pas.
+      record(step.col, step.row, stepsUsed + 1, dangerousCellsCrossed, allRoad, "slam", occupant, nextPath, extra);
 
-        // Avec Drift, on peut aussi CONTINUER au-delà de ce PREMIER
-        // véhicule rencontré (p.8 : "peut passer à travers le premier
-        // véhicule... sans le slammer, SAUF si le mouvement se
-        // termine dessus" — déjà couvert par le 'record' ci-dessus
-        // pour ce cas précis). Jamais un 2e véhicule (driftUsed).
-        if (driftAvailable && !driftUsed) {
-          const chopperHere2 = isChopperOccupied(allChoppers, step.col, step.row);
-          const cost2 = computeAiStepCost(space.terrain, pointsRemaining);
-          if (cost2 !== null) {
-            const remainingAfter2 = pointsRemaining - cost2;
-            const nextDangerous2 = dangerousCellsCrossed + (isDangerousCell(space) ? 1 : 0);
-            const nextAllRoad2 = allRoad && space.terrain === TERRAIN.ROAD;
-            if (remainingAfter2 === 0) {
-              record(step.col, step.row, stepsUsed + 1, nextDangerous2, nextAllRoad2, chopperHere2 ? "eliminated-chopper" : "normal", null, nextPath);
-            } else {
-              visit(step.col, step.row, remainingAfter2, nextDangerous2, nextAllRoad2, stepsUsed + 1, nextPath, true);
-            }
+      // Avec Drift, on peut aussi CONTINUER au-delà de ce PREMIER
+      // véhicule rencontré (p.8 : "peut passer à travers le premier
+      // véhicule... sans le slammer, SAUF si le mouvement se
+      // termine dessus" — déjà couvert par le 'record' ci-dessus
+      // pour ce cas précis). Jamais un 2e véhicule (driftUsed).
+      if (driftAvailable && !driftUsed) {
+        const chopperHere2 = isChopperOccupied(allChoppers, step.col, step.row);
+        const cost2 = computeAiStepCost(space.terrain, pointsRemaining);
+        if (cost2 !== null) {
+          const remainingAfter2 = pointsRemaining - cost2;
+          const nextDangerous2 = dangerousCellsCrossed + (isDangerousCell(space) ? 1 : 0);
+          const nextAllRoad2 = allRoad && space.terrain === TERRAIN.ROAD;
+          if (remainingAfter2 === 0) {
+            record(step.col, step.row, stepsUsed + 1, nextDangerous2, nextAllRoad2, chopperHere2 ? "eliminated-chopper" : "normal", null, nextPath, extra);
+          } else {
+            visit(step.col, step.row, remainingAfter2, nextDangerous2, nextAllRoad2, stepsUsed + 1, nextPath, true, extra);
           }
         }
-        continue;
       }
+      return;
+    }
 
-      const chopperHere = isChopperOccupied(allChoppers, step.col, step.row);
-      const cost = computeAiStepCost(space.terrain, pointsRemaining);
-      const nextDangerous = dangerousCellsCrossed + (isDangerousCell(space) ? 1 : 0);
-      const nextAllRoad = allRoad && space.terrain === TERRAIN.ROAD;
+    const chopperHere = isChopperOccupied(allChoppers, step.col, step.row);
+    const cost = computeAiStepCost(space.terrain, pointsRemaining);
+    const nextDangerous = dangerousCellsCrossed + (isDangerousCell(space) ? 1 : 0);
+    const nextAllRoad = allRoad && space.terrain === TERRAIN.ROAD;
 
-      if (cost === null) {
-        // Terrain trop coûteux pour les points restants (boue avec
-        // >1 point restant nécessaire mais insuffisant) : ce chemin
-        // ne peut pas continuer par ici, mais rien n'empêche
-        // d'essayer les 2 AUTRES directions de l'arc avant.
-        continue;
-      }
+    if (cost === null) {
+      // Terrain trop coûteux pour les points restants (boue avec
+      // >1 point restant nécessaire mais insuffisant) : ce chemin
+      // ne peut pas continuer par ici, mais rien n'empêche
+      // d'essayer les 2 AUTRES directions de l'arc avant.
+      return;
+    }
 
-      const remainingAfter = pointsRemaining - cost;
+    const remainingAfter = pointsRemaining - cost;
 
-      if (remainingAfter === 0) {
-        // Budget épuisé pile sur cette case : point d'arrêt normal,
-        // SAUF si un chopper y est stationné (élimine la voiture qui
-        // termine son tour dessus, p.6).
-        record(step.col, step.row, stepsUsed + 1, nextDangerous, nextAllRoad, chopperHere ? "eliminated-chopper" : "normal", null, nextPath);
-        continue;
-      }
+    if (remainingAfter === 0) {
+      // Budget épuisé pile sur cette case : point d'arrêt normal,
+      // SAUF si un chopper y est stationné (élimine la voiture qui
+      // termine son tour dessus, p.6).
+      record(step.col, step.row, stepsUsed + 1, nextDangerous, nextAllRoad, chopperHere ? "eliminated-chopper" : "normal", null, nextPath, extra);
+      return;
+    }
 
-      if (chopperHere) {
-        // Passer À TRAVERS un chopper est sans effet (p.6) tant que
-        // ce n'est pas la case d'arrêt finale — on continue
-        // d'explorer au-delà normalement.
-      }
-      visit(step.col, step.row, remainingAfter, nextDangerous, nextAllRoad, stepsUsed + 1, nextPath, driftUsed);
+    // (Passer À TRAVERS un chopper est sans effet tant que ce n'est
+    // pas la case d'arrêt finale, p.6 — rien à faire ici, on continue
+    // d'explorer au-delà normalement.)
+    visit(step.col, step.row, remainingAfter, nextDangerous, nextAllRoad, stepsUsed + 1, nextPath, driftUsed, extra);
+  }
+
+  function visit(col, row, pointsRemaining, dangerousCellsCrossed, allRoad, stepsUsed, pathSoFar, driftUsed, extra) {
+    const arc = getFrontArc({ col, row });
+    for (const step of arc) {
+      handleStep(step, pointsRemaining, dangerousCellsCrossed, allRoad, stepsUsed, pathSoFar, driftUsed, true, extra);
     }
   }
 
-  visit(car.col, car.row, dieValue, 0, true, 0, [], false);
-  return [...results.values()];
+  return { results, record, visit, handleStep };
+}
+
+/**
+ * Symétrique de computeReachableDestinations pour une voiture qui
+ * n'est PAS ENCORE sur le plateau (car.col === null, avant sa
+ * première entrée). Traduit fidèlement p.9 : "Each car's initial
+ * move is onto one of the spaces on the back edge of the rear tile"
+ * — l'entrée COÛTE le premier point de mouvement (coût de terrain
+ * normal, comme entrer sur n'importe quelle case), PUIS le trajet
+ * continue normalement avec les points restants, exactement comme un
+ * mouvement classique. AVANT ce correctif, la décision d'entrée était
+ * codée en dur sur la seule case d'entrée (aucune suite de trajectoire
+ * calculée), ce qui faisait perdre tout le mouvement restant à chaque
+ * entrée — confirmé par Mayrik contre le texte exact de la règle.
+ *
+ * Modélisé comme suggéré par Mayrik : le "hors plateau" est une case
+ * virtuelle unique reliée à TOUTES les cases de la colonne 0 (pas un
+ * arc avant classique à 3 cases) — un dé de 1 permet donc d'entrer
+ * sur N'IMPORTE QUELLE case de la colonne 0 dont le coût de terrain
+ * le permet, pas seulement 3 d'entre elles.
+ *
+ * Chaque candidat porte un champ `entryRow` supplémentaire (la
+ * rangée de colonne 0 par laquelle on est réellement entré) —
+ * nécessaire pour recalculer le danger du chemin de continuation
+ * plus tard (voir pathHazardDanger), puisque `path` ne liste QUE les
+ * pas de continuation après l'entrée, jamais l'entrée elle-même
+ * (moveCarEnteringBoard prend la rangée d'entrée séparément du
+ * chemin de continuation — voir engine.js).
+ */
+function computeReachableEntryDestinations(board, dieValue, allCars, allChoppers, driftAvailable = false) {
+  const explorer = createReachabilityExplorer(board, allCars, allChoppers, driftAvailable);
+  for (let row = 0; row < board.rows; row++) {
+    explorer.handleStep({ name: "entry", col: 0, row }, dieValue, 0, true, 0, [], false, false, { entryRow: row });
+  }
+  return [...explorer.results.values()];
 }
 
 // ===================================================================
@@ -331,6 +390,7 @@ if (typeof module !== "undefined" && module.exports) {
     DANGEROUS_REVEALED_HAZARD_TYPES,
     isDangerousCell,
     computeReachableDestinations,
+    computeReachableEntryDestinations,
     SIZE_RANK,
     countDangerousAdjacentCells,
     evaluateSlamCandidate
@@ -459,8 +519,13 @@ function arrivalDanger(board, col, row, allCars) {
 
 // Danger du CHEMIN traversé = somme des cases HAZARD uniquement
 // (terrain nu exclu, déjà capturé par le coût de déplacement).
-function pathHazardDanger(board, car, path, allCars) {
-  let col = car.col, row = car.row, sum = 0;
+// `startCol`/`startRow` est le point de départ du chemin — la
+// position actuelle de la voiture pour un mouvement normal, ou la
+// rangée d'entrée (colonne 0) pour un trajet d'entrée en jeu (voir
+// chooseEntryTrajectory, où `path` ne liste que la CONTINUATION
+// après l'entrée, jamais l'entrée elle-même).
+function pathHazardDanger(board, startCol, startRow, path, allCars) {
+  let col = startCol, row = startRow, sum = 0;
   for (const stepName of path) {
     const step = getFrontArc({ col, row }).find((a) => a.name === stepName);
     if (!step) break;
@@ -544,7 +609,7 @@ function chooseGeneralTrajectory(board, car, dieValue, allCars, allChoppers, dri
     if (anyNormalOrSlam.length > 0) {
       const bestCol = Math.max(...anyNormalOrSlam.map((c) => c.col));
       const atBestCol = anyNormalOrSlam.filter((c) => c.col === bestCol);
-      const scored = atBestCol.map((c) => ({ c, danger: pathHazardDanger(board, car, c.path, allCars) }));
+      const scored = atBestCol.map((c) => ({ c, danger: pathHazardDanger(board, car.col, car.row, c.path, allCars) }));
       const minDanger = Math.min(...scored.map((s) => s.danger));
       const tied = scored.filter((s) => s.danger === minDanger);
       const preferredSlam = tied.find((s) => s.c.terminalReason === "slam" && s.c.slamTarget && SIZE_RANK[s.c.slamTarget.size] < SIZE_RANK[car.size]);
@@ -587,8 +652,101 @@ function chooseGeneralTrajectory(board, car, dieValue, allCars, allChoppers, dri
   return { destination, shotTarget, slam, roadBonusPath };
 }
 
+/**
+ * Symétrique de chooseGeneralTrajectory pour une voiture qui entre en
+ * jeu (car.col === null) — MÊME cascade en 4 paliers (bonus Road >
+ * destination propre la plus proche > chemin forcé le moins dangereux
+ * > dernier recours), appliquée aux candidats de
+ * computeReachableEntryDestinations plutôt qu'à ceux d'une voiture
+ * déjà en mouvement. Voir le commentaire de
+ * computeReachableEntryDestinations pour le détail de la règle p.9.
+ *
+ * Ne calcule jamais de shotTarget : le tir n'existe pas sur un tour
+ * d'entrée (voir playTurnAssignEnterWithProgression, qui ne résout
+ * aucun tir — confirmé par Mayrik, "pas de tir possible au round 1").
+ */
+function chooseEntryTrajectory(board, car, dieValue, allCars, allChoppers, driftAvailable = false, roadDieValue = 0) {
+  const candidates = computeReachableEntryDestinations(board, dieValue, allCars, allChoppers, driftAvailable);
+  const cleanNormal = candidates.filter((c) => c.terminalReason === "normal" && c.dangerousCellsCrossed === 0);
+  const cleanProgress = candidates.filter((c) => (c.terminalReason === "normal" || c.terminalReason === "exits-front") && c.dangerousCellsCrossed === 0);
+
+  // --- Palier 1 : bonus Road, si applicable -------------------------
+  let destination = null;
+  let roadBonusPath = null;
+  if (roadDieValue > 0) {
+    const bonusEligible = cleanNormal.filter((c) => c.allRoad);
+    const bonusCandidates = [];
+    for (const base of bonusEligible) {
+      const extCar = { ...car, col: base.col, row: base.row };
+      const ext = computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable);
+      for (const e of ext) {
+        if ((e.terminalReason !== "normal" && e.terminalReason !== "exits-front") || e.dangerousCellsCrossed > 0) continue;
+        bonusCandidates.push({ col: e.col, row: e.row, basePath: base.path, extPath: e.path, entryRow: base.entryRow });
+      }
+    }
+    const chosenBonus = pickByTerrainPreference(bonusCandidates, board);
+    if (chosenBonus) {
+      destination = { col: chosenBonus.col, row: chosenBonus.row, stepsUsed: chosenBonus.basePath.length + chosenBonus.extPath.length + 1, terminalReason: "normal", slamTarget: null, path: chosenBonus.basePath, entryRow: chosenBonus.entryRow };
+      roadBonusPath = chosenBonus.extPath;
+    }
+  }
+
+  // --- Palier 2 : sans bonus, propre, tous terrains -----------------
+  if (!destination && cleanProgress.length > 0) {
+    const bestCol = Math.max(...cleanProgress.map((c) => c.col));
+    const atBestCol = cleanProgress
+      .filter((c) => c.col === bestCol)
+      .map((c) => ({ c, danger: arrivalDanger(board, c.col, c.row, allCars) }))
+      .sort((a, b) => a.danger - b.danger);
+    destination = atBestCol[0].c;
+  }
+
+  // --- Palier 3 : chemin forcé (aucune destination propre) ----------
+  if (!destination) {
+    const anyNormalOrSlam = candidates.filter((c) => c.terminalReason === "normal" || c.terminalReason === "slam" || c.terminalReason === "exits-front");
+    if (anyNormalOrSlam.length > 0) {
+      const bestCol = Math.max(...anyNormalOrSlam.map((c) => c.col));
+      const atBestCol = anyNormalOrSlam.filter((c) => c.col === bestCol);
+      const scored = atBestCol.map((c) => ({ c, danger: pathHazardDanger(board, 0, c.entryRow, c.path, allCars) }));
+      const minDanger = Math.min(...scored.map((s) => s.danger));
+      const tied = scored.filter((s) => s.danger === minDanger);
+      const preferredSlam = tied.find((s) => s.c.terminalReason === "slam" && s.c.slamTarget && SIZE_RANK[s.c.slamTarget.size] < SIZE_RANK[car.size]);
+      destination = (preferredSlam || tied[0]).c;
+    }
+  }
+
+  // --- Palier 4 : dernier recours ------------------------------------
+  if (!destination) {
+    const notImpassable = candidates.filter((c) => c.terminalReason !== "eliminated-impassable");
+    destination = notImpassable.length > 0
+      ? notImpassable.reduce((a, b) => (b.col > a.col ? b : a))
+      : candidates.reduce((a, b) => (b.stepsUsed > a.stepsUsed ? b : a));
+  }
+
+  // --- Reciblage Slam sur l'arc arrière (mécanisme existant, INCHANGÉ,
+  // limité aux destinations sans bonus Road) --------------------------
+  let slam = destination.terminalReason === "slam";
+  if (destination.terminalReason === "normal" && !roadBonusPath) {
+    const rearArc = getRearArc({ col: destination.col, row: destination.row });
+    for (const r of rearArc) {
+      const rearCandidate = candidates.find((c) => c.col === r.col && c.row === r.row && c.terminalReason === "slam");
+      if (!rearCandidate || !rearCandidate.slamTarget) continue;
+      if (SIZE_RANK[rearCandidate.slamTarget.size] < SIZE_RANK[car.size]) {
+        const evalResult = evaluateSlamCandidate(rearCandidate, dieValue, car.size, board);
+        if (evalResult.accept) {
+          destination = rearCandidate;
+          slam = true;
+          break;
+        }
+      }
+    }
+  }
+
+  return { destination, shotTarget: null, slam, roadBonusPath };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  Object.assign(module.exports, { chooseShootTarget, chooseGeneralTrajectory });
+  Object.assign(module.exports, { chooseShootTarget, chooseGeneralTrajectory, chooseEntryTrajectory });
 }
 
 // ===================================================================
@@ -938,11 +1096,18 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
 
   let destination, shotTarget, slam, roadBonusPath;
   if (car.col === null) {
-    const row = chooseAiEntryRow(board, car, allCars, allChoppers);
-    destination = { col: 0, row, stepsUsed: 0, terminalReason: "normal", slamTarget: null };
-    shotTarget = null;
-    slam = false;
-    roadBonusPath = null;
+    // Entrée en jeu (p.9) — CORRECTIF : auparavant codée en dur sur
+    // la seule case d'entrée (stepsUsed:0, sans suite de trajectoire),
+    // ce qui faisait perdre tout mouvement restant à chaque entrée.
+    // Utilise maintenant la même exploration/cascade que le mouvement
+    // normal (voir chooseEntryTrajectory), avec le dé effectif
+    // (Nitro éventuel inclus, comme pour une voiture déjà en jeu).
+    const driftActive = !!(command && command.type === "drift");
+    const traj = chooseEntryTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActive, roundState.roadDie || 0);
+    destination = traj.destination;
+    shotTarget = null; // pas de tir possible sur un tour d'entrée (round 1)
+    slam = traj.slam;
+    roadBonusPath = traj.roadBonusPath;
   } else {
     const driftActive = !!(command && command.type === "drift");
     const traj = chooseGeneralTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActive, roundState.roadDie || 0);
@@ -1031,6 +1196,22 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
 
   const car = frontmostEligibleCar(notYetActivated);
   const biggestDie = Math.max(...myPool);
+
+  // Cas limite (en pratique quasi jamais atteint : toutes les
+  // voitures entrent normalement bien avant que la Finish Line
+  // n'apparaisse, dès le round 1) mais géré proprement plutôt que de
+  // laisser une voiture "car.col === null" glisser dans les calculs
+  // de trajectoire ci-dessous (computeReachableDestinations suppose
+  // toujours une position de départ réelle sur le plateau). Entrée
+  // normale (p.9, voir chooseEntryTrajectory) — les acrobaties
+  // Nitro/Drift/Airstrike pour rallier directement la ligne d'arrivée
+  // n'ont pas de sens tant que la voiture n'a pas encore mis une roue
+  // sur le plateau.
+  if (car.col === null) {
+    const traj = chooseEntryTrajectory(board, car, biggestDie, allCars, allChoppers, false, roundState.roadDie || 0);
+    return { car, dieValue: biggestDie, command: null, destination: traj.destination, shotTarget: null, isEntry: true, isCoast: false, slam: traj.slam, roadBonusPath: traj.roadBonusPath };
+  }
+
   const baseDests = computeReachableDestinations(board, car, biggestDie, allCars, allChoppers);
 
   if (canReachFinishLine(baseDests, finishColStart)) {
