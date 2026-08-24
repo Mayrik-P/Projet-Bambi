@@ -68,6 +68,15 @@ siennes.
       un adversaire STRICTEMENT plus petit (pas de cas d'égalité ici).
       24 tests dédiés ajoutés (105→129 tests IA), 212/212 moteur
       inchangés (fichier non touché).
+      **Correctifs ultérieurs (trouvés en implémentant l'étape 3, cf.
+      son entrée ci-dessous)** : (1) le Slam arc arrière inventait une
+      destination inatteignable (vérifiait le plateau brut au lieu du
+      pool de candidats réellement atteignables par un chemin avant —
+      corrigé pour chercher dans ce pool, comme le faisait l'ancien
+      code) ; (2) `entryRow` se perdait sur le chemin bonus route lors
+      d'une entrée (pool d'extension jamais un pool d'entrée) — perte
+      corrigée en le reportant explicitement depuis la destination de
+      base.
 - [x] **2. Tir sorti de `ai-decision.js`** — nouveau point d'entrée
       unique, `computeShotTargetForDecision(decision, allCars)`,
       appelé une fois par tour par l'orchestrateur (aujourd'hui
@@ -93,9 +102,43 @@ siennes.
       décision illégale ; 1 état incohérent, artefact préexistant
       déjà présent sur le dépôt AVANT cette étape (confirmé par
       comparaison directe, sans rapport avec le tir).
-- [ ] **3. Branche "Premier round"** — autonome, ne recoupe aucune
-      autre branche. Historiquement la source de bugs la plus
-      concrète (entrée en jeu).
+- [x] **3. Branche "Premier round"** — nouvelle fonction dédiée
+      `decideFirstRound`, câblée en PREMIER dans `decideAssignAndCommand`
+      (avant même le test `finishLineTile`).
+      **Bug réel confirmé (celui pointé par le plan comme "source de
+      bugs la plus concrète")** : le dispatcher ne testait jamais
+      `roundState.roundNumber === 1` — le round 1 tombait donc dans
+      `decideNoFinishLine`, le sous-arbre Command/Lot bien plus riche
+      pensé pour les rounds SUIVANTS (évaluation Repair/Nitro/Drift/
+      Airstrike selon la situation), jamais dans sa propre branche
+      dédiée et bien plus simple.
+      Séquence implémentée (validée avec Mayrik après mise à jour du
+      document le 24/08/2026, qui a aussi résolu une ambiguïté du
+      document — "la voiture la plus à l'arrière de l'équipe", sans
+      sens pour des voitures toutes hors plateau — remplacée par "la
+      plus GROSSE") : lots de dés équilibrés par somme (réutilise
+      `partitionIntoBalancedLots`, Section 4) → lot à la plus forte
+      somme pour le véhicule opérable non encore activé le plus gros
+      → lot à 1 dé : entrée simple ; lot à 2 dés : Nitro avec le plus
+      gros dé éligible (1-3) si au moins un l'est, sinon Airstrike
+      avec le plus petit dé du lot (chopper devant l'adversaire
+      opérable le plus avancé) — l'autre dé partant toujours au
+      mouvement.
+      **Deux correctifs à `chooseBestTrajectory` (étape 1) trouvés en
+      cours de route** — voir le post-scriptum ajouté à l'entrée de
+      l'étape 1 ci-dessus pour le détail complet.
+      27 tests dédiés ajoutés au total (133→160 tests IA) : 8 pour le
+      correctif Slam arc arrière de l'étape 1 (candidats réellement
+      atteignables, séparation chemin base/bonus), 19 pour
+      `decideFirstRound` lui-même (dont la régression `entryRow`).
+      212/212 moteur inchangés. Self-play 800 parties/~49000
+      décisions : 0 crash, 0 décision illégale ; taux d'état
+      incohérent identique au dépôt AVANT cette étape (confirmé par
+      comparaison directe, même artefact préexistant près de la ligne
+      d'arrivée, sans rapport avec le round 1). Vérifié concrètement
+      hors self-play global : 600/600 entrées réussies sur 100
+      parties, ordre Large→Medium→Small systématiquement respecté,
+      Nitro et Airstrike tous deux observés en conditions réelles.
 - [ ] **4. Branche "Commande déjà jouée" (pas de Finish Line)** —
       petite, isolée. Un seul écart connu à corriger : sélection du
       véhicule via une sous-logique dédiée (Rear ? → en tête ? →
@@ -113,5 +156,6 @@ siennes.
 
 ## État courant
 
-Étapes 0, 1 et 2 terminées (133/133 tests IA, 212/212 tests moteur).
-Prochaine action : étape 3 (branche "Premier round").
+Étapes 0, 1, 2 et 3 terminées (160/160 tests IA, 212/212 tests moteur).
+Prochaine action : étape 4 (branche "Commande déjà jouée", pas de
+Finish Line).
