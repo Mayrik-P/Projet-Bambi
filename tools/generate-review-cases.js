@@ -68,6 +68,11 @@ function collectCases(nWanted, maxAttemptsGames, maxTurnsPerGame) {
         const finishLineActive = !!progressionState.finishLineTile;
         const decision = ai.decideAssignAndCommand(progressionState, board, allCars, allChoppers, roundState.dicePool, "Mayrik", roundState);
         if (decision) {
+          // Étape 2 (rewrite-plan.md) : shotTarget n'est plus porté
+          // par la décision elle-même — calculé ici génériquement,
+          // comme le fait playOneShadowTurn pour l'exécution réelle
+          // juste après (même fonction, même résultat).
+          decision.shotTarget = ai.computeShotTargetForDecision(decision, allCars);
           cases.push({
             round: roundState.roundNumber,
             turnInRound: mayrikTurnsThisRound,

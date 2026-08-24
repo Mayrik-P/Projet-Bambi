@@ -84,6 +84,20 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
   drawSpecificDieFromPool(roundState.dicePool, currentPlayer, decision.dieValue);
   log.push(`ASSIGN : dé ${decision.dieValue} → ${car.id}${isCoastTurn ? " (Coast)" : ""}`);
 
+  // Étape 2 (rewrite-plan.md) : le tir est calculé ICI, une seule
+  // fois, génériquement, après que la décision (donc la destination
+  // finale) est connue — quelle que soit la branche qui a produit
+  // cette décision (mouvement normal, Coast, Finish Line Rush...).
+  // Avant ce correctif, seul le mouvement normal transmettait son
+  // shotTarget au moteur ; un Coast en calculait bien un côté
+  // décision mais il n'était JAMAIS relié à l'exécution réelle
+  // (playTurnCoastWithProgression ne recevait pas l'option
+  // shootTarget) — un tir valide était donc silencieusement perdu à
+  // chaque Coast. Rattaché sur `decision` pour la compatibilité des
+  // outils qui inspectent decision.shotTarget après coup (génération
+  // de parties, revue de cas).
+  decision.shotTarget = ai.computeShotTargetForDecision(decision, allCars);
+
   let effectiveDieValue = decision.dieValue;
   const slamOptions = {};
 
@@ -123,7 +137,7 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
   }
 
   if (isCoastTurn) {
-    const result = playTurnCoastWithProgression(progressionState, car, decision.destination.path || [], allCars, allChoppers, playerNames, { roundNumber: roundState.roundNumber });
+    const result = playTurnCoastWithProgression(progressionState, car, decision.destination.path || [], allCars, allChoppers, playerNames, { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget });
     log.push(...(result.log || []));
     if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
     return { ...result, log, decision };
