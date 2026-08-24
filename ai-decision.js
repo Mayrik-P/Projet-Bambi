@@ -753,7 +753,7 @@ function chooseEntryTrajectory(board, car, dieValue, allCars, allChoppers, drift
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  Object.assign(module.exports, { chooseShootTarget, chooseGeneralTrajectory, chooseEntryTrajectory, dangerValueOfCell });
+  Object.assign(module.exports, { chooseShootTarget, chooseGeneralTrajectory, chooseEntryTrajectory, dangerValueOfCell, chooseBestTrajectory, isCleanPathToDestination });
 }
 
 // ===================================================================
@@ -777,6 +777,308 @@ if (typeof module !== "undefined" && module.exports) {
  * valeurs de dés (jamais vide : un lot peut recevoir plusieurs dés,
  * mais chaque dé du pool est utilisé exactement une fois au total).
  */
+// ===================================================================
+// SECTION 3C — RECHERCHE DE LA MEILLEURE TRAJECTOIRE (réécriture v3)
+// ===================================================================
+// Remplace conceptuellement chooseGeneralTrajectory/chooseEntryTrajectory
+// (Section 3B ci-dessus, laissées en place pour l'instant le temps de
+// la validation croisée — jamais réutilisées par cette nouvelle
+// fonction). Traduction directe du bloc "Recherche de la meilleure
+// trajectoire" de l'arbre v3 (docs/Automa ThundeRoadVendetta - arbre
+// de décision pour chaque tour de jeu.pdf), validée point par point
+// avec Mayrik le 24/08/2026 :
+//   - Palier 1 (100% route) : simple test de présence, aucune
+//     comparaison — s'il existe, on l'utilise, point final.
+//   - Paliers 2 à 6 (route-mixte, off-road, mud, tout-terrain-propre,
+//     hazard-dangereux-propre) : chaque palier n'est comparé QU'AU
+//     PALIER IMMÉDIATEMENT SUIVANT (pas à une comparaison globale
+//     tous paliers confondus) — il gagne s'il progresse STRICTEMENT
+//     plus loin que ce palier suivant, sinon on descend d'un cran.
+//   - Paliers 7 et 8 (hazard-dangereux même via un autre hazard,
+//     n'importe quelle case non-impassable) : présence seule, comme
+//     le palier 1.
+//   - Dernier recours : trajectoire la plus longue vers une case
+//     impassable (toujours un candidat, garantit un résultat).
+//   - Cascade BONUS route (si le palier 1 OU 2 a été retenu) : même
+//     principe que la cascade principale mais SANS comparaison inter-
+//     palier — présence seule à chaque palier (route/off-road/mud),
+//     avec refus explicite si aucun ne correspond.
+//   - Égalité restante après cascade : départagée par le danger
+//     d'arrivée le plus faible (somme des dangers des 6 cases
+//     adjacentes, cf. dangerValueOfCell).
+//   - Slam en arc arrière : recalculé sur la DESTINATION FINALE
+//     (bonus ou non — plus de limitation "seulement sans bonus"),
+//     seulement contre un adversaire opérable STRICTEMENT plus petit
+//     (pas de cas d'égalité de taille ici, contrairement à
+//     evaluateSlamCandidate qui sert à une autre étape de l'arbre).
+
+// dangerousCellsCrossed compte AUSSI la case d'arrivée elle-même (cf.
+// doc de computeReachableDestinations : "EN ROUTE, case finale
+// incluse") — pour les paliers dont la destination EST un hazard
+// dangereux (T6/T7), il faut exclure cette dernière case du calcul
+// de "chemin propre", sinon aucune destination hazard ne passerait
+// jamais le filtre alors que l'arbre dit explicitement "évitant tous
+// les hazards dangereux SUR LE CHEMIN" (donc hors case d'arrivée).
+function isCleanPathToDestination(board, candidate) {
+  const destSpace = getSpace(board, candidate.col, candidate.row);
+  const destIsDangerous = destSpace ? isDangerousCell(destSpace) : false;
+  return candidate.dangerousCellsCrossed - (destIsDangerous ? 1 : 0) === 0;
+}
+
+function isValidStop(c) {
+  return c.terminalReason === "normal" || c.terminalReason === "exits-front";
+}
+
+function destinationTerrain(board, c) {
+  const space = getSpace(board, c.col, c.row);
+  return space ? space.terrain : null;
+}
+
+function isHazardDangereuxDestination(board, c) {
+  const space = getSpace(board, c.col, c.row);
+  return space ? isDangerousCell(space) : false;
+}
+
+// Meilleure progression (colonne max) d'un groupe de candidats, ou
+// -Infinity si le groupe est vide (permet de comparer sans casse
+// particulière pour un palier vide).
+function bestProgress(group) {
+  if (group.length === 0) return -Infinity;
+  return Math.max(...group.map((c) => c.col));
+}
+
+// Les 8 paliers de la cascade SANS bonus, dans l'ordre exact de
+// l'arbre. `compareToNext: true` = palier "adjacent" (ne gagne que
+// s'il bat STRICTEMENT le palier suivant) ; `compareToNext: false` =
+// palier "présence seule" (gagne dès qu'il n'est pas vide).
+function buildNoBonusTiers(board) {
+  return [
+    {
+      name: "T1_route_pure",
+      compareToNext: false,
+      predicate: (c) => c.allRoad && destinationTerrain(board, c) === TERRAIN.ROAD && isCleanPathToDestination(board, c)
+    },
+    {
+      name: "T2_route_mixte",
+      compareToNext: true,
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.ROAD && isCleanPathToDestination(board, c)
+    },
+    {
+      name: "T3_offroad",
+      compareToNext: true,
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.OFF_ROAD && isCleanPathToDestination(board, c)
+    },
+    {
+      name: "T4_mud",
+      compareToNext: true,
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.MUD && isCleanPathToDestination(board, c)
+    },
+    {
+      name: "T5_tout_terrain_propre",
+      compareToNext: true,
+      predicate: (c) =>
+        destinationTerrain(board, c) !== TERRAIN.IMPASSABLE &&
+        !isHazardDangereuxDestination(board, c) &&
+        isCleanPathToDestination(board, c)
+    },
+    {
+      name: "T6_hazard_dangereux_chemin_propre",
+      compareToNext: true,
+      predicate: (c) => isHazardDangereuxDestination(board, c) && isCleanPathToDestination(board, c)
+    },
+    {
+      name: "T7_hazard_dangereux_meme_via_hazard",
+      compareToNext: false,
+      predicate: (c) => isHazardDangereuxDestination(board, c)
+    },
+    {
+      name: "T8_nimporte_quelle_case_non_impassable",
+      compareToNext: false,
+      predicate: (c) => destinationTerrain(board, c) !== TERRAIN.IMPASSABLE
+    }
+  ];
+}
+
+// Cascade bonus (présence seule à chaque palier, pas de comparaison
+// inter-palier — confirmé sur l'arbre, contrairement à la cascade
+// principale).
+function buildBonusTiers(board) {
+  return [
+    {
+      name: "TB1_route_pure",
+      predicate: (c) => c.allRoad && destinationTerrain(board, c) === TERRAIN.ROAD && isCleanPathToDestination(board, c)
+    },
+    {
+      name: "TB2_route_mixte",
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.ROAD && isCleanPathToDestination(board, c)
+    },
+    {
+      name: "TB3_offroad",
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.OFF_ROAD && isCleanPathToDestination(board, c)
+    },
+    {
+      name: "TB4_mud",
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.MUD && isCleanPathToDestination(board, c)
+    }
+  ];
+}
+
+// Applique la cascade "adjacente" (paliers sans-bonus) : renvoie le
+// groupe de candidats du palier gagnant, à leur meilleure colonne.
+function resolveAdjacentCascade(candidates, tiers) {
+  const stops = candidates.filter(isValidStop);
+  // Groupe de chaque palier, pré-calculé une fois.
+  const groups = tiers.map((t) => stops.filter(t.predicate));
+  const bests = groups.map(bestProgress);
+
+  for (let i = 0; i < tiers.length; i++) {
+    if (groups[i].length === 0) continue;
+    if (!tiers[i].compareToNext) {
+      // Présence seule : on prend ce palier, fin de la cascade.
+      const best = bests[i];
+      return groups[i].filter((c) => c.col === best);
+    }
+    // Palier "adjacent" : ne gagne que s'il bat STRICTEMENT le
+    // suivant. Sinon on continue la boucle (on descend d'un cran).
+    if (bests[i] > bests[i + 1]) {
+      return groups[i].filter((c) => c.col === bests[i]);
+    }
+  }
+
+  // Dernier recours garanti par l'arbre : trajectoire la PLUS LONGUE
+  // vers une case impassable (jamais vide s'il existe le moindre
+  // candidat impassable — sinon la voiture est totalement bloquée,
+  // cas dégénéré non couvert par l'arbre, on renvoie []).
+  const impassableStops = candidates.filter((c) => c.terminalReason === "eliminated-impassable");
+  if (impassableStops.length === 0) return [];
+  const longest = Math.max(...impassableStops.map((c) => c.stepsUsed));
+  return impassableStops.filter((c) => c.stepsUsed === longest);
+}
+
+// Cascade bonus : présence seule à chaque palier, dans l'ordre.
+// `null` si aucun palier bonus ne correspond (refus explicite — au
+// niveau appelant, on retombe sur les candidats sans bonus).
+function resolveBonusCascade(candidates, tiers) {
+  const stops = candidates.filter(isValidStop);
+  for (const tier of tiers) {
+    const group = stops.filter(tier.predicate);
+    if (group.length === 0) continue;
+    const best = bestProgress(group);
+    return group.filter((c) => c.col === best);
+  }
+  return null;
+}
+
+// Départage final entre plusieurs destinations à égalité de
+// progression : danger d'arrivée le plus faible (cf. arrivalDanger).
+function pickByLowestArrivalDanger(board, group, allCars) {
+  if (group.length === 1) return group[0];
+  let best = group[0];
+  let bestDanger = arrivalDanger(board, best.col, best.row, allCars);
+  for (const c of group.slice(1)) {
+    const d = arrivalDanger(board, c.col, c.row, allCars);
+    if (d < bestDanger) { best = c; bestDanger = d; }
+  }
+  return best;
+}
+
+const CAR_SIZE_RANK = { [CAR_SIZE.SMALL]: 1, [CAR_SIZE.MEDIUM]: 2, [CAR_SIZE.LARGE]: 3 };
+
+// Slam en arc arrière, recalculé sur la DESTINATION FINALE (bonus ou
+// non). Renvoie { destination, slamTarget } — slamTarget est null si
+// aucun retargeting n'a eu lieu (on garde alors la destination
+// d'origine).
+function resolveRearArcSlam(board, destination, car, allCars) {
+  const rearArc = getRearArc({ col: destination.col, row: destination.row });
+  const myRank = CAR_SIZE_RANK[car.size];
+
+  const smallerOperableTargets = [];
+  for (const spot of rearArc) {
+    const occupant = getCarAt(allCars, spot.col, spot.row);
+    if (!occupant || occupant.status !== CAR_STATUS.OPERABLE) continue;
+    if (occupant.owner === car.owner) continue; // jamais sa propre équipe
+    if (CAR_SIZE_RANK[occupant.size] < myRank) smallerOperableTargets.push(occupant);
+  }
+
+  if (smallerOperableTargets.length === 0) {
+    return { destination, slamTarget: null };
+  }
+
+  // Priorité au joueur ayant le moins de véhicules opérables ; en
+  // cas d'égalité, le véhicule le plus en avant de la course (col
+  // la plus grande sur le plateau assemblé courant — même
+  // convention que le reste de la cascade).
+  const operableCountByOwner = new Map();
+  for (const c of allCars) {
+    if (c.status !== CAR_STATUS.OPERABLE) continue;
+    operableCountByOwner.set(c.owner, (operableCountByOwner.get(c.owner) || 0) + 1);
+  }
+  let chosen = smallerOperableTargets[0];
+  let chosenCount = operableCountByOwner.get(chosen.owner) || 0;
+  for (const t of smallerOperableTargets.slice(1)) {
+    const count = operableCountByOwner.get(t.owner) || 0;
+    if (count < chosenCount || (count === chosenCount && t.col > chosen.col)) {
+      chosen = t; chosenCount = count;
+    }
+  }
+
+  return { destination: { col: chosen.col, row: chosen.row }, slamTarget: chosen };
+}
+
+/**
+ * Fonction UNIFIÉE de recherche de trajectoire — remplace
+ * chooseGeneralTrajectory ET chooseEntryTrajectory. Prend une liste
+ * de candidats déjà calculée par n'importe quel générateur
+ * (computeReachableDestinations ou computeReachableEntryDestinations),
+ * peu importe leur origine.
+ *
+ * @param board
+ * @param car - la voiture active (col/row peuvent être null si elle
+ *   entre en jeu ce tour ; size/owner toujours nécessaires)
+ * @param candidates - candidats déjà calculés (ne recalcule jamais
+ *   la reachability de base — seulement l'extension bonus)
+ * @param roadDieValue - dé Road disponible pour le bonus (0 si aucun)
+ * @param allCars
+ * @param allChoppers
+ * @param driftAvailable
+ */
+function chooseBestTrajectory(board, car, candidates, roadDieValue, allCars, allChoppers, driftAvailable = false) {
+  const noBonusTiers = buildNoBonusTiers(board);
+  const winningGroup = resolveAdjacentCascade(candidates, noBonusTiers);
+  if (winningGroup.length === 0) {
+    // Aucun candidat exploitable du tout (ne devrait arriver que si
+    // `candidates` est vide) — rien à faire.
+    return { destination: null, slamTarget: null, roadBonusUsed: false };
+  }
+
+  // Le bonus n'est envisagé que si le palier retenu est T1 (route
+  // pure) ou T2 (route mixte) — cf. arbre : la branche bonus part
+  // toujours d'une base "destination route".
+  const baseWonOnRoad = winningGroup.every((c) => destinationTerrain(board, c) === TERRAIN.ROAD);
+  let finalGroup = winningGroup;
+  let roadBonusUsed = false;
+
+  if (roadDieValue > 0 && baseWonOnRoad) {
+    const base = pickByLowestArrivalDanger(board, winningGroup, allCars);
+    const extensionCar = { ...car, col: base.col, row: base.row };
+    const extensionCandidates = computeReachableDestinations(board, extensionCar, roadDieValue, allCars, allChoppers, driftAvailable);
+    const bonusTiers = buildBonusTiers(board);
+    const bonusGroup = resolveBonusCascade(extensionCandidates, bonusTiers);
+    if (bonusGroup !== null) {
+      finalGroup = bonusGroup;
+      roadBonusUsed = true;
+    }
+    // Sinon : refus explicite, on garde `winningGroup` (déjà dans
+    // finalGroup).
+  }
+
+  const resolved = pickByLowestArrivalDanger(board, finalGroup, allCars);
+  const { destination, slamTarget } = resolveRearArcSlam(board, resolved, car, allCars);
+  const shotTarget = destination ? chooseShootTarget(destination.col, destination.row, car.owner, allCars) : null;
+
+  return { destination, slamTarget, roadBonusUsed, shotTarget };
+}
+
 function partitionIntoBalancedLots(pool, lotCount) {
   if (lotCount <= 0) return [];
   if (lotCount === 1) return [[...pool]];

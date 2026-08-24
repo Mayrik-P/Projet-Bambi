@@ -686,5 +686,296 @@ function getTerrainAt(board, dest) {
   assert(ai.dangerValueOfCell(board, 7, 2, []) === 2, "dangerValueOfCell : non-régression — Mud = 2");
 }
 
+// -----------------------------------------------------------------
+// SECTION 10 — chooseBestTrajectory (Section 3C, "Recherche de la
+// meilleure trajectoire", cascade unifiée v3 validée avec Mayrik le
+// 24/08/2026)
+// -----------------------------------------------------------------
+// Les tests de cascade (10A) utilisent des candidats SYNTHÉTIQUES
+// (pas computeReachableDestinations) : ça isole la logique de
+// décision de la géométrie du plateau (les diagonales n'avancent pas
+// en colonne selon la parité de ligne — cf. getFrontArc), et c'est
+// justement permis par la fonction unifiée qui accepte une liste de
+// candidats déjà calculée, peu importe leur origine.
+function mkCandidate(col, row, opts = {}) {
+  return {
+    col, row,
+    stepsUsed: opts.stepsUsed ?? 1,
+    dangerousCellsCrossed: opts.dangerousCellsCrossed ?? 0,
+    allRoad: opts.allRoad ?? false,
+    terminalReason: opts.terminalReason ?? "normal",
+    slamTarget: null,
+    path: []
+  };
+}
+
+// ---- 10A. Cascade sans bonus (8 paliers) ----
+
+// A1. Palier T1 (100% route) gagne même face à un candidat non-route
+// qui progresse strictement plus loin — présence seule, pas de
+// comparaison (confirmé : clause de comparaison retirée par Mayrik).
+{
+  const board = emptyBoard(); // route partout
+  board.grid[2][10].terrain = TERRAIN.OFF_ROAD;
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [
+    mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 }),   // T1 : route pure
+    mkCandidate(10, 2, { allRoad: false, stepsUsed: 6 })  // Off-road, plus loin
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.col === 6, "chooseBestTrajectory T1 : route pure gagne même si off-road progresse plus loin (présence seule)");
+}
+
+// A2. T2 (route, chemin mixte) bat T3 (off-road) s'il progresse
+// STRICTEMENT plus loin.
+{
+  const board = emptyBoard();
+  board.grid[2][5].terrain = TERRAIN.OFF_ROAD; // T3, plus proche
+  // col 6 reste ROAD (T2, plus loin)
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [
+    mkCandidate(6, 2, { allRoad: false, stepsUsed: 5 }), // T2 : route, col 6
+    mkCandidate(5, 2, { allRoad: false, stepsUsed: 4 })  // T3 : off-road, col 5
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.col === 6, "chooseBestTrajectory T2 vs T3 : route gagne si strictement plus loin qu'off-road");
+}
+
+// A3. T2 tombe à T3 si off-road progresse plus loin (pas de
+// comparaison globale — juste palier suivant).
+{
+  const board = emptyBoard();
+  board.grid[2][5].terrain = TERRAIN.ROAD;      // T2, moins loin
+  board.grid[2][8].terrain = TERRAIN.OFF_ROAD;  // T3, plus loin
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [
+    mkCandidate(5, 2, { stepsUsed: 4 }), // T2 : route, col 5
+    mkCandidate(8, 2, { stepsUsed: 7 })  // T3 : off-road, col 8 (plus loin)
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.col === 8, "chooseBestTrajectory T2 vs T3 : tombe à off-road quand il progresse plus loin");
+}
+
+// A4. Égalité stricte T2/T3 : route ne l'emporte QUE si strictement
+// meilleure — une égalité fait tomber au palier suivant (off-road).
+{
+  const board = emptyBoard();
+  board.grid[2][6].terrain = TERRAIN.ROAD;      // T2, col 6
+  board.grid[3][6].terrain = TERRAIN.OFF_ROAD;  // T3, col 6 aussi (égalité)
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [
+    mkCandidate(6, 2, { stepsUsed: 5 }), // T2 : route, col 6
+    mkCandidate(6, 3, { stepsUsed: 5 })  // T3 : off-road, col 6 (égalité)
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.row === 3, "chooseBestTrajectory T2 vs T3 : égalité de progression → tombe à off-road (pas 'strictement meilleur')");
+}
+
+// A5. T4 (mud) seul présent : gagne par défaut face aux paliers
+// suivants vides (présence, transitivement, jusqu'à T5 vide aussi).
+{
+  const board = emptyBoard();
+  board.grid[2][6].terrain = TERRAIN.MUD;
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [mkCandidate(6, 2, { stepsUsed: 5 })];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.col === 6 && result.destination.row === 2, "chooseBestTrajectory T4 : mud seul disponible est bien choisi");
+}
+
+// A6. T6 (destination Hazard dangereux, CHEMIN propre) : la case
+// d'arrivée elle-même ne doit PAS compter dans le calcul de "chemin
+// propre" (dangerousCellsCrossed inclut la case finale par
+// construction — cf. doc de computeReachableDestinations).
+{
+  const board = emptyBoard();
+  board.grid[2][6].hazard = "wreck"; // case dangereuse (jeton caché)
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [
+    mkCandidate(6, 2, { dangerousCellsCrossed: 1, stepsUsed: 5 }) // seule la case finale est dangereuse
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.col === 6, "chooseBestTrajectory T6 : destination Hazard dangereux avec chemin par ailleurs propre est acceptée (case finale exclue du calcul)");
+}
+
+// A7. T7 (destination Hazard dangereux, MÊME si chemin traverse un
+// AUTRE hazard) : rattrape un candidat que T6 aurait rejeté (chemin
+// réellement sale, pas juste la case finale).
+{
+  const board = emptyBoard();
+  board.grid[2][6].hazard = "wreck"; // destination dangereuse
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [
+    // dangerousCellsCrossed=2 : la case finale (1) + un AUTRE hazard
+    // en route (1) → chemin réellement sale, T6 doit le rejeter.
+    mkCandidate(6, 2, { dangerousCellsCrossed: 2, stepsUsed: 6 })
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.col === 6, "chooseBestTrajectory T7 : rattrape une destination Hazard dangereux au chemin réellement sale (rejetée par T6)");
+}
+
+// A8. T8 (n'importe quelle case sauf impassable) : rattrape une
+// destination sur terrain normal MAIS au chemin sale (donc rejetée
+// par T1-T5, qui exigent tous un chemin propre).
+{
+  const board = emptyBoard(); // route partout, destination "propre" en terrain
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [
+    mkCandidate(6, 2, { dangerousCellsCrossed: 1, stepsUsed: 5 }) // route, mais chemin sale
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.col === 6, "chooseBestTrajectory T8 : rattrape une destination route au chemin sale (rejetée par T1-T5)");
+}
+
+// A9. Dernier recours : aucun candidat normal/exits-front → la
+// trajectoire la PLUS LONGUE vers une case impassable est choisie.
+{
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [
+    mkCandidate(6, 2, { terminalReason: "eliminated-impassable", stepsUsed: 3 }),
+    mkCandidate(9, 2, { terminalReason: "eliminated-impassable", stepsUsed: 5 })
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.col === 9, "chooseBestTrajectory dernier recours : impassable le plus loin (col 9) retenu, pas le plus proche (col 6)");
+}
+
+// ---- 10B. Cascade BONUS route ----
+
+// B1. Base gagnée sur T1 (route pure) + dé Road disponible : le
+// bonus doit prolonger la trajectoire au-delà du dé de base (calcul
+// RÉEL via computeReachableDestinations, pas synthétique — c'est
+// justement ce mécanisme qu'on teste ici).
+{
+  const board = emptyBoard(); // route partout
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = ai.computeReachableDestinations(board, car, 3, [car], []);
+  const result = ai.chooseBestTrajectory(board, car, candidates, 5, [car], []);
+  assert(result.roadBonusUsed === true, "chooseBestTrajectory bonus : détecté et appliqué depuis une base T1 (route pure)");
+  assert(result.destination.col === 12, "chooseBestTrajectory bonus : prolonge bien la trajectoire (3 + 5 = col 12 depuis col 4)");
+}
+
+// B2. Refus explicite du bonus si AUCUNE extension n'est possible
+// (toutes les directions immédiatement bloquées) : on retombe sur la
+// destination de base, sans erreur.
+{
+  const board = emptyBoard();
+  // Bloque les 3 directions de l'arc avant depuis (7,2) (case
+  // d'arrivée de la base ci-dessous) : aucune extension possible.
+  board.grid[2][8].terrain = TERRAIN.IMPASSABLE; // front
+  board.grid[1][7].terrain = TERRAIN.IMPASSABLE; // front-left
+  board.grid[3][7].terrain = TERRAIN.IMPASSABLE; // front-right
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = ai.computeReachableDestinations(board, car, 3, [car], []);
+  const result = ai.chooseBestTrajectory(board, car, candidates, 5, [car], []);
+  assert(result.roadBonusUsed === false, "chooseBestTrajectory bonus : refus explicite bien détecté (aucune extension possible)");
+  assert(result.destination.col === 7, "chooseBestTrajectory bonus : retombe sur la destination de base après refus");
+}
+
+// B3. Bonus jamais tenté si la base n'a PAS gagné sur route (ex.
+// mud) — même avec un dé Road disponible.
+{
+  const board = emptyBoard(); // route partout au-delà, sauf la destination elle-même
+  board.grid[2][6].terrain = TERRAIN.MUD;
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [mkCandidate(6, 2, { stepsUsed: 5 })];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 5, [car], []);
+  assert(result.roadBonusUsed === false, "chooseBestTrajectory bonus : jamais tenté depuis une base non-route (mud)");
+  assert(result.destination.col === 6, "chooseBestTrajectory bonus : destination mud inchangée, dé Road ignoré");
+}
+
+// ---- 10C. Départage par danger d'arrivée le plus faible ----
+
+// C1. Deux candidats à égalité de progression (même palier, même
+// colonne) : celui avec le danger d'arrivée le plus faible est
+// retenu.
+{
+  const board = emptyBoard();
+  board.grid[1][6].terrain = TERRAIN.ROAD; // (6,1) et (6,4) : même colonne
+  board.grid[4][6].terrain = TERRAIN.ROAD;
+  // Un hazard cache sur un voisin de (6,4) seulement → danger d'arrivée
+  // plus élevé là-bas.
+  const dangerousNeighbor = engine.getFrontArc({ col: 6, row: 4 })[0]; // front-left de (6,4)
+  board.grid[dangerousNeighbor.row][dangerousNeighbor.col].hazard = "wreck";
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [
+    mkCandidate(6, 1, { allRoad: true, stepsUsed: 5 }),
+    mkCandidate(6, 4, { allRoad: true, stepsUsed: 5 })
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.destination.row === 1, "chooseBestTrajectory départage : danger d'arrivée le plus faible retenu entre deux destinations à égalité");
+}
+
+// ---- 10D. Slam en arc arrière (recalculé sur la destination FINALE) ----
+
+// D1. Adversaire opérable STRICTEMENT plus petit en arc arrière →
+// retargeting de la destination sur sa case.
+{
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const enemy = createCar("B", CAR_SIZE.SMALL, 5, 2); // "rear" de (6,2)
+  const candidates = [mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 })];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car, enemy], []);
+  assert(result.slamTarget !== null && result.slamTarget.owner === "B", "chooseBestTrajectory Slam arc arrière : adversaire plus petit détecté et ciblé");
+  assert(result.destination.col === 5 && result.destination.row === 2, "chooseBestTrajectory Slam arc arrière : destination reciblée sur la case de l'adversaire");
+}
+
+// D2. Aucun adversaire en arc arrière → destination inchangée.
+{
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const candidates = [mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 })];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
+  assert(result.slamTarget === null, "chooseBestTrajectory Slam arc arrière : pas d'adversaire → aucun retargeting");
+  assert(result.destination.col === 6 && result.destination.row === 2, "chooseBestTrajectory Slam arc arrière : destination d'origine conservée");
+}
+
+// D3. Adversaire présent mais PAS strictement plus petit (égal ou
+// plus grand) → pas de retargeting (règle confirmée : "plus petit"
+// seul, pas de cas d'égalité ici contrairement à evaluateSlamCandidate).
+{
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const equalEnemy = createCar("B", CAR_SIZE.MEDIUM, 5, 2);
+  const candidates = [mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 })];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car, equalEnemy], []);
+  assert(result.slamTarget === null, "chooseBestTrajectory Slam arc arrière : adversaire de taille égale → pas de retargeting");
+  assert(result.destination.col === 6, "chooseBestTrajectory Slam arc arrière : destination d'origine conservée face à un adversaire de taille égale");
+}
+
+// D4. Plusieurs adversaires plus petits, propriétaires différents :
+// priorité à celui dont le PROPRIÉTAIRE a le moins de véhicules
+// opérables.
+{
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const enemyB = createCar("B", CAR_SIZE.SMALL, 5, 1); // rear-left de (6,2)
+  const enemyBExtra = createCar("B", CAR_SIZE.SMALL, 0, 0); // B a 2 véhicules opérables
+  const enemyC = createCar("C", CAR_SIZE.SMALL, 5, 3); // rear-right de (6,2), C a 1 seul véhicule
+  const candidates = [mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 })];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car, enemyB, enemyBExtra, enemyC], []);
+  assert(result.slamTarget.owner === "C", "chooseBestTrajectory Slam arc arrière : priorité au propriétaire avec le moins de véhicules opérables");
+}
+
+// D5. Égalité de nombre de véhicules opérables entre propriétaires :
+// départage par le véhicule le plus en avant de la course (colonne
+// la plus grande). Destination sur une ligne IMPAIRE : sa case "rear"
+// recule d'une colonne par rapport à "rear-left"/"rear-right" (seule
+// configuration où les 3 cases de l'arc arrière ne sont pas toutes à
+// la même colonne — cf. getRearArc).
+{
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 3);
+  const rearArc = engine.getRearArc({ col: 6, row: 3 });
+  const spotRear = rearArc.find((s) => s.name === "rear");        // col 5 : en retrait
+  const spotRearLeft = rearArc.find((s) => s.name === "rear-left"); // col 6 : plus avancé
+  const enemyB = createCar("B", CAR_SIZE.SMALL, spotRear.col, spotRear.row);
+  const enemyC = createCar("C", CAR_SIZE.SMALL, spotRearLeft.col, spotRearLeft.row);
+  // B et C ont chacun exactement 1 véhicule opérable (égalité) — seule
+  // la colonne les différencie.
+  const candidates = [mkCandidate(6, 3, { allRoad: true, stepsUsed: 2 })];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car, enemyB, enemyC], []);
+  assert(result.slamTarget.owner === "C", "chooseBestTrajectory Slam arc arrière : égalité de véhicules opérables → le plus en avant (colonne la plus grande) l'emporte");
+}
+
 console.log(`\n${passed} test(s) passé(s), ${failed} échec(s).`);
 if (failed > 0) process.exit(1);
