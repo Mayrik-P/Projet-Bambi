@@ -38,9 +38,13 @@ siennes.
 
 ## Étapes
 
-- [ ] **0. Correction `dangerValueOfCell` (`engine.js`)** — différencier
-      bord avant (=0) de bord gauche/droite/arrière (=9), au lieu de
-      la valeur unique actuelle. Petit, isolé, testable seul.
+- [x] **0. Correction `dangerValueOfCell`** — différencier bord avant
+      (=0) de bord gauche/droite/arrière (=9), au lieu de la valeur
+      unique actuelle. Petit, isolé, testable seul. La fonction vit en
+      réalité dans `ai-decision.js` (pas `engine.js` comme indiqué
+      ici à l'origine — `engine.js` n'a pas eu besoin d'être touché,
+      il distinguait déjà avant/arrière/latéral via `getSpace()`).
+      12 tests dédiés ajoutés (105/105 IA, 212/212 moteur).
 - [ ] **1. Trajectoire** — portage quasi tel quel de la cascade
       existante (`chooseGeneralTrajectory`, déjà validée, le nouvel
       arbre n'y change que la table de danger via l'étape 0). Pas de
@@ -72,4 +76,5 @@ siennes.
 
 ## État courant
 
-Aucune étape commencée. Prochaine action : étape 0.
+Étape 0 terminée et déposée (105/105 tests IA, 212/212 tests moteur).
+Prochaine action : étape 1 (trajectoire).
