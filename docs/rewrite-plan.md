@@ -4,8 +4,9 @@ Contexte : `ai-decision.js` v2 a accumulé trop de rustines ponctuelles
 (continuation de mouvement à l'entrée, timing du tir selon la branche,
 valeurs de danger de bordure...) au fil des corrections. Mayrik a
 redessiné l'arbre de décision complet à zéro (v3, audité en détail,
-jugé cohérent — voir `docs/Arbre de décision Répartition dés TRV.pdf`
-et `docs/Arbre de décision trajectoires TRV.pdf`). Plutôt que de
+jugé cohérent — voir `docs/Automa ThundeRoadVendetta - arbre de
+décision pour chaque tour de jeu.pdf`, document consolidé qui
+remplace les deux anciens PDF séparés dés/trajectoire). Plutôt que de
 continuer à patcher, on repart d'un fichier neuf, en suivant l'arbre
 v3 branche par branche.
 
@@ -45,10 +46,28 @@ siennes.
       ici à l'origine — `engine.js` n'a pas eu besoin d'être touché,
       il distinguait déjà avant/arrière/latéral via `getSpace()`).
       12 tests dédiés ajoutés (105/105 IA, 212/212 moteur).
-- [ ] **1. Trajectoire** — portage quasi tel quel de la cascade
-      existante (`chooseGeneralTrajectory`, déjà validée, le nouvel
-      arbre n'y change que la table de danger via l'étape 0). Pas de
-      réécriture conceptuelle ici.
+- [x] **1. Trajectoire** — réécrite en une fonction UNIFIÉE,
+      `chooseBestTrajectory` (remplace `chooseGeneralTrajectory` ET
+      `chooseEntryTrajectory`, laissées en place mais plus utilisées).
+      Pas un simple portage : l'audit de l'arbre v3 a révélé 3 écarts
+      réels avec l'ancien code, corrigés avec Mayrik le 24/08/2026 —
+      (a) le palier racine (route 100%) est désormais une pure
+      présence, sans comparaison ("strictement plus proche par
+      rapport aux autres...") — clause retirée du document source en
+      cours de route ; (b) les paliers 2 à 6 (route-mixte → off-road →
+      mud → tout-terrain-propre → hazard-propre) se comparent
+      seulement au palier ADJACENT suivant, jamais à une comparaison
+      globale (confirmé avec un exemple chiffré) — ancien code
+      (`pickByTerrainPreference`) comparait à un cumul, donc
+      incorrect ; (c) le bonus route est une cascade à 4 paliers en
+      présence seule (route/off-road/mud + refus explicite), plus
+      strict que l'ancien "extension si progression meilleure" ; (d)
+      le Slam en arc arrière se recalcule désormais sur la
+      destination FINALE (bonus ou non) — suppression de la limite
+      "jamais si bonus utilisé" de l'ancien code — et seulement contre
+      un adversaire STRICTEMENT plus petit (pas de cas d'égalité ici).
+      24 tests dédiés ajoutés (105→129 tests IA), 212/212 moteur
+      inchangés (fichier non touché).
 - [ ] **2. Tir sorti de `ai-decision.js`** — "mouvement → cible de tir
       → tir" est désormais identique dans toutes les feuilles de
       l'arbre. Le déplacer dans l'orchestrateur (aujourd'hui
@@ -76,5 +95,5 @@ siennes.
 
 ## État courant
 
-Étape 0 terminée et déposée (105/105 tests IA, 212/212 tests moteur).
-Prochaine action : étape 1 (trajectoire).
+Étapes 0 et 1 terminées (129/129 tests IA, 212/212 tests moteur).
+Prochaine action : étape 2 (sortir le tir de `ai-decision.js`).
