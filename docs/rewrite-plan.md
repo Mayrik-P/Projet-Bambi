@@ -68,13 +68,31 @@ siennes.
       un adversaire STRICTEMENT plus petit (pas de cas d'égalité ici).
       24 tests dédiés ajoutés (105→129 tests IA), 212/212 moteur
       inchangés (fichier non touché).
-- [ ] **2. Tir sorti de `ai-decision.js`** — "mouvement → cible de tir
-      → tir" est désormais identique dans toutes les feuilles de
-      l'arbre. Le déplacer dans l'orchestrateur (aujourd'hui
-      `tools/run-shadow-legality.js`) comme étape générique
-      post-mouvement (`chooseShootTarget(car.col, car.row, car.owner,
-      allCars)` après tout mouvement réel), plutôt que porté par
-      chaque branche de décision.
+- [x] **2. Tir sorti de `ai-decision.js`** — nouveau point d'entrée
+      unique, `computeShotTargetForDecision(decision, allCars)`,
+      appelé une fois par tour par l'orchestrateur (aujourd'hui
+      `tools/run-shadow-legality.js`) et par `tools/
+      generate-review-cases.js` (qui appelle `decideAssignAndCommand`
+      directement, hors orchestrateur). Retiré des branches qui le
+      calculaient chacune de leur côté (`decideNoFinishLine`,
+      `decideFinishLineRush`, `chooseBestTrajectory`) — la Section 3B
+      legacy (`chooseGeneralTrajectory`/`chooseEntryTrajectory`, plus
+      utilisée depuis l'étape 1) n'a pas été touchée.
+      **Bug réel trouvé en cours de route** : un tour Coast calculait
+      bien une cible de tir côté décision, mais elle n'était JAMAIS
+      transmise au moteur (`playTurnCoastWithProgression` ne
+      recevait pas l'option `shootTarget`, contrairement au mouvement
+      normal) — un tir valide était donc silencieusement perdu à
+      chaque Coast. Vérifié concrètement par comparaison avant/après
+      sur 200 parties : 121 tours Coast avec cible calculée → 0 tirs
+      réellement exécutés AVANT correctif ; 123 → 119 APRÈS (l'écart
+      restant est attendu, mêmes garde-fous que le mouvement normal
+      — round 1 sans armes actives, etc.).
+      4 tests dédiés ajoutés (129→133 tests IA), 212/212 moteur
+      inchangés. Self-play 500 parties/31515 décisions : 0 crash, 0
+      décision illégale ; 1 état incohérent, artefact préexistant
+      déjà présent sur le dépôt AVANT cette étape (confirmé par
+      comparaison directe, sans rapport avec le tir).
 - [ ] **3. Branche "Premier round"** — autonome, ne recoupe aucune
       autre branche. Historiquement la source de bugs la plus
       concrète (entrée en jeu).
@@ -95,5 +113,5 @@ siennes.
 
 ## État courant
 
-Étapes 0 et 1 terminées (129/129 tests IA, 212/212 tests moteur).
-Prochaine action : étape 2 (sortir le tir de `ai-decision.js`).
+Étapes 0, 1 et 2 terminées (133/133 tests IA, 212/212 tests moteur).
+Prochaine action : étape 3 (branche "Premier round").
