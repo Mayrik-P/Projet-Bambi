@@ -977,5 +977,48 @@ function mkCandidate(col, row, opts = {}) {
   assert(result.slamTarget.owner === "C", "chooseBestTrajectory Slam arc arrière : égalité de véhicules opérables → le plus en avant (colonne la plus grande) l'emporte");
 }
 
+// -----------------------------------------------------------------
+// SECTION 11 — computeShotTargetForDecision (étape 2 : le tir devient
+// une étape générique post-mouvement, plus portée par chaque branche
+// de décision — cf. docs/rewrite-plan.md)
+// -----------------------------------------------------------------
+
+// 1. Décision d'entrée (isEntry:true) : jamais de tir, quelle que
+// soit la destination.
+{
+  const board = emptyBoard();
+  const car = createCarOffBoard("A", CAR_SIZE.MEDIUM);
+  const enemy = createCar("B", CAR_SIZE.SMALL, 5, 2);
+  const decision = { car, destination: { col: 4, row: 2 }, isEntry: true };
+  const result = ai.computeShotTargetForDecision(decision, [car, enemy]);
+  assert(result === null, "computeShotTargetForDecision : jamais de tir sur une décision d'entrée");
+}
+
+// 2. Décision sans destination (passe forcée, etc.) : jamais de tir.
+{
+  const decision = { car: createCar("A", CAR_SIZE.MEDIUM, 4, 2), destination: null, isEntry: false };
+  const result = ai.computeShotTargetForDecision(decision, []);
+  assert(result === null, "computeShotTargetForDecision : pas de destination → pas de tir");
+}
+
+// 3. Décision normale avec un adversaire dans l'arc avant de la
+// destination : cible bien trouvée.
+{
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const enemy = createCar("B", CAR_SIZE.SMALL, 7, 2); // "front" de (6,2)
+  const decision = { car, destination: { col: 6, row: 2 }, isEntry: false };
+  const result = ai.computeShotTargetForDecision(decision, [car, enemy]);
+  assert(result !== null && result.owner === "B", "computeShotTargetForDecision : adversaire dans l'arc avant de la destination bien trouvé");
+}
+
+// 4. Décision normale sans adversaire en vue : null, pas d'erreur.
+{
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const decision = { car, destination: { col: 6, row: 2 }, isEntry: false };
+  const result = ai.computeShotTargetForDecision(decision, [car]);
+  assert(result === null, "computeShotTargetForDecision : aucun adversaire en vue → null");
+}
+
 console.log(`\n${passed} test(s) passé(s), ${failed} échec(s).`);
 if (failed > 0) process.exit(1);

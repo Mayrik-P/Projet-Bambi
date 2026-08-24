@@ -433,6 +433,21 @@ function chooseShootTarget(fromCol, fromRow, myOwner, allCars) {
   return candidates.find((c) => c.owner === bestOwner) || candidates[0];
 }
 
+// Étape 2 (rewrite-plan.md) : le tir est désormais une étape
+// GÉNÉRIQUE post-mouvement, identique quelle que soit la branche de
+// l'arbre qui a produit la décision — plus question de la porter
+// séparément dans chaque branche (decideNoFinishLine,
+// decideFinishLineRush, chooseBestTrajectory...), qui divergeaient
+// et ont fini par oublier un cas (Coast, jamais relié côté
+// orchestrateur avant ce correctif). Point d'entrée UNIQUE : appelé
+// une fois par décision, après que la destination finale est connue,
+// par l'orchestrateur (ou tout outil qui rejoue une décision — cf.
+// tools/generate-review-cases.js).
+function computeShotTargetForDecision(decision, allCars) {
+  if (!decision || decision.isEntry || !decision.destination) return null;
+  return chooseShootTarget(decision.destination.col, decision.destination.row, decision.car.owner, allCars);
+}
+
 // ===================================================================
 // SECTION 3B — CASCADE DE CHOIX DE TRAJECTOIRE/DESTINATION
 // ===================================================================
@@ -753,7 +768,7 @@ function chooseEntryTrajectory(board, car, dieValue, allCars, allChoppers, drift
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  Object.assign(module.exports, { chooseShootTarget, chooseGeneralTrajectory, chooseEntryTrajectory, dangerValueOfCell, chooseBestTrajectory, isCleanPathToDestination });
+  Object.assign(module.exports, { chooseShootTarget, chooseGeneralTrajectory, chooseEntryTrajectory, dangerValueOfCell, chooseBestTrajectory, isCleanPathToDestination, computeShotTargetForDecision });
 }
 
 // ===================================================================
@@ -1074,9 +1089,8 @@ function chooseBestTrajectory(board, car, candidates, roadDieValue, allCars, all
 
   const resolved = pickByLowestArrivalDanger(board, finalGroup, allCars);
   const { destination, slamTarget } = resolveRearArcSlam(board, resolved, car, allCars);
-  const shotTarget = destination ? chooseShootTarget(destination.col, destination.row, car.owner, allCars) : null;
 
-  return { destination, slamTarget, roadBonusUsed, shotTarget };
+  return { destination, slamTarget, roadBonusUsed };
 }
 
 function partitionIntoBalancedLots(pool, lotCount) {
@@ -1337,8 +1351,7 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
     const dieValue = myPool[0]; // "il vaut 1" = distance fixe, la face du dé physique importe peu
     const dests = computeReachableDestinations(board, car, 1, allCars, allChoppers);
     const destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
-    const shotTarget = chooseShootTarget(destination.col, destination.row, playerName, allCars);
-    return { car, dieValue, command: null, destination, shotTarget, isEntry: false, isCoast: true };
+    return { car, dieValue, command: null, destination, isEntry: false, isCoast: true };
   }
 
   const commandAlreadyUsed = !!roundState.commandUsedThisRound[playerName];
@@ -1403,7 +1416,7 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
   let effectiveDieValue = movementDieFinal;
   if (command && command.type === "nitro") effectiveDieValue += command.dieValue;
 
-  let destination, shotTarget, slam, roadBonusPath;
+  let destination, slam, roadBonusPath;
   if (car.col === null) {
     // Entrée en jeu (p.9) — CORRECTIF : auparavant codée en dur sur
     // la seule case d'entrée (stepsUsed:0, sans suite de trajectoire),
@@ -1414,14 +1427,12 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
     const driftActive = !!(command && command.type === "drift");
     const traj = chooseEntryTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActive, roundState.roadDie || 0);
     destination = traj.destination;
-    shotTarget = null; // pas de tir possible sur un tour d'entrée (round 1)
     slam = traj.slam;
     roadBonusPath = traj.roadBonusPath;
   } else {
     const driftActive = !!(command && command.type === "drift");
     const traj = chooseGeneralTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActive, roundState.roadDie || 0);
     destination = traj.destination;
-    shotTarget = traj.shotTarget;
     slam = traj.slam;
     roadBonusPath = traj.roadBonusPath;
   }
@@ -1431,7 +1442,6 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
     dieValue: movementDieFinal,
     command,
     destination,
-    shotTarget,
     isEntry: car.col === null,
     isCoast: false,
     slam,
@@ -1499,8 +1509,7 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
     } else {
       destination = dests.find((d) => d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
     }
-    const shotTarget = chooseShootTarget(destination.col, destination.row, playerName, allCars);
-    return { car, dieValue, command: null, destination, shotTarget, isEntry: false, isCoast: true, slam: destination.terminalReason === "slam" };
+    return { car, dieValue, command: null, destination, isEntry: false, isCoast: true, slam: destination.terminalReason === "slam" };
   }
 
   const car = frontmostEligibleCar(notYetActivated);
@@ -1518,14 +1527,14 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
   // sur le plateau.
   if (car.col === null) {
     const traj = chooseEntryTrajectory(board, car, biggestDie, allCars, allChoppers, false, roundState.roadDie || 0);
-    return { car, dieValue: biggestDie, command: null, destination: traj.destination, shotTarget: null, isEntry: true, isCoast: false, slam: traj.slam, roadBonusPath: traj.roadBonusPath };
+    return { car, dieValue: biggestDie, command: null, destination: traj.destination, isEntry: true, isCoast: false, slam: traj.slam, roadBonusPath: traj.roadBonusPath };
   }
 
   const baseDests = computeReachableDestinations(board, car, biggestDie, allCars, allChoppers);
 
   if (canReachFinishLine(baseDests, finishColStart)) {
     const destination = baseDests.find((d) => (d.terminalReason === "normal" || d.terminalReason === "exits-front") && d.col >= finishColStart);
-    return { car, dieValue: biggestDie, command: null, destination, shotTarget: null, isEntry: car.col === null, isCoast: false, slam: false };
+    return { car, dieValue: biggestDie, command: null, destination, isEntry: car.col === null, isCoast: false, slam: false };
   }
 
   const commandAlreadyUsed = !!roundState.commandUsedThisRound[playerName];
@@ -1620,13 +1629,13 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
       return {
         car, dieValue: usedDie === effectiveDieValue ? biggestDie : usedDie,
         command: usedDie === effectiveDieValue ? command : null,
-        destination: usedDestination, shotTarget: leader, isEntry: car.col === null, isCoast: false, slam: false
+        destination: usedDestination, isEntry: car.col === null, isCoast: false, slam: false
       };
     }
   }
 
   const traj = chooseGeneralTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActiveForRest, roundState.roadDie || 0);
-  return { car, dieValue: biggestDie, command, destination: traj.destination, shotTarget: traj.shotTarget, isEntry: car.col === null, isCoast: false, slam: traj.slam, roadBonusPath: traj.roadBonusPath };
+  return { car, dieValue: biggestDie, command, destination: traj.destination, isEntry: car.col === null, isCoast: false, slam: traj.slam, roadBonusPath: traj.roadBonusPath };
 }
 
 if (typeof module !== "undefined" && module.exports) {
