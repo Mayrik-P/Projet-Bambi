@@ -497,9 +497,16 @@ function hazardValueOfCell(board, col, row, allCars) {
 // Table de danger (Mayrik) : seuls les types déjà implémentés dans
 // engine.js (Fire!/Desert Glace/Ramp/Pit Trap attendent leurs
 // extensions futures).
+//
+// Bordure de plateau : PAS une valeur unique — même distinction que
+// getSpace()/enterAdjacentSpace() dans engine.js. Bord AVANT (sortie
+// par l'avant, progression des tuiles, pas une élimination) = 0.
+// Bord latéral (gauche/droite) ou ARRIÈRE (élimination dans les deux
+// cas) = 9, au même niveau qu'une case Impassable.
 function dangerValueOfCell(board, col, row, allCars) {
   const space = getSpace(board, col, row);
-  if (space === null || space === undefined) return 10; // Bordure de plateau
+  if (space === null) return 9; // bord latéral (gauche/droite) — élimination
+  if (space === undefined) return col < 0 ? 9 : 0; // arrière (élimination) vs avant (progression)
   if (space.terrain === TERRAIN.IMPASSABLE) return 9;
   const hazardValue = hazardValueOfCell(board, col, row, allCars);
   if (hazardValue > 0) return hazardValue;
@@ -746,7 +753,7 @@ function chooseEntryTrajectory(board, car, dieValue, allCars, allChoppers, drift
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  Object.assign(module.exports, { chooseShootTarget, chooseGeneralTrajectory, chooseEntryTrajectory });
+  Object.assign(module.exports, { chooseShootTarget, chooseGeneralTrajectory, chooseEntryTrajectory, dangerValueOfCell });
 }
 
 // ===================================================================

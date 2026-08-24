@@ -642,5 +642,49 @@ function getTerrainAt(board, dest) {
   assert(d.destination.col > 0, "decideNoFinishLine (intégration) : RÉGRESSION DU BUG — la destination d'entrée progresse réellement, ne reste plus bloquée à col 0");
 }
 
+// -----------------------------------------------------------------
+// SECTION 9 — dangerValueOfCell (étape 0 réécriture v3 : bordures
+// différenciées, avant ≠ latéral/arrière — cf. docs/rewrite-plan.md)
+// -----------------------------------------------------------------
+// Chaque cas traduit directement getSpace()/enterAdjacentSpace() dans
+// engine.js : row hors tuile → null (bord latéral, élimination) ;
+// col hors tuile → undefined, avec col<0 = arrière (élimination) et
+// col>=cols = avant (progression, PAS une élimination).
+{
+  const board = emptyBoard(); // 24 cols (0..23), 6 rows (0..5), route partout
+
+  // 1. Bord AVANT (col >= cols) : sortie non-éliminatoire, doit valoir
+  // 0 — comportement neuf, avant cette correction c'était 10 comme
+  // n'importe quelle autre bordure.
+  assert(ai.dangerValueOfCell(board, 24, 2, []) === 0, "dangerValueOfCell : bord AVANT (col=cols) = 0");
+  assert(ai.dangerValueOfCell(board, 30, 3, []) === 0, "dangerValueOfCell : bord AVANT loin au-delà (col>>cols) = 0");
+
+  // 2. Bord ARRIÈRE (col < 0) : élimination, doit valoir 9 (même
+  // niveau qu'Impassable/latéral), pas 0 comme l'avant.
+  assert(ai.dangerValueOfCell(board, -1, 2, []) === 9, "dangerValueOfCell : bord ARRIÈRE (col=-1) = 9");
+  assert(ai.dangerValueOfCell(board, -5, 3, []) === 9, "dangerValueOfCell : bord ARRIÈRE loin (col<<0) = 9");
+
+  // 3. Bord LATÉRAL haut/bas (row hors tuile) : élimination, = 9.
+  assert(ai.dangerValueOfCell(board, 5, -1, []) === 9, "dangerValueOfCell : bord LATÉRAL haut (row=-1) = 9");
+  assert(ai.dangerValueOfCell(board, 5, 6, []) === 9, "dangerValueOfCell : bord LATÉRAL bas (row=rows) = 9");
+
+  // 4. Coins : row hors tuile prime sur col (getSpace teste row en
+  // premier) → un coin avant+latéral doit rester 9, PAS 0 — la
+  // distinction avant/arrière ne s'applique qu'à un col hors tuile
+  // avec une row valide.
+  assert(ai.dangerValueOfCell(board, 24, -1, []) === 9, "dangerValueOfCell : coin avant+latéral (row hors tuile prioritaire) = 9, pas 0");
+  assert(ai.dangerValueOfCell(board, -1, 6, []) === 9, "dangerValueOfCell : coin arrière+latéral = 9");
+
+  // 5. Non-régression : le reste de la table de danger (Impassable,
+  // terrains nus) n'est pas affecté par cette correction.
+  board.grid[2][5].terrain = TERRAIN.IMPASSABLE;
+  assert(ai.dangerValueOfCell(board, 5, 2, []) === 9, "dangerValueOfCell : non-régression — Impassable = 9");
+  assert(ai.dangerValueOfCell(board, 5, 3, []) === 0, "dangerValueOfCell : non-régression — Road = 0");
+  board.grid[2][6].terrain = TERRAIN.OFF_ROAD;
+  assert(ai.dangerValueOfCell(board, 6, 2, []) === 1, "dangerValueOfCell : non-régression — Off-Road = 1");
+  board.grid[2][7].terrain = TERRAIN.MUD;
+  assert(ai.dangerValueOfCell(board, 7, 2, []) === 2, "dangerValueOfCell : non-régression — Mud = 2");
+}
+
 console.log(`\n${passed} test(s) passé(s), ${failed} échec(s).`);
 if (failed > 0) process.exit(1);
