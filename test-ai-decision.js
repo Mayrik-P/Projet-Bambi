@@ -8,7 +8,7 @@
 const engine = require("./engine.js");
 const ai = require("./ai-decision.js");
 
-const { TERRAIN, CAR_SIZE, createTestTile, createBoard, createCar, createCarOffBoard } = engine;
+const { TERRAIN, CAR_SIZE, CAR_STATUS, createTestTile, createBoard, createCar, createCarOffBoard, createRoundState, createChopper } = engine;
 
 let passed = 0, failed = 0;
 function assert(condition, label) {
@@ -704,8 +704,8 @@ function mkCandidate(col, row, opts = {}) {
     dangerousCellsCrossed: opts.dangerousCellsCrossed ?? 0,
     allRoad: opts.allRoad ?? false,
     terminalReason: opts.terminalReason ?? "normal",
-    slamTarget: null,
-    path: []
+    slamTarget: opts.slamTarget ?? null,
+    path: opts.path ?? []
   };
 }
 
@@ -906,17 +906,44 @@ function mkCandidate(col, row, opts = {}) {
 }
 
 // ---- 10D. Slam en arc arrière (recalculé sur la destination FINALE) ----
+// CORRECTIF IMPORTANT (signalé par Mayrik) : une voiture ne se
+// déplace JAMAIS directement vers une case de son arc arrière — seul
+// l'arc AVANT est atteignable par un mouvement réel. Le retargeting
+// ne fait donc que PRÉFÉRER un autre candidat déjà présent dans le
+// pool passé à chooseBestTrajectory (donc déjà atteignable par un
+// vrai chemin avant, terminalReason==='slam'), jamais une case
+// inventée sur le plateau brut. Chaque test ci-dessous construit
+// explicitement ce candidat "slam" concurrent.
 
-// D1. Adversaire opérable STRICTEMENT plus petit en arc arrière →
-// retargeting de la destination sur sa case.
+// D1. Adversaire opérable STRICTEMENT plus petit sur un candidat
+// "slam" déjà atteignable, positionné dans l'arc arrière de la
+// destination par ailleurs préférée → retargeting vers CE candidat.
 {
   const board = emptyBoard();
   const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
   const enemy = createCar("B", CAR_SIZE.SMALL, 5, 2); // "rear" de (6,2)
+  const candidates = [
+    mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 }),                                   // destination "propre" préférée par la cascade
+    mkCandidate(5, 2, { terminalReason: "slam", slamTarget: enemy, stepsUsed: 1, path: ["front-left"] }) // atteignable par un AUTRE chemin avant, tombe dans l'arc arrière de (6,2)
+  ];
+  const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car, enemy], []);
+  assert(result.slamTarget !== null && result.slamTarget.owner === "B", "chooseBestTrajectory Slam arc arrière : candidat slam atteignable détecté et préféré");
+  assert(result.destination.col === 5 && result.destination.row === 2, "chooseBestTrajectory Slam arc arrière : destination reciblée sur ce candidat (avec son propre chemin réel)");
+  assert(Array.isArray(result.destination.path) && result.destination.path.length === 1, "chooseBestTrajectory Slam arc arrière : le candidat retenu porte bien son propre chemin exécutable");
+}
+
+// D1bis. Un adversaire physiquement présent dans l'arc arrière mais
+// SANS candidat "slam" correspondant dans le pool (case non
+// atteignable par un chemin avant ce tour, ex. budget insuffisant)
+// → PAS de retargeting, même si un adversaire plus petit est bien là.
+{
+  const board = emptyBoard();
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const enemy = createCar("B", CAR_SIZE.SMALL, 5, 2); // "rear" de (6,2), mais AUCUN candidat slam ne l'atteint dans le pool
   const candidates = [mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 })];
   const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car, enemy], []);
-  assert(result.slamTarget !== null && result.slamTarget.owner === "B", "chooseBestTrajectory Slam arc arrière : adversaire plus petit détecté et ciblé");
-  assert(result.destination.col === 5 && result.destination.row === 2, "chooseBestTrajectory Slam arc arrière : destination reciblée sur la case de l'adversaire");
+  assert(result.slamTarget === null, "chooseBestTrajectory Slam arc arrière : adversaire présent mais non atteignable (pas de candidat slam) → aucun retargeting");
+  assert(result.destination.col === 6 && result.destination.row === 2, "chooseBestTrajectory Slam arc arrière : destination d'origine conservée si le candidat slam n'existe pas dans le pool");
 }
 
 // D2. Aucun adversaire en arc arrière → destination inchangée.
@@ -929,29 +956,37 @@ function mkCandidate(col, row, opts = {}) {
   assert(result.destination.col === 6 && result.destination.row === 2, "chooseBestTrajectory Slam arc arrière : destination d'origine conservée");
 }
 
-// D3. Adversaire présent mais PAS strictement plus petit (égal ou
-// plus grand) → pas de retargeting (règle confirmée : "plus petit"
-// seul, pas de cas d'égalité ici contrairement à evaluateSlamCandidate).
+// D3. Candidat slam atteignable mais adversaire PAS strictement plus
+// petit (égal ou plus grand) → pas de retargeting (règle confirmée :
+// "plus petit" seul, pas de cas d'égalité ici contrairement à
+// evaluateSlamCandidate).
 {
   const board = emptyBoard();
   const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
   const equalEnemy = createCar("B", CAR_SIZE.MEDIUM, 5, 2);
-  const candidates = [mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 })];
+  const candidates = [
+    mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 }),
+    mkCandidate(5, 2, { terminalReason: "slam", slamTarget: equalEnemy, stepsUsed: 1, path: ["front-left"] })
+  ];
   const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car, equalEnemy], []);
   assert(result.slamTarget === null, "chooseBestTrajectory Slam arc arrière : adversaire de taille égale → pas de retargeting");
   assert(result.destination.col === 6, "chooseBestTrajectory Slam arc arrière : destination d'origine conservée face à un adversaire de taille égale");
 }
 
-// D4. Plusieurs adversaires plus petits, propriétaires différents :
-// priorité à celui dont le PROPRIÉTAIRE a le moins de véhicules
-// opérables.
+// D4. Plusieurs candidats slam atteignables dans l'arc arrière,
+// adversaires plus petits de propriétaires différents : priorité à
+// celui dont le PROPRIÉTAIRE a le moins de véhicules opérables.
 {
   const board = emptyBoard();
   const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
   const enemyB = createCar("B", CAR_SIZE.SMALL, 5, 1); // rear-left de (6,2)
   const enemyBExtra = createCar("B", CAR_SIZE.SMALL, 0, 0); // B a 2 véhicules opérables
   const enemyC = createCar("C", CAR_SIZE.SMALL, 5, 3); // rear-right de (6,2), C a 1 seul véhicule
-  const candidates = [mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 })];
+  const candidates = [
+    mkCandidate(6, 2, { allRoad: true, stepsUsed: 2 }),
+    mkCandidate(5, 1, { terminalReason: "slam", slamTarget: enemyB, stepsUsed: 1, path: ["front-left"] }),
+    mkCandidate(5, 3, { terminalReason: "slam", slamTarget: enemyC, stepsUsed: 1, path: ["front-right"] })
+  ];
   const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car, enemyB, enemyBExtra, enemyC], []);
   assert(result.slamTarget.owner === "C", "chooseBestTrajectory Slam arc arrière : priorité au propriétaire avec le moins de véhicules opérables");
 }
@@ -972,9 +1007,33 @@ function mkCandidate(col, row, opts = {}) {
   const enemyC = createCar("C", CAR_SIZE.SMALL, spotRearLeft.col, spotRearLeft.row);
   // B et C ont chacun exactement 1 véhicule opérable (égalité) — seule
   // la colonne les différencie.
-  const candidates = [mkCandidate(6, 3, { allRoad: true, stepsUsed: 2 })];
+  const candidates = [
+    mkCandidate(6, 3, { allRoad: true, stepsUsed: 2 }),
+    mkCandidate(spotRear.col, spotRear.row, { terminalReason: "slam", slamTarget: enemyB, stepsUsed: 1, path: ["rear"] }),
+    mkCandidate(spotRearLeft.col, spotRearLeft.row, { terminalReason: "slam", slamTarget: enemyC, stepsUsed: 1, path: ["rear-left"] })
+  ];
   const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car, enemyB, enemyC], []);
   assert(result.slamTarget.owner === "C", "chooseBestTrajectory Slam arc arrière : égalité de véhicules opérables → le plus en avant (colonne la plus grande) l'emporte");
+}
+
+// D6. Bonus route utilisé + Slam arc arrière trouvé DANS l'extension
+// (pas dans la base) : le retargeting doit chercher dans le pool de
+// l'EXTENSION, pas celui de la base — et roadBonusPath doit refléter
+// le chemin réel vers le candidat slam retenu (pas vers le candidat
+// "propre" qu'il remplace). Coordonnées vérifiées empiriquement
+// (l'ennemi ne doit pas bloquer le chemin direct de la destination
+// "propre" préférée, sinon on ne teste plus la même chose).
+{
+  const board = emptyBoard(); // route partout
+  const car = createCar("A", CAR_SIZE.MEDIUM, 4, 2);
+  const enemy = createCar("B", CAR_SIZE.SMALL, 11, 1); // rear-left de (12,2), la destination bonus "propre" attendue (3+5 pas depuis col 4)
+  const candidates = ai.computeReachableDestinations(board, car, 3, [car, enemy], []); // base : 3 pas, arrive en (7,2)
+  const result = ai.chooseBestTrajectory(board, car, candidates, 5, [car, enemy], []); // bonus : 5 pas depuis (7,2)
+  assert(result.roadBonusUsed === true, "chooseBestTrajectory Slam arc arrière + bonus : bonus bien appliqué");
+  assert(result.slamTarget !== null && result.slamTarget.owner === "B", "chooseBestTrajectory Slam arc arrière + bonus : Slam trouvé dans le pool de l'EXTENSION, pas celui de la base");
+  assert(result.destination.col === 11 && result.destination.row === 1, "chooseBestTrajectory Slam arc arrière + bonus : destination finale reciblée sur la case de l'adversaire");
+  assert(result.destination.path.length === 3, "chooseBestTrajectory Slam arc arrière + bonus : destination.path reste le chemin de BASE (3 pas), jamais mélangé avec l'extension");
+  assert(Array.isArray(result.roadBonusPath) && result.roadBonusPath.length === 5, "chooseBestTrajectory Slam arc arrière + bonus : roadBonusPath porte le chemin RÉEL (5 pas) vers le candidat slam retenu dans l'extension");
 }
 
 // -----------------------------------------------------------------
@@ -1018,6 +1077,118 @@ function mkCandidate(col, row, opts = {}) {
   const decision = { car, destination: { col: 6, row: 2 }, isEntry: false };
   const result = ai.computeShotTargetForDecision(decision, [car]);
   assert(result === null, "computeShotTargetForDecision : aucun adversaire en vue → null");
+}
+
+// -----------------------------------------------------------------
+// SECTION 12 — decideFirstRound (étape 3 : branche "Premier round",
+// validée avec Mayrik le 24/08/2026)
+// -----------------------------------------------------------------
+
+// 0. RÉGRESSION (bug trouvé en implémentant cette étape) :
+// entryRow doit survivre au chemin bonus route — `chooseBestTrajectory`
+// reconstruit `destination` à partir du pool d'EXTENSION (jamais un
+// pool d'entrée, donc sans entryRow) quand le bonus est utilisé ; il
+// doit le reporter explicitement depuis la destination de base.
+{
+  const board = emptyBoard(); // route partout : bonus quasi garanti
+  const car = createCarOffBoard("A", CAR_SIZE.LARGE);
+  const entryCandidates = ai.computeReachableEntryDestinations(board, 3, [car], []);
+  const traj = ai.chooseBestTrajectory(board, car, entryCandidates, 5, [car], []);
+  assert(traj.roadBonusUsed === true, "chooseBestTrajectory régression entryRow : bonus bien déclenché sur ce plateau (précondition du test)");
+  assert(typeof traj.destination.entryRow === "number", "chooseBestTrajectory régression entryRow : entryRow préservé après reconstruction de la destination bonus");
+}
+
+// 1. Lot à 1 dé : entrée simple, pas de Command.
+{
+  const board = emptyBoard();
+  const car = createCarOffBoard("A", CAR_SIZE.LARGE);
+  const allCars = [car];
+  const dicePool = { A: [4] }; // 1 seul dé dans le pool → lotCount=1 → 1 lot de 1 dé
+  const roundState = createRoundState(["A"], { A: [4] });
+  const decision = ai.decideFirstRound(null, board, allCars, [], dicePool, "A", roundState);
+  assert(decision.command === null, "decideFirstRound : lot à 1 dé → pas de Command");
+  assert(decision.dieValue === 4, "decideFirstRound : lot à 1 dé → le seul dé sert au mouvement");
+  assert(decision.isEntry === true, "decideFirstRound : isEntry bien signalé");
+}
+
+// 2. Lot à 2 dés, au moins un dé 1-2-3 disponible : Nitro avec le
+// PLUS GROS des dés éligibles (1-3), l'autre au mouvement.
+{
+  const board = emptyBoard();
+  const car = createCarOffBoard("A", CAR_SIZE.LARGE);
+  const allCars = [car];
+  const dicePool = { A: [2, 6] }; // lotCount=1 → un seul lot = tout le pool = [2,6]
+  const roundState = createRoundState(["A"], { A: [2, 6] });
+  const decision = ai.decideFirstRound(null, board, allCars, [], dicePool, "A", roundState);
+  assert(decision.command !== null && decision.command.type === "nitro", "decideFirstRound : lot à 2 dés avec un dé 1-3 → Command Nitro");
+  assert(decision.command.dieValue === 2, "decideFirstRound : Nitro reçoit le dé éligible (2, le seul ≤3)");
+  assert(decision.dieValue === 6, "decideFirstRound : l'autre dé (6) part au mouvement");
+}
+
+// 3. Lot à 2 dés, DEUX dés 1-2-3 disponibles : Nitro avec le PLUS
+// GROS des deux (pas le plus petit).
+{
+  const board = emptyBoard();
+  const car = createCarOffBoard("A", CAR_SIZE.LARGE);
+  const allCars = [car];
+  const dicePool = { A: [1, 3] };
+  const roundState = createRoundState(["A"], { A: [1, 3] });
+  const decision = ai.decideFirstRound(null, board, allCars, [], dicePool, "A", roundState);
+  assert(decision.command.type === "nitro" && decision.command.dieValue === 3, "decideFirstRound : Nitro reçoit le PLUS GROS des deux dés éligibles (3, pas 1)");
+  assert(decision.dieValue === 1, "decideFirstRound : l'autre dé (1) part au mouvement");
+}
+
+// 4. Lot à 2 dés, AUCUN dé 1-2-3 disponible : Airstrike avec le PLUS
+// PETIT dé du lot, l'autre au mouvement, chopper placé devant
+// l'adversaire opérable le plus en avant.
+{
+  const board = emptyBoard();
+  const car = createCarOffBoard("A", CAR_SIZE.LARGE);
+  const enemy = createCar("B", CAR_SIZE.SMALL, 10, 2);
+  const allCars = [car, enemy];
+  const dicePool = { A: [4, 6] }; // ni 4 ni 6 n'est ≤3
+  const roundState = createRoundState(["A", "B"], { A: [4, 6] });
+  const decision = ai.decideFirstRound(null, board, allCars, [], dicePool, "A", roundState);
+  assert(decision.command !== null && decision.command.type === "airstrike", "decideFirstRound : lot à 2 dés sans dé 1-3 → Command Airstrike");
+  assert(decision.command.dieValue === 4, "decideFirstRound : Airstrike reçoit le PLUS PETIT dé du lot (4)");
+  assert(decision.dieValue === 6, "decideFirstRound : l'autre dé (6) part au mouvement");
+  assert(decision.command.target.owner === "B", "decideFirstRound : Airstrike cible bien l'adversaire opérable le plus en avant");
+  assert(decision.command.placement !== null, "decideFirstRound : un placement de chopper valide est bien trouvé");
+}
+
+// 5. Véhicule sélectionné = le plus GROS parmi les non-encore-activés
+// (pas le premier du tableau, pas un ordre de position).
+{
+  const board = emptyBoard();
+  const small = createCarOffBoard("A", CAR_SIZE.SMALL);
+  const large = createCarOffBoard("A", CAR_SIZE.LARGE);
+  const medium = createCarOffBoard("A", CAR_SIZE.MEDIUM);
+  const allCars = [small, large, medium]; // ordre volontairement différent de la taille
+  const dicePool = { A: [3, 3, 3] };
+  const roundState = createRoundState(["A"], { A: [3, 3, 3] });
+  const decision = ai.decideFirstRound(null, board, allCars, [], dicePool, "A", roundState);
+  assert(decision.car.size === CAR_SIZE.LARGE, "decideFirstRound : la voiture la plus GROSSE est sélectionnée, indépendamment de l'ordre du tableau");
+}
+
+// 6. decideAssignAndCommand doit router le round 1 vers decideFirstRound,
+// jamais vers decideNoFinishLine (bug confirmé : c'était le cas avant
+// ce correctif — seul progressionState.finishLineTile était testé).
+{
+  const board = emptyBoard();
+  const car = createCarOffBoard("A", CAR_SIZE.LARGE);
+  const allCars = [car];
+  const dicePool = { A: [4] };
+  const roundState = createRoundState(["A"], { A: [4] });
+  const progressionState = { finishLineTile: null };
+  const viaDispatcher = ai.decideAssignAndCommand(progressionState, board, allCars, [], dicePool, "A", roundState);
+  // Même entrée rejouée directement sur decideFirstRound (fonction
+  // pure, déterministe) : doit produire exactement la même décision.
+  const dicePool2 = { A: [4] };
+  const roundState2 = createRoundState(["A"], { A: [4] });
+  const direct = ai.decideFirstRound(progressionState, board, allCars, [], dicePool2, "A", roundState2);
+  assert(viaDispatcher.car.id === direct.car.id, "decideAssignAndCommand : round 1 route bien vers decideFirstRound (même voiture retenue)");
+  assert(viaDispatcher.dieValue === direct.dieValue, "decideAssignAndCommand : round 1 route bien vers decideFirstRound (même dé retenu)");
+  assert(viaDispatcher.destination.col === direct.destination.col && viaDispatcher.destination.row === direct.destination.row, "decideAssignAndCommand : round 1 route bien vers decideFirstRound (même destination)");
 }
 
 console.log(`\n${passed} test(s) passé(s), ${failed} échec(s).`);

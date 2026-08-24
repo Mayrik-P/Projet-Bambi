@@ -1000,23 +1000,47 @@ function pickByLowestArrivalDanger(board, group, allCars) {
 const CAR_SIZE_RANK = { [CAR_SIZE.SMALL]: 1, [CAR_SIZE.MEDIUM]: 2, [CAR_SIZE.LARGE]: 3 };
 
 // Slam en arc arrière, recalculé sur la DESTINATION FINALE (bonus ou
-// non). Renvoie { destination, slamTarget } — slamTarget est null si
-// aucun retargeting n'a eu lieu (on garde alors la destination
-// d'origine).
-function resolveRearArcSlam(board, destination, car, allCars) {
-  const rearArc = getRearArc({ col: destination.col, row: destination.row });
-  const myRank = CAR_SIZE_RANK[car.size];
-
-  const smallerOperableTargets = [];
-  for (const spot of rearArc) {
-    const occupant = getCarAt(allCars, spot.col, spot.row);
-    if (!occupant || occupant.status !== CAR_STATUS.OPERABLE) continue;
-    if (occupant.owner === car.owner) continue; // jamais sa propre équipe
-    if (CAR_SIZE_RANK[occupant.size] < myRank) smallerOperableTargets.push(occupant);
+// non). CORRECTIF (signalé par Mayrik) : une voiture ne se déplace
+// JAMAIS directement vers une case de son arc arrière — seul l'arc
+// AVANT est atteignable par un mouvement réel. Le retargeting ne
+// "téléporte" donc pas vers l'occupant d'une case d'arc arrière
+// prise au hasard sur le plateau ; il cherche, PARMI LES CANDIDATS
+// DÉJÀ CALCULÉS PAR LA REACHABILITY (`candidatePool` — donc chacun
+// atteignable par un vrai chemin avant), celui qui :
+//   - tombe justement sur une case de l'arc arrière de la
+//     destination autrement choisie (`resolved`) ;
+//   - a terminalReason==='slam' (un AUTRE chemin avant, via une
+//     autre trajectoire que celle retenue, atterrit justement sur un
+//     adversaire) ;
+//   - vise un adversaire opérable strictement plus petit.
+// Exactement la même idée que l'ancien mécanisme (chooseGeneralTra-
+// jectory, ci-dessus) qu'on généralise ici pour s'appliquer aussi à
+// la destination finale après un bonus route (en cherchant dans le
+// pool de candidats de l'EXTENSION, pas celui de la base — voir
+// l'appelant, chooseBestTrajectory).
+// Renvoie { destination, slamTarget } — destination est soit
+// `resolved` inchangé (aucun retargeting), soit le candidat de
+// `candidatePool` retenu (avec son propre chemin réel, directement
+// utilisable pour l'exécution).
+function resolveRearArcSlam(candidatePool, resolved, car, allCars) {
+  if (resolved.terminalReason === "slam") {
+    return { destination: resolved, slamTarget: resolved.slamTarget };
   }
 
-  if (smallerOperableTargets.length === 0) {
-    return { destination, slamTarget: null };
+  const rearArc = getRearArc({ col: resolved.col, row: resolved.row });
+  const myRank = CAR_SIZE_RANK[car.size];
+
+  const rearSlamCandidates = [];
+  for (const spot of rearArc) {
+    const cand = candidatePool.find((c) => c.col === spot.col && c.row === spot.row && c.terminalReason === "slam");
+    if (!cand || !cand.slamTarget) continue;
+    if (cand.slamTarget.status !== CAR_STATUS.OPERABLE) continue;
+    if (cand.slamTarget.owner === car.owner) continue; // jamais sa propre équipe
+    if (CAR_SIZE_RANK[cand.slamTarget.size] < myRank) rearSlamCandidates.push(cand);
+  }
+
+  if (rearSlamCandidates.length === 0) {
+    return { destination: resolved, slamTarget: null };
   }
 
   // Priorité au joueur ayant le moins de véhicules opérables ; en
@@ -1028,16 +1052,16 @@ function resolveRearArcSlam(board, destination, car, allCars) {
     if (c.status !== CAR_STATUS.OPERABLE) continue;
     operableCountByOwner.set(c.owner, (operableCountByOwner.get(c.owner) || 0) + 1);
   }
-  let chosen = smallerOperableTargets[0];
-  let chosenCount = operableCountByOwner.get(chosen.owner) || 0;
-  for (const t of smallerOperableTargets.slice(1)) {
-    const count = operableCountByOwner.get(t.owner) || 0;
-    if (count < chosenCount || (count === chosenCount && t.col > chosen.col)) {
-      chosen = t; chosenCount = count;
+  let chosen = rearSlamCandidates[0];
+  let chosenCount = operableCountByOwner.get(chosen.slamTarget.owner) || 0;
+  for (const cand of rearSlamCandidates.slice(1)) {
+    const count = operableCountByOwner.get(cand.slamTarget.owner) || 0;
+    if (count < chosenCount || (count === chosenCount && cand.col > chosen.col)) {
+      chosen = cand; chosenCount = count;
     }
   }
 
-  return { destination: { col: chosen.col, row: chosen.row }, slamTarget: chosen };
+  return { destination: chosen, slamTarget: chosen.slamTarget };
 }
 
 /**
@@ -1063,34 +1087,63 @@ function chooseBestTrajectory(board, car, candidates, roadDieValue, allCars, all
   if (winningGroup.length === 0) {
     // Aucun candidat exploitable du tout (ne devrait arriver que si
     // `candidates` est vide) — rien à faire.
-    return { destination: null, slamTarget: null, roadBonusUsed: false };
+    return { destination: null, slamTarget: null, roadBonusUsed: false, roadBonusPath: null };
   }
 
   // Le bonus n'est envisagé que si le palier retenu est T1 (route
   // pure) ou T2 (route mixte) — cf. arbre : la branche bonus part
   // toujours d'une base "destination route".
   const baseWonOnRoad = winningGroup.every((c) => destinationTerrain(board, c) === TERRAIN.ROAD);
-  let finalGroup = winningGroup;
+  const base = pickByLowestArrivalDanger(board, winningGroup, allCars);
   let roadBonusUsed = false;
+  let roadBonusPath = null;
+  // Pool de candidats dans lequel chercher un éventuel retargeting
+  // Slam en arc arrière — TOUJOURS celui qui a effectivement produit
+  // la destination retenue (base ou extension), jamais un autre :
+  // un candidat d'un AUTRE pool ne serait pas forcément atteignable
+  // avec le budget réellement utilisé pour cette portion du chemin.
+  let candidatePoolForRearArc = candidates;
+  let resolved = base;
 
   if (roadDieValue > 0 && baseWonOnRoad) {
-    const base = pickByLowestArrivalDanger(board, winningGroup, allCars);
     const extensionCar = { ...car, col: base.col, row: base.row };
     const extensionCandidates = computeReachableDestinations(board, extensionCar, roadDieValue, allCars, allChoppers, driftAvailable);
     const bonusTiers = buildBonusTiers(board);
     const bonusGroup = resolveBonusCascade(extensionCandidates, bonusTiers);
     if (bonusGroup !== null) {
-      finalGroup = bonusGroup;
+      resolved = pickByLowestArrivalDanger(board, bonusGroup, allCars);
+      candidatePoolForRearArc = extensionCandidates;
       roadBonusUsed = true;
     }
-    // Sinon : refus explicite, on garde `winningGroup` (déjà dans
-    // finalGroup).
+    // Sinon : refus explicite du bonus, `resolved` reste `base` et
+    // on cherche le Slam arc arrière dans les candidats de base.
   }
 
-  const resolved = pickByLowestArrivalDanger(board, finalGroup, allCars);
-  const { destination, slamTarget } = resolveRearArcSlam(board, resolved, car, allCars);
+  const { destination: finalCell, slamTarget } = resolveRearArcSlam(candidatePoolForRearArc, resolved, car, allCars);
 
-  return { destination, slamTarget, roadBonusUsed };
+  // CORRECTIF (signalé par Mayrik) : le moteur exécute le bonus route
+  // en DEUX appels séparés (base puis extension, cf. moveCarWithProgression
+  // appelé deux fois côté orchestrateur) — `destination.path` doit donc
+  // rester le chemin de BASE uniquement (depuis l'origine réelle),
+  // jamais mélangé avec le segment d'extension. Le segment d'extension
+  // (ou le Slam retrouvé DANS l'extension) part dans `roadBonusPath`,
+  // exactement la convention déjà utilisée par l'ancien
+  // chooseGeneralTrajectory.
+  let destination;
+  if (roadBonusUsed) {
+    // entryRow n'existe que sur les candidats d'ENTRÉE (Section 1,
+    // computeReachableEntryDestinations) — `finalCell` vient ici du
+    // pool d'EXTENSION (toujours computeReachableDestinations,
+    // jamais la variante entrée, cf. commentaire plus haut), donc il
+    // faut le reporter explicitement depuis `base` (undefined et
+    // sans effet si `base` n'est pas une entrée).
+    destination = { ...finalCell, path: base.path, entryRow: base.entryRow };
+    roadBonusPath = finalCell.path;
+  } else {
+    destination = finalCell;
+  }
+
+  return { destination, slamTarget, roadBonusUsed, roadBonusPath };
 }
 
 function partitionIntoBalancedLots(pool, lotCount) {
@@ -1321,6 +1374,114 @@ function chooseLotRecipient(myOperableCars, allCars, progressionState) {
 
 if (typeof module !== "undefined" && module.exports) {
   Object.assign(module.exports, { chooseLotRecipient });
+}
+
+// ===================================================================
+// SECTION 7bis — ORCHESTRATEUR : "Premier round du jeu" (étape 3)
+// ===================================================================
+// Traduction directe de la branche dédiée au round 1 (racine de
+// l'arbre : "Est-ce le premier round du jeu ?" → OUI), validée avec
+// Mayrik le 24/08/2026 après mise à jour du document — ENTIÈREMENT
+// autonome, ne recoupe aucune autre branche (ni le sous-arbre
+// Command/Lot de decideNoFinishLine, ni la Finish Line Rush).
+//
+// CORRECTIF IMPORTANT trouvé en écrivant cette étape : le round 1
+// passait auparavant par `decideAssignAndCommand` → `decideNoFinishLine`
+// (seul critère de branchement testé : présence de la Finish Line),
+// donc par le sous-arbre Command/Lot bien plus riche prévu pour les
+// rounds SUIVANTS (évaluation Repair/Nitro/Drift/Airstrike selon la
+// situation) — jamais par cette branche round-1 dédiée, bien plus
+// simple. Historiquement la source de bugs la plus concrète pointée
+// par Mayrik dans le plan ; cause racine identifiée : `decideAssign-
+// AndCommand` ne testait jamais `roundState.roundNumber === 1`.
+//
+// Séquence (une seule Command possible : Nitro OU Airstrike, jamais
+// les deux, jamais Repair/Drift qui n'ont pas de sens pour un
+// véhicule qui n'est pas encore entré) :
+//   1. Lots de dés équilibrés par somme, un par véhicule opérable pas
+//      encore activé ce round (réutilise partitionIntoBalancedLots,
+//      Section 4, déjà conçue pour ce cas précis).
+//   2. Lot à la plus forte somme → véhicule opérable non encore
+//      activé le PLUS GROS (par taille — pas par position, ambigu
+//      pour des véhicules tous hors plateau ; confirmé par Mayrik).
+//   3. Lot à 1 dé : simple entrée, pas de Command.
+//      Lot à 2 dés : un des deux sert TOUJOURS au mouvement ; l'autre
+//      sert à une Command —
+//        - si au moins un des deux dés vaut 1, 2 ou 3 : Nitro avec le
+//          PLUS GROS des dés éligibles (1-3), l'autre au mouvement.
+//        - sinon (aucun des deux ne vaut 1-3, donc Nitro impossible) :
+//          Airstrike avec le PLUS PETIT dé du lot, l'autre au
+//          mouvement — chopper placé juste devant le véhicule adverse
+//          opérable le plus en avant de la course.
+//   4. Recherche de la meilleure trajectoire (même cascade unifiée
+//      que partout ailleurs, Section 3C) avec le dé de mouvement
+//      retenu (+ bonus Nitro s'il y a lieu), puis mouvement.
+function decideFirstRound(progressionState, board, allCars, allChoppers, dicePool, playerName, roundState) {
+  const myPool = dicePool[playerName] || [];
+  if (myPool.length === 0) return null;
+
+  const myOperableCars = allCars.filter((c) => c.owner === playerName && c.status === CAR_STATUS.OPERABLE);
+  const notYetActivated = myOperableCars.filter((c) => !c.movedThisRound);
+  if (notYetActivated.length === 0) return null;
+
+  const lots = partitionIntoBalancedLots(myPool, notYetActivated.length);
+  const lotSums = lots.map((l) => l.reduce((s, v) => s + v, 0));
+  const lot = lots[lotSums.indexOf(Math.max(...lotSums))];
+
+  // Véhicule opérable non encore activé le plus GROS (jamais d'égalité
+  // possible : chaque équipe a exactement 1 Small/1 Medium/1 Large).
+  const car = notYetActivated.reduce((best, c) => (CAR_SIZE_RANK[c.size] > CAR_SIZE_RANK[best.size] ? c : best));
+
+  let command = null;
+  let movementDieValue;
+
+  if (lot.length === 2) {
+    const nitroEligible = lot.filter((v) => v >= 1 && v <= 3);
+    if (nitroEligible.length > 0) {
+      const nitroDie = Math.max(...nitroEligible);
+      const nitroIndex = lot.indexOf(nitroDie);
+      movementDieValue = lot[1 - nitroIndex];
+      command = { type: "nitro", dieValue: nitroDie };
+    } else {
+      const airstrikeDie = Math.min(...lot);
+      const airstrikeIndex = lot.indexOf(airstrikeDie);
+      const otherDie = lot[1 - airstrikeIndex];
+      const enemiesOperable = allCars.filter((c) => c.owner !== playerName && c.status === CAR_STATUS.OPERABLE);
+      let placement = null, target = null;
+      if (enemiesOperable.length > 0) {
+        target = findFrontmostCar(enemiesOperable);
+        placement = findAiAirstrikePlacement(board, target, allCars, allChoppers);
+      }
+      if (placement) {
+        command = { type: "airstrike", dieValue: airstrikeDie, target, placement };
+        movementDieValue = otherDie;
+      } else {
+        // Aucun ennemi opérable ou aucun placement possible : rien
+        // dans l'arbre ne couvre ce cas — fallback défensif, jamais
+        // laisser un dé du lot inutilisé. Pas de Command, le plus
+        // gros des deux dés part au mouvement (comme un lot à 1 dé
+        // aurait utilisé son seul dé).
+        movementDieValue = Math.max(...lot);
+      }
+    }
+  } else {
+    movementDieValue = lot[0];
+  }
+
+  const effectiveDieValue = command && command.type === "nitro" ? movementDieValue + command.dieValue : movementDieValue;
+  const entryCandidates = computeReachableEntryDestinations(board, effectiveDieValue, allCars, allChoppers, false);
+  const traj = chooseBestTrajectory(board, car, entryCandidates, roundState.roadDie || 0, allCars, allChoppers, false);
+
+  return {
+    car,
+    dieValue: movementDieValue,
+    command,
+    destination: traj.destination,
+    isEntry: true,
+    isCoast: false,
+    slam: !!traj.slamTarget,
+    roadBonusPath: traj.roadBonusPath
+  };
 }
 
 // ===================================================================
@@ -1646,6 +1807,14 @@ if (typeof module !== "undefined" && module.exports) {
 // SECTION 10 — POINT D'ENTRÉE UNIQUE
 // ===================================================================
 function decideAssignAndCommand(progressionState, board, allCars, allChoppers, dicePool, playerName, roundState) {
+  // CORRECTIF (étape 3) : le round 1 est une branche dédiée, testée
+  // AVANT tout — auparavant seul progressionState.finishLineTile
+  // était testé, donc le round 1 tombait dans decideNoFinishLine
+  // (le sous-arbre Command/Lot bien plus riche prévu pour les rounds
+  // SUIVANTS), jamais dans sa propre branche, bien plus simple.
+  if (roundState.roundNumber === 1) {
+    return decideFirstRound(progressionState, board, allCars, allChoppers, dicePool, playerName, roundState);
+  }
   if (progressionState.finishLineTile) {
     return decideFinishLineRush(progressionState, board, allCars, allChoppers, dicePool, playerName, roundState);
   }
@@ -1653,5 +1822,5 @@ function decideAssignAndCommand(progressionState, board, allCars, allChoppers, d
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  Object.assign(module.exports, { decideAssignAndCommand });
+  Object.assign(module.exports, { decideAssignAndCommand, decideFirstRound });
 }
