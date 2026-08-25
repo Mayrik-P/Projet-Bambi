@@ -213,14 +213,29 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
 // SECTION 4bis — decideNitroOrAirstrikeForLot (étape 5)
 // -----------------------------------------------------------------
 {
+  const board = emptyBoard();
   const progressionState = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 } };
 
   // Nitro : voiture sur la tuile Rear, lot [2,5] -> mouvement=5 (max),
-  // reste [2] -> Nitro éligible (dé ≤3).
+  // reste [2] -> Nitro éligible (dé ≤3) ET la trajectoire avec Nitro
+  // va bien plus loin (plateau ouvert) -> Nitro conservé.
   const carOnRear = createCar("A", CAR_SIZE.MEDIUM, 5, 2);
-  const r1 = ai.decideNitroOrAirstrikeForLot(carOnRear, progressionState, [carOnRear], [2, 5], 5, [carOnRear], "A", false);
+  const r1 = ai.decideNitroOrAirstrikeForLot(carOnRear, progressionState, [carOnRear], [2, 5], 5, [carOnRear], "A", false, board, [], 0);
   assert(r1.command && r1.command.type === "nitro" && r1.command.dieValue === 2 && r1.movementDie === 5,
     "decideNitroOrAirstrikeForLot : Nitro choisi (dé le plus gros ≤3), mouvement inchangé");
+
+  // CORRECTIF (bug observé en partie réelle par Mayrik) : même
+  // position/dés éligibles, mais un mur infranchissable juste après
+  // plafonne le mouvement à la même case avec ou sans Nitro (sortie
+  // de plateau au même endroit) -> Command abandonnée, mouvement
+  // seul, PAS de repli vers Airstrike (impasse terminale, même si un
+  // adversaire serait par ailleurs éligible).
+  const boardWall = emptyBoard(24, 3);
+  for (let r = 0; r < 3; r++) { boardWall.grid[r][8].terrain = TERRAIN.IMPASSABLE; }
+  const carOnRearWall = createCar("A", CAR_SIZE.MEDIUM, 5, 1);
+  const r1b = ai.decideNitroOrAirstrikeForLot(carOnRearWall, progressionState, [carOnRearWall], [2, 5], 5, [carOnRearWall], "A", false, boardWall, [], 0);
+  assert(r1b.command === null && r1b.movementDie === 5,
+    "decideNitroOrAirstrikeForLot : Nitro abandonné si la trajectoire n'avance pas plus loin (mur), pas de repli Airstrike");
 
   // Airstrike IMMÉDIAT : adversaire en tête ET un de ses véhicules
   // sur la tuile Lead (col 16-23) -> Airstrike même si PAS le
@@ -229,20 +244,20 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
   const myOther = createCar("A", CAR_SIZE.LARGE, 10, 2); // plus en arrière que carFront -> c'est LUI le "rearmost", pas carFront
   const enemyLeaderOnLead = createCar("B", CAR_SIZE.SMALL, 18, 3); // sur la tuile Lead (16-23), et devant tout le monde -> en tête de la course
   const allCars2 = [carFront, myOther, enemyLeaderOnLead];
-  const r2 = ai.decideNitroOrAirstrikeForLot(carFront, progressionState, [carFront, myOther], [1, 4], 4, allCars2, "A", false);
+  const r2 = ai.decideNitroOrAirstrikeForLot(carFront, progressionState, [carFront, myOther], [1, 4], 4, allCars2, "A", false, board, [], 0);
   assert(r2.command && r2.command.type === "airstrike-pending" && r2.command.target === enemyLeaderOnLead && r2.command.dieValue === 1 && r2.movementDie === 4,
     "decideNitroOrAirstrikeForLot : Airstrike immédiat si adversaire en tête ET sur la tuile Lead, sans attendre le dernier tour");
 
   // Airstrike au DERNIER TOUR (adversaire en tête, mais PAS sur Lead)
   const enemyLeaderOutsideLead = createCar("B", CAR_SIZE.SMALL, 24, 3); // en tête de la course, mais au-delà de la tuile Lead (16-23)
   const allCars3 = [carFront, myOther, enemyLeaderOutsideLead];
-  const r3 = ai.decideNitroOrAirstrikeForLot(carFront, progressionState, [carFront, myOther], [1, 4], 4, allCars3, "A", true);
+  const r3 = ai.decideNitroOrAirstrikeForLot(carFront, progressionState, [carFront, myOther], [1, 4], 4, allCars3, "A", true, board, [], 0);
   assert(r3.command && r3.command.type === "airstrike-pending" && r3.command.target === enemyLeaderOutsideLead,
     "decideNitroOrAirstrikeForLot : Airstrike au dernier tour du round, même sans adversaire sur Lead");
 
   // Report : ni Nitro, ni adversaire sur Lead, ni dernier tour ->
   // petit dé au mouvement, gros dé rendu, pas de Command.
-  const r4 = ai.decideNitroOrAirstrikeForLot(carFront, progressionState, [carFront, myOther], [1, 4], 4, allCars3, "A", false);
+  const r4 = ai.decideNitroOrAirstrikeForLot(carFront, progressionState, [carFront, myOther], [1, 4], 4, allCars3, "A", false, board, [], 0);
   assert(r4.command === null && r4.movementDie === 1,
     "decideNitroOrAirstrikeForLot : report (petit dé au mouvement, gros dé rendu) si aucune condition Airstrike n'est remplie");
 }
@@ -1361,8 +1376,10 @@ function mkCandidate(col, row, opts = {}) {
   assert(decision.dieValue === 6, "decideFirstRound : l'autre dé (6) part au mouvement");
 }
 
-// 3. Lot à 2 dés, DEUX dés 1-2-3 disponibles : Nitro avec le PLUS
-// GROS des deux (pas le plus petit).
+// 3. Lot à 2 dés, DEUX dés 1-2-3 disponibles : Nitro reçoit le PLUS
+// PETIT (coût minimal testé en premier — CORRECTIF arbre repensé par
+// Mayrik, voir plus bas), et cette trajectoire va bien plus loin
+// que le seul gros dé (plateau ouvert) → Nitro conservé.
 {
   const board = emptyBoard();
   const car = createCarOffBoard("A", CAR_SIZE.LARGE);
@@ -1370,8 +1387,34 @@ function mkCandidate(col, row, opts = {}) {
   const dicePool = { A: [1, 3] };
   const roundState = createRoundState(["A"], { A: [1, 3] });
   const decision = ai.decideFirstRound(null, board, allCars, [], dicePool, "A", roundState);
-  assert(decision.command.type === "nitro" && decision.command.dieValue === 3, "decideFirstRound : Nitro reçoit le PLUS GROS des deux dés éligibles (3, pas 1)");
-  assert(decision.dieValue === 1, "decideFirstRound : l'autre dé (1) part au mouvement");
+  assert(decision.command.type === "nitro" && decision.command.dieValue === 1, "decideFirstRound : Nitro reçoit le PLUS PETIT des deux dés éligibles (1, pas 3)");
+  assert(decision.dieValue === 3, "decideFirstRound : l'autre dé (3) part au mouvement");
+}
+
+// 3bis. CORRECTIF (bug observé en partie réelle par Mayrik : un
+// véhicule gardait un Nitro avec un dé 1 alors que le tour se
+// terminait dans de la boue, gâchant la Command) : si la trajectoire
+// avec Nitro ne va PAS plus loin que le seul gros dé du lot (ex.
+// terrain qui plafonne le mouvement), le Nitro est abandonné —
+// aucune Command, le plus gros dé du lot part seul au mouvement, le
+// petit dé n'est jamais consommé (retourne disponible).
+{
+  const board = emptyBoard();
+  // Boue sur TOUTE la largeur des colonnes 3-4 (toutes rangées) : que
+  // le mouvement dispose de 3 ou de 4 (3+Nitro 1), aucune route ne
+  // permet d'aller plus loin que la colonne 2 — le Nitro ne sert à
+  // rien ici, quelle que soit la rangée d'entrée choisie.
+  for (let r = 0; r < 6; r++) {
+    board.grid[r][3].terrain = TERRAIN.MUD;
+    board.grid[r][4].terrain = TERRAIN.MUD;
+  }
+  const car = createCarOffBoard("A", CAR_SIZE.LARGE);
+  const allCars = [car];
+  const dicePool = { A: [1, 3] };
+  const roundState = createRoundState(["A"], { A: [1, 3] });
+  const decision = ai.decideFirstRound(null, board, allCars, [], dicePool, "A", roundState);
+  assert(decision.command === null, "decideFirstRound : Nitro abandonné si la trajectoire n'avance pas plus loin (boue)");
+  assert(decision.dieValue === 3, "decideFirstRound : le plus gros dé du lot (3) part seul au mouvement, aucune Command");
 }
 
 // 4. Lot à 2 dés, AUCUN dé 1-2-3 disponible : Airstrike avec le PLUS

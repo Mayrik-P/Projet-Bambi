@@ -1369,8 +1369,19 @@ if (typeof module !== "undefined" && module.exports) {
 // ce tour : "Cette voiture est-elle sur la tuile Rear OU est-elle la
 // plus en arrière de l'équipe, ET un dé entre 1 et 3 est-il
 // disponible dans le lot ?"
-//   OUI -> Nitro (dé le plus gros ≤3 en Command, l'autre dé du lot
-//          au mouvement — déjà le dé de mouvement par défaut).
+//   OUI -> Nitro (dé le plus GROS ≤3 en Command — confirmé volontairement
+//          différent du plus petit utilisé au 1er round, le contexte
+//          n'est pas le même). CORRECTIF (bug observé en partie réelle
+//          par Mayrik : une Command Nitro gardée alors que le terrain,
+//          ex. la boue, plafonnait le mouvement de toute façon — Nitro
+//          gâché pour rien) : on vérifie désormais explicitement que
+//          la trajectoire obtenue va réellement plus loin vers
+//          l'arrivée qu'avec le seul dé de mouvement, SANS Nitro. Si
+//          non, abandon complet (pas de repli vers Airstrike — retour
+//          direct à un mouvement simple, exactement comme si la
+//          position n'était pas éligible au Nitro n'aurait PAS été le
+//          cas : ce chemin est une impasse terminale, pas une chute
+//          dans la suite de la cascade).
 //   NON -> "Un adversaire est-il premier de la course ?" ->
 //          "Un véhicule de CET adversaire est-il sur la tuile de
 //          Lead ?" -> OUI : Airstrike IMMÉDIAT (le "dernier tour du
@@ -1382,8 +1393,10 @@ if (typeof module !== "undefined" && module.exports) {
 //          petit dé sert au mouvement, aucune Command ce tour-ci.
 // Renvoie toujours movementDie ET deferMovementDie (le dé à utiliser
 // si l'appelant doit finalement retomber sur le report — cas où le
-// placement Airstrike s'avère impossible faute de case valide).
-function decideNitroOrAirstrikeForLot(car, progressionState, myOperableCars, biggestLot, movementDie, allCars, playerName, isLastTurnOfRound) {
+// placement Airstrike s'avère impossible faute de case valide), ainsi
+// qu'un precomputedTraj optionnel (évite à l'appelant de recalculer
+// la trajectoire déjà obtenue lors du test Nitro "aide-t-il ?").
+function decideNitroOrAirstrikeForLot(car, progressionState, myOperableCars, biggestLot, movementDie, allCars, playerName, isLastTurnOfRound, board, allChoppers, roadDieValue) {
   const remainingDiceForCommand = poolMinusOne(biggestLot, movementDie);
   if (remainingDiceForCommand.length === 0) {
     return { command: null, movementDie, deferMovementDie: movementDie };
@@ -1394,7 +1407,22 @@ function decideNitroOrAirstrikeForLot(car, progressionState, myOperableCars, big
   const eligiblePosition = isOnRearTile(car, progressionState) || isRearmostOfMyTeam;
   const nitroDice = remainingDiceForCommand.filter((v) => v >= 1 && v <= 3);
   if (eligiblePosition && nitroDice.length > 0) {
-    return { command: { type: "nitro", dieValue: Math.max(...nitroDice) }, movementDie, deferMovementDie: movementDie };
+    const nitroDie = Math.max(...nitroDice);
+    const withNitroTraj = car.col === null
+      ? chooseEntryTrajectory(board, car, movementDie + nitroDie, allCars, allChoppers, false, roadDieValue || 0)
+      : chooseGeneralTrajectory(board, car, movementDie + nitroDie, allCars, allChoppers, false, roadDieValue || 0);
+    const withoutNitroTraj = car.col === null
+      ? chooseEntryTrajectory(board, car, movementDie, allCars, allChoppers, false, roadDieValue || 0)
+      : chooseGeneralTrajectory(board, car, movementDie, allCars, allChoppers, false, roadDieValue || 0);
+
+    if (withNitroTraj.destination.col > withoutNitroTraj.destination.col) {
+      return { command: { type: "nitro", dieValue: nitroDie }, movementDie, deferMovementDie: movementDie, precomputedTraj: withNitroTraj };
+    }
+    // "Attribution du plus gros dé du lot au mouvement et remise du
+    // plus petit dans le pôle de dé disponible" — impasse terminale :
+    // PAS de repli vers Airstrike ci-dessous, on ressort directement
+    // avec un mouvement simple (le petit dé n'est jamais consommé).
+    return { command: null, movementDie, deferMovementDie: movementDie, precomputedTraj: withoutNitroTraj };
   }
 
   // --- Airstrike (immédiat) ou report ---
@@ -1553,14 +1581,45 @@ function decideFirstRound(progressionState, board, allCars, allChoppers, dicePoo
 
   let command = null;
   let movementDieValue;
+  let precomputedTraj = null; // évite de recalculer la trajectoire déjà obtenue lors du test Nitro ci-dessous
 
   if (lot.length === 2) {
     const nitroEligible = lot.filter((v) => v >= 1 && v <= 3);
     if (nitroEligible.length > 0) {
-      const nitroDie = Math.max(...nitroEligible);
+      // CORRECTIF (arbre repensé par Mayrik, après un bug observé en
+      // partie réelle : un véhicule gardait une Command Nitro avec un
+      // dé 1 alors que le tour se terminait dans de la boue — le
+      // mouvement n'allait pas plus loin, donc le Nitro était gâché
+      // pour rien). On tente désormais le PLUS PETIT dé 1-2-3 en
+      // premier (coût minimal) et on vérifie EXPLICITEMENT que la
+      // trajectoire obtenue va réellement plus loin vers la ligne
+      // d'arrivée qu'avec le seul gros dé du lot, SANS Nitro — sinon
+      // on abandonne complètement la Command, le petit dé retournant
+      // disponible dans le pôle plutôt que d'être gâché.
+      const nitroDie = Math.min(...nitroEligible);
       const nitroIndex = lot.indexOf(nitroDie);
-      movementDieValue = lot[1 - nitroIndex];
-      command = { type: "nitro", dieValue: nitroDie };
+      const baseMovementDie = lot[1 - nitroIndex];
+      const withNitroValue = baseMovementDie + nitroDie;
+
+      const withNitroCandidates = computeReachableEntryDestinations(board, withNitroValue, allCars, allChoppers, false);
+      const withNitroTraj = chooseBestTrajectory(board, car, withNitroCandidates, roundState.roadDie || 0, allCars, allChoppers, false);
+
+      const withoutNitroCandidates = computeReachableEntryDestinations(board, baseMovementDie, allCars, allChoppers, false);
+      const withoutNitroTraj = chooseBestTrajectory(board, car, withoutNitroCandidates, roundState.roadDie || 0, allCars, allChoppers, false);
+
+      if (withNitroTraj.destination.col > withoutNitroTraj.destination.col) {
+        movementDieValue = baseMovementDie;
+        command = { type: "nitro", dieValue: nitroDie };
+        precomputedTraj = withNitroTraj;
+      } else {
+        // "Attribution du plus gros dé du lot au mouvement et remise
+        // du plus petit dans le pôle de dé disponible" — aucune
+        // Command, le petit dé n'est simplement jamais consommé (rien
+        // à faire côté pool réel : il n'a jamais été retiré).
+        movementDieValue = Math.max(...lot);
+        command = null;
+        precomputedTraj = null; // recalculée ci-dessous avec movementDieValue seul, cohérent avec le flux normal
+      }
     } else {
       const airstrikeDie = Math.min(...lot);
       const airstrikeIndex = lot.indexOf(airstrikeDie);
@@ -1588,8 +1647,7 @@ function decideFirstRound(progressionState, board, allCars, allChoppers, dicePoo
   }
 
   const effectiveDieValue = command && command.type === "nitro" ? movementDieValue + command.dieValue : movementDieValue;
-  const entryCandidates = computeReachableEntryDestinations(board, effectiveDieValue, allCars, allChoppers, false);
-  const traj = chooseBestTrajectory(board, car, entryCandidates, roundState.roadDie || 0, allCars, allChoppers, false);
+  const traj = precomputedTraj || chooseBestTrajectory(board, car, computeReachableEntryDestinations(board, effectiveDieValue, allCars, allChoppers, false), roundState.roadDie || 0, allCars, allChoppers, false);
 
   return {
     car,
@@ -1743,6 +1801,7 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
   let command = null;
   let actualMovementDie = movementDie;
   let driftBlockHandledThisTurn = false;
+  let precomputedNitroTraj = null; // évite de recalculer la trajectoire déjà obtenue lors du test Nitro "aide-t-il ?"
 
   if (car.col !== null) {
     // Le pré-check Drift ne s'applique qu'aux voitures déjà sur le
@@ -1783,7 +1842,7 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
       command = { type: "repair", dieValue: 6, target };
     } else {
       const isLastTurnOfRound = ((roundState.turnsThisRound && roundState.turnsThisRound[playerName]) || 0) === 2;
-      const result = decideNitroOrAirstrikeForLot(car, progressionState, myOperableCars, biggestLot, actualMovementDie, allCars, playerName, isLastTurnOfRound);
+      const result = decideNitroOrAirstrikeForLot(car, progressionState, myOperableCars, biggestLot, actualMovementDie, allCars, playerName, isLastTurnOfRound, board, allChoppers, roundState.roadDie);
       if (result.command && result.command.type === "airstrike-pending") {
         const placement = findAiAirstrikePlacement(board, result.command.target, allCars, allChoppers);
         if (placement) {
@@ -1800,6 +1859,7 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
         command = result.command;
         actualMovementDie = result.movementDie;
       }
+      precomputedNitroTraj = result.precomputedTraj || null;
     }
   }
   const movementDieFinal = actualMovementDie;
@@ -1808,7 +1868,11 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
   if (command && command.type === "nitro") effectiveDieValue += command.dieValue;
 
   let destination, slam, roadBonusPath;
-  if (car.col === null) {
+  if (precomputedNitroTraj) {
+    destination = precomputedNitroTraj.destination;
+    slam = precomputedNitroTraj.slam;
+    roadBonusPath = precomputedNitroTraj.roadBonusPath;
+  } else if (car.col === null) {
     // Entrée en jeu (p.9) — CORRECTIF : auparavant codée en dur sur
     // la seule case d'entrée (stepsUsed:0, sans suite de trajectoire),
     // ce qui faisait perdre tout mouvement restant à chaque entrée.
