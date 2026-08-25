@@ -180,18 +180,73 @@ siennes.
       instrumenté temporaire, retiré après coup) : 922 activations sur
       5937 décisions (~15,5%) sur 100 parties dédiées — donc bien
       exercée par le self-play, pas un chemin mort.
-- [ ] **5. Branche Lot + Command (pas de Finish Line)** — la plus
-      grosse (Repair/Nitro/Drift/Airstrike), mais conceptuellement
-      déjà correcte et confirmée par l'audit — portage rigoureux plus
-      que redécouverte.
+- [x] **5. Branche Lot + Command (pas de Finish Line)** — CONTRAIREMENT
+      à l'attente initiale ("conceptuellement déjà correcte, portage
+      rigoureux plus que redécouverte"), la relecture détaillée du PDF
+      a révélé que Drift seul était déjà fidèle à l'arbre ; Repair et
+      Nitro avaient des écarts réels, et l'Airstrike de repli (quand
+      Nitro n'est pas éligible) était ENTIÈREMENT ABSENTE du code.
+      **Écart 1 — Repair** : l'ancien code cherchait un 6 dans les dés
+      RESTANTS DU LOT COURANT (`dicePoolRemaining.includes(6)`),
+      évalué après construction des lots. Le document réserve en fait
+      le 6 au niveau du POOL ENTIER, AVANT tout partitionnement
+      (`Il y a-t-il un véhicule inopérable dans l'équipe ET un 6
+      disponible ?` → `Un dé 6 est sorti virtuellement du pôle de dés
+      disponible`) : ce 6 n'entre PAS dans le partitionnement en lots,
+      et alimente Repair indépendamment de la taille du lot du
+      véhicule activé (contrairement à Nitro/Airstrike, qui ont
+      besoin d'un deuxième dé DANS le lot). Nouvelles fonctions
+      `reserveRepairSix` (check pool entier, avant les lots) et
+      `decideRepairTarget` (cible : inopérable en tête de course,
+      sinon le plus en arrière — logique de ciblage inchangée).
+      **Écart 2 — Airstrike de repli, absente** : quand Nitro n'est
+      pas éligible (véhicule ni sur Rear ni le plus en arrière, ou
+      aucun dé 1-3 disponible), l'ancien code retournait simplement
+      `null` (aucune Command). L'arbre prévoit en réalité toute une
+      cascade : `Un adversaire est-il premier de la course ?` →
+      `Un véhicule de CET adversaire est-il sur la tuile de Lead ?` →
+      OUI : Airstrike IMMÉDIAT (le "dernier tour du round ?" n'est
+      même pas regardé) ; NON → `Dernier tour du round ?` → OUI :
+      Airstrike quand même (petit dé en Command, gros dé au
+      mouvement) ; NON : **report** — le gros dé retourne
+      (virtuellement) dans le pool, seul le petit dé sert au
+      mouvement, aucune Command ce tour-ci. Nouvelle fonction
+      `decideNitroOrAirstrikeForLot` (Nitro → Airstrike immédiat via
+      Lead → Airstrike dernier tour → report), nouveaux helpers
+      `isOnLeadTile` et `isLeadingOpponentOnLeadTile`.
+      `decideCommandForActivatedCar` (ancienne fonction, signature
+      basée sur `dicePoolRemaining`) est retirée, remplacée par ces
+      briques plus fidèles à l'arbre — câblées dans
+      `decideNoFinishLine` : réservation du 6 avant
+      `partitionIntoBalancedLots`, puis après le pré-check Drift
+      (inchangé) : Repair si réservé, sinon la cascade Nitro/Airstrike
+      /report.
+      16 tests dédiés ajoutés (168→184 tests IA) : `reserveRepairSix`
+      et `decideRepairTarget` (7), `decideNitroOrAirstrikeForLot`
+      seul — Nitro/Airstrike-Lead-immédiat/Airstrike-dernier-tour
+      /report (4), intégration complète via `decideNoFinishLine` —
+      Repair/Airstrike-dernier-tour/report (5). 212/212 moteur
+      inchangés.
+      Self-play 1000 parties/40670 décisions (800 sans
+      instrumentation + 200 avec, comptage temporaire retiré après
+      coup) : 0 crash, 0 décision illégale, **0 état incohérent** (pas
+      même l'artefact Blast Off/Finish Line habituel sur cet
+      échantillon). Les 4 sous-branches vérifiées effectivement
+      empruntées en conditions réelles sur 200 parties dédiées
+      (11779 décisions) : Repair 164, Nitro 2644, Airstrike 463,
+      Report 2564 — aucune n'est un chemin mort.
 - [ ] **6. Branche Finish Line Rush** — dépend de la trajectoire
       (étape 1) et réutilise les concepts de Command de l'étape 5.
+      À noter pour la relecture de cette étape : la branche "commande
+      déjà jouée" équivalente y a sa PROPRE version (nœud distinct
+      repéré lors de la lecture du PDF pour l'étape 5, jamais détaillé
+      — à relire en entier avant de coder, ne rien supposer identique
+      à l'étape 4).
 - [ ] **7. Validation globale** — self-play à grande échelle toutes
       branches confondues (`tools/generate-full-game.js` ou
       équivalent), revue qualitative au viewer si besoin.
 
 ## État courant
 
-Étapes 0, 1, 2, 3 et 4 terminées (168/168 tests IA, 212/212 tests moteur).
-Prochaine action : étape 5 (branche "Lot + Command", pas de Finish
-Line).
+Étapes 0, 1, 2, 3, 4 et 5 terminées (184/184 tests IA, 212/212 tests
+moteur). Prochaine action : étape 6 (branche Finish Line Rush).
