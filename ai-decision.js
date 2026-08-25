@@ -1193,6 +1193,11 @@ if (typeof module !== "undefined" && module.exports) {
 function isOnRearTile(car, progressionState) {
   return car.col < progressionState.rearTile.cols;
 }
+function isOnLeadTile(car, progressionState) {
+  const leadStart = progressionState.rearTile.cols + progressionState.middleTile.cols;
+  const leadEnd = leadStart + progressionState.leadTile.cols;
+  return car.col !== null && car.col >= leadStart && car.col < leadEnd;
+}
 function frontmostEligibleCar(cars) {
   return cars.reduce((best, c) => (c.col > best.col ? c : best));
 }
@@ -1206,13 +1211,31 @@ function isAnyOpponentLeading(myOwner, allCars) {
   const leader = findFrontmostCar(alive);
   return leader.owner !== myOwner;
 }
+/**
+ * "Un adversaire est-il premier de la course ? -> Un véhicule de CET
+ * adversaire est-il sur la tuile de Lead ?" (étape 5) — l'équipe
+ * adverse concernée est celle du LEADER de la course (pas n'importe
+ * quel adversaire), et on regarde si UN de ses véhicules (pas
+ * forcément le leader lui-même) est sur la tuile Lead.
+ */
+function isLeadingOpponentOnLeadTile(myOwner, allCars, progressionState) {
+  if (!progressionState || !progressionState.middleTile || !progressionState.leadTile) return false;
+  const alive = allCars.filter((c) => c.status !== CAR_STATUS.ELIMINATED);
+  if (alive.length === 0) return false;
+  const leader = findFrontmostCar(alive);
+  if (leader.owner === myOwner) return false;
+  const leaderTeamCars = allCars.filter((c) => c.owner === leader.owner && c.status !== CAR_STATUS.ELIMINATED);
+  return leaderTeamCars.some((c) => isOnLeadTile(c, progressionState));
+}
 
 if (typeof module !== "undefined" && module.exports) {
   Object.assign(module.exports, {
     isOnRearTile,
+    isOnLeadTile,
     frontmostEligibleCar,
     rearmostEligibleCar,
-    isAnyOpponentLeading
+    isAnyOpponentLeading,
+    isLeadingOpponentOnLeadTile
   });
 }
 
@@ -1293,49 +1316,109 @@ if (typeof module !== "undefined" && module.exports) {
 }
 
 // ===================================================================
-// SECTION 6 — DÉCISION DE COMMAND (branches 1/2/3 véhicules opérables)
+// SECTION 6 — COMMAND POUR UNE VOITURE ACTIVÉE (Repair, réservation
+// du 6 — étape 5)
 // ===================================================================
-// Traduction directe des sous-arbres de Mayrik pour chaque branche.
 // GARDE-FOU : une seule Command par round, jamais deux (règle
-// absolue du jeu, rulebook p.8 "ONCE PER ROUND", confirmé). Le pool
-// de dés du round reste toujours fixé à 4 quel que soit le nombre de
-// véhicules opérables restants, donc un simple check "dés restants >
-// véhicules restants" ne suffirait pas à garantir la limite si
-// l'équipe est réduite — le flag explicite (`commandUsedThisRound`)
-// est nécessaire. L'arbre a depuis été mis à jour par Mayrik pour
-// remplacer son ancien nœud dice-math par ce même check explicite.
+// absolue du jeu, rulebook p.8 "ONCE PER ROUND", confirmé) — géré
+// par `commandUsedThisRound`, testé par l'appelant (étape 4).
 //
-// candidateCars = liste des voitures opérables ET pas encore activées
-// ce round, pour CE joueur (déjà filtrée par l'appelant).
-function decideCommandForActivatedCar(car, progressionState, myInoperableCars, myOperableCars, dicePoolRemaining, allCars, myOwner) {
-  if (myInoperableCars.length > 0 && dicePoolRemaining.includes(6)) {
-    // "Un des véhicules Inopérable de l'équipe est-il en tête de
-    // course ?" -> Repair celui en tête, sinon le plus en arrière
-    // (négation directe, confirmée par l'arbre).
-    const alive = myInoperableCars.filter((c) => c.status !== CAR_STATUS.ELIMINATED);
-    if (alive.length > 0) {
-      const allAliveOfMine = [...myOperableCars, ...alive].filter((c) => c.status !== CAR_STATUS.ELIMINATED);
-      const myFrontmost = frontmostEligibleCar(allAliveOfMine);
-      const anInoperableIsLeading = alive.some((c) => c === myFrontmost);
-      const target = anInoperableIsLeading ? myFrontmost : rearmostEligibleCar(alive);
-      return { type: "repair", dieValue: 6, target };
-    }
-  }
+// CORRECTIF (étape 5, en relisant l'arbre en détail) : la version
+// précédente déclenchait Repair dès qu'un 6 traînait dans les dés
+// RESTANTS DU LOT COURANT (dicePoolRemaining) — ce n'est PAS ce que
+// dit le document source. Le document réserve le 6 AU NIVEAU DU
+// POOL ENTIER, AVANT même la construction des lots (voir
+// reserveRepairSix, appelée par decideNoFinishLine) : "Il y a-t-il un
+// véhicule inopérable dans l'équipe ET un 6 disponible ?" -> le 6 est
+// mis de côté, n'entre PAS dans le partitionnement en lots, et est
+// ensuite affecté au Repair via ce module — indépendamment de la
+// taille du lot du véhicule activé ce tour (contrairement à
+// Nitro/Airstrike, qui eux ont besoin d'un deuxième dé DANS le lot).
+/** "Un des véhicules Inopérable de l'équipe est-il en tête de course ?" -> Repair celui en tête, sinon le plus en arrière. */
+function decideRepairTarget(myInoperableCars, myOperableCars) {
+  const alive = myInoperableCars.filter((c) => c.status !== CAR_STATUS.ELIMINATED);
+  const allAliveOfMine = [...myOperableCars, ...alive].filter((c) => c.status !== CAR_STATUS.ELIMINATED);
+  const myFrontmost = frontmostEligibleCar(allAliveOfMine);
+  const anInoperableIsLeading = alive.some((c) => c === myFrontmost);
+  return anInoperableIsLeading ? myFrontmost : rearmostEligibleCar(alive);
+}
 
-  // "Cette voiture est-elle sur la tuile Rear OU la plus en arrière
-  // de l'équipe, ET un dé entre 1 et 3 est-il disponible ?"
-  const isRearmostOfMyTeam = myOperableCars.length > 0 && car === rearmostEligibleCar(myOperableCars);
-  const eligiblePosition = isOnRearTile(car, progressionState) || isRearmostOfMyTeam;
-  const nitroDice = dicePoolRemaining.filter((v) => v >= 1 && v <= 3);
-  if (eligiblePosition && nitroDice.length > 0) {
-    return { type: "nitro", dieValue: Math.max(...nitroDice) };
-  }
+/** "Il y a-t-il un véhicule inopérable dans l'équipe ET un 6 disponible [dans le pool] ?" */
+function reserveRepairSix(myPool, myInoperableCars) {
+  const hasAliveInoperable = myInoperableCars.some((c) => c.status !== CAR_STATUS.ELIMINATED);
+  return hasAliveInoperable && myPool.includes(6);
+}
 
-  return null;
+/** Retire UNE occurrence de `value` d'une copie du pool (jamais le tableau d'origine). */
+function poolMinusOne(pool, value) {
+  const copy = [...pool];
+  const idx = copy.indexOf(value);
+  if (idx !== -1) copy.splice(idx, 1);
+  return copy;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  Object.assign(module.exports, { decideCommandForActivatedCar });
+  Object.assign(module.exports, { decideRepairTarget, reserveRepairSix, poolMinusOne });
+}
+
+// ===================================================================
+// SECTION 6bis — NITRO OU AIRSTRIKE POUR LE LOT (étape 5)
+// ===================================================================
+// Suite du sous-arbre "Commande pas encore jouée", UNIQUEMENT quand
+// ni Drift (arc avant bloqué) ni Repair (6 réservé) ne s'appliquent
+// ce tour : "Cette voiture est-elle sur la tuile Rear OU est-elle la
+// plus en arrière de l'équipe, ET un dé entre 1 et 3 est-il
+// disponible dans le lot ?"
+//   OUI -> Nitro (dé le plus gros ≤3 en Command, l'autre dé du lot
+//          au mouvement — déjà le dé de mouvement par défaut).
+//   NON -> "Un adversaire est-il premier de la course ?" ->
+//          "Un véhicule de CET adversaire est-il sur la tuile de
+//          Lead ?" -> OUI : Airstrike IMMÉDIAT (le "dernier tour du
+//          round ?" n'est même pas regardé). NON (ou pas d'adversaire
+//          en tête) -> "Dernier tour du round ?" -> OUI : Airstrike
+//          quand même (petit dé en Command, gros dé au mouvement —
+//          même répartition que le cas Lead) -> NON : on REPORTE — le
+//          gros dé retourne (virtuellement) dans le pool, seul le
+//          petit dé sert au mouvement, aucune Command ce tour-ci.
+// Renvoie toujours movementDie ET deferMovementDie (le dé à utiliser
+// si l'appelant doit finalement retomber sur le report — cas où le
+// placement Airstrike s'avère impossible faute de case valide).
+function decideNitroOrAirstrikeForLot(car, progressionState, myOperableCars, biggestLot, movementDie, allCars, playerName, isLastTurnOfRound) {
+  const remainingDiceForCommand = poolMinusOne(biggestLot, movementDie);
+  if (remainingDiceForCommand.length === 0) {
+    return { command: null, movementDie, deferMovementDie: movementDie };
+  }
+
+  // --- Nitro ---
+  const isRearmostOfMyTeam = myOperableCars.length > 0 && car === rearmostEligibleCar(myOperableCars);
+  const eligiblePosition = isOnRearTile(car, progressionState) || isRearmostOfMyTeam;
+  const nitroDice = remainingDiceForCommand.filter((v) => v >= 1 && v <= 3);
+  if (eligiblePosition && nitroDice.length > 0) {
+    return { command: { type: "nitro", dieValue: Math.max(...nitroDice) }, movementDie, deferMovementDie: movementDie };
+  }
+
+  // --- Airstrike (immédiat) ou report ---
+  const smallDie = Math.min(...remainingDiceForCommand);
+  const leadingOpponentOnLead = isLeadingOpponentOnLeadTile(playerName, allCars, progressionState);
+
+  if (leadingOpponentOnLead || isLastTurnOfRound) {
+    const enemies = allCars.filter((c) => c.owner !== playerName && c.status !== CAR_STATUS.ELIMINATED);
+    const target = enemies.length > 0 ? findFrontmostCar(enemies) : null;
+    if (target) {
+      return { command: { type: "airstrike-pending", dieValue: smallDie, target }, movementDie, deferMovementDie: smallDie };
+    }
+  }
+
+  // Report : "Plus gros dé du lot retiré du lot est remis dans la
+  // pôle de dés. Plus petit dé du lot Assigné au mouvement." — le
+  // gros dé n'est simplement jamais consommé (rien à faire côté pool
+  // réel, seul movementDie change ici) ; il réapparaîtra naturellement
+  // au recalcul du tour suivant.
+  return { command: null, movementDie: smallDie, deferMovementDie: smallDie };
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  Object.assign(module.exports, { decideNitroOrAirstrikeForLot });
 }
 
 // ===================================================================
@@ -1587,11 +1670,16 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
     };
   }
 
-  // --- Branches 1/2/3 (Command pas encore jouée) : construction des
-  // lots, choix de la voiture, puis éventuellement une Command
-  // programmée pour CETTE activation.
+  // --- Branches 1/2/3 (Command pas encore jouée) : réservation
+  // éventuelle du 6 pour Repair AVANT la construction des lots (étape
+  // 5 — corrige la version précédente qui cherchait le 6 dans le lot
+  // DÉJÀ construit, alors que le document le réserve au niveau du
+  // pool ENTIER, en amont de tout partitionnement).
+  const repairSixReserved = reserveRepairSix(myPool, myInoperableCars);
+  const poolForLots = repairSixReserved ? poolMinusOne(myPool, 6) : [...myPool];
+
   const lotCount = n;
-  const lots = partitionIntoBalancedLots([...myPool], lotCount);
+  const lots = partitionIntoBalancedLots(poolForLots, lotCount);
   const lotsBySum = lots.map((l) => l.reduce((s, v) => s + v, 0));
   const biggestLotIndex = lotsBySum.indexOf(Math.max(...lotsBySum));
   const biggestLot = lots[biggestLotIndex];
@@ -1629,21 +1717,43 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
       // driftDecision.reserveDie (le gros dé non consommé, cas C1) :
       // aucune action explicite nécessaire — l'architecture recalcule
       // déjà les lots à chaque tour depuis le pool RESTANT, donc ce
-      // dé y réapparaîtra naturellement au tour suivant.
+      // dé y réapparaîtra naturellement au tour suivant (et le 6
+      // réservé ce tour-ci, s'il n'a pas servi, sera lui aussi
+      // re-détecté au recalcul du tour suivant : rien n'a jamais été
+      // réellement retiré de `myPool`).
     }
   }
 
   if (!driftBlockHandledThisTurn) {
     // (commandAlreadyUsed est nécessairement false ici : la branche
-    // dédiée ci-dessus a déjà retourné dans le cas contraire.)
-    const remainingDiceForCommand = [...biggestLot];
-    remainingDiceForCommand.splice(remainingDiceForCommand.indexOf(actualMovementDie), 1);
-    // Un lot peut n'avoir qu'1 dé (pas de Command possible avec CE
-    // lot) — le reste du pool (les AUTRES lots) n'est délibérément
-    // pas éligible : la Command de ce tour doit venir du MÊME lot que
-    // le mouvement, cohérent avec la structure "un des 3 tours a 2
-    // dés (dont 1 en Command)" de l'arbre.
-    command = decideCommandForActivatedCar(car, progressionState, myInoperableCars, myOperableCars, remainingDiceForCommand, allCars, playerName);
+    // dédiée à l'étape 4 a déjà retourné dans le cas contraire.)
+    if (repairSixReserved) {
+      // Repair : le 6 (réservé en amont, hors lot) + le dé de
+      // mouvement déjà calculé sur le pool SANS ce 6 — contrairement
+      // à Nitro/Airstrike, Repair n'a PAS besoin d'un deuxième dé
+      // dans le lot du véhicule activé (ressource indépendante).
+      const target = decideRepairTarget(myInoperableCars, myOperableCars);
+      command = { type: "repair", dieValue: 6, target };
+    } else {
+      const isLastTurnOfRound = ((roundState.turnsThisRound && roundState.turnsThisRound[playerName]) || 0) === 2;
+      const result = decideNitroOrAirstrikeForLot(car, progressionState, myOperableCars, biggestLot, actualMovementDie, allCars, playerName, isLastTurnOfRound);
+      if (result.command && result.command.type === "airstrike-pending") {
+        const placement = findAiAirstrikePlacement(board, result.command.target, allCars, allChoppers);
+        if (placement) {
+          command = { type: "airstrike", dieValue: result.command.dieValue, target: result.command.target, placement };
+          actualMovementDie = result.movementDie;
+        } else {
+          // Aucune case de placement valide : on retombe sur le
+          // report (même comportement que "pas d'adversaire à
+          // frapper").
+          command = null;
+          actualMovementDie = result.deferMovementDie;
+        }
+      } else {
+        command = result.command;
+        actualMovementDie = result.movementDie;
+      }
+    }
   }
   const movementDieFinal = actualMovementDie;
 

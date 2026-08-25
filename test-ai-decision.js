@@ -171,27 +171,80 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
 }
 
 // -----------------------------------------------------------------
-// SECTION 4 — decideCommandForActivatedCar
+// SECTION 4 — étape 5 : reserveRepairSix, decideRepairTarget,
+// decideNitroOrAirstrikeForLot
 // -----------------------------------------------------------------
 {
-  const board = emptyBoard();
-  const progressionState = { rearTile: { cols: 8 } };
-  const car = createCar("A", CAR_SIZE.MEDIUM, 10, 2);
+  // --- reserveRepairSix ---
   const inoperable = createCar("A", CAR_SIZE.SMALL, 3, 2);
-  inoperable.status = "inoperable";
-  const r1 = ai.decideCommandForActivatedCar(car, progressionState, [inoperable], [car], [6, 4], [car, inoperable], "A");
-  assert(r1 && r1.type === "repair" && r1.dieValue === 6 && r1.target === inoperable,
-    "Command : Repair choisi quand un inopérable existe et un 6 est disponible");
+  inoperable.status = CAR_STATUS.INOPERABLE;
+  assert(ai.reserveRepairSix([6, 4], [inoperable]) === true,
+    "reserveRepairSix : true quand un inopérable existe ET un 6 est dans le pool");
+  assert(ai.reserveRepairSix([5, 4], [inoperable]) === false,
+    "reserveRepairSix : false si pas de 6 dans le pool");
+  assert(ai.reserveRepairSix([6, 4], []) === false,
+    "reserveRepairSix : false si aucun véhicule inopérable");
+  const eliminatedInoperable = createCar("A", CAR_SIZE.SMALL, 3, 2);
+  eliminatedInoperable.status = CAR_STATUS.ELIMINATED;
+  assert(ai.reserveRepairSix([6, 4], [eliminatedInoperable]) === false,
+    "reserveRepairSix : false si le seul inopérable est en fait éliminé");
 
+  // --- poolMinusOne ---
+  const p = [6, 4, 6];
+  const p2 = ai.poolMinusOne(p, 6);
+  assert(p2.length === 2 && p2.includes(4) && p2.filter((v) => v === 6).length === 1,
+    "poolMinusOne : retire UNE SEULE occurrence, jamais le tableau d'origine");
+  assert(p.length === 3, "poolMinusOne : le pool d'origine n'est jamais muté");
+
+  // --- decideRepairTarget ---
+  const car = createCar("A", CAR_SIZE.MEDIUM, 10, 2);
+  const inoperableRear = createCar("A", CAR_SIZE.SMALL, 3, 2);
+  inoperableRear.status = CAR_STATUS.INOPERABLE;
+  const t1 = ai.decideRepairTarget([inoperableRear], [car]);
+  assert(t1 === inoperableRear, "decideRepairTarget : seul inopérable, aucun opérable devant -> lui-même (le plus en arrière)");
+
+  const inoperableFront = createCar("A", CAR_SIZE.LARGE, 25, 2);
+  inoperableFront.status = CAR_STATUS.INOPERABLE;
+  const t2 = ai.decideRepairTarget([inoperableRear, inoperableFront], [car]);
+  assert(t2 === inoperableFront, "decideRepairTarget : l'inopérable EN TÊTE de la course est réparé en priorité");
+}
+
+// -----------------------------------------------------------------
+// SECTION 4bis — decideNitroOrAirstrikeForLot (étape 5)
+// -----------------------------------------------------------------
+{
+  const progressionState = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 } };
+
+  // Nitro : voiture sur la tuile Rear, lot [2,5] -> mouvement=5 (max),
+  // reste [2] -> Nitro éligible (dé ≤3).
   const carOnRear = createCar("A", CAR_SIZE.MEDIUM, 5, 2);
-  const r2 = ai.decideCommandForActivatedCar(carOnRear, progressionState, [], [carOnRear], [2, 5], [carOnRear], "A");
-  assert(r2 && r2.type === "nitro" && r2.dieValue === 2,
-    "Command : Nitro choisi (dé le plus gros ≤3) quand la voiture est sur la tuile Rear");
+  const r1 = ai.decideNitroOrAirstrikeForLot(carOnRear, progressionState, [carOnRear], [2, 5], 5, [carOnRear], "A", false);
+  assert(r1.command && r1.command.type === "nitro" && r1.command.dieValue === 2 && r1.movementDie === 5,
+    "decideNitroOrAirstrikeForLot : Nitro choisi (dé le plus gros ≤3), mouvement inchangé");
 
-  const carFront = createCar("A", CAR_SIZE.MEDIUM, 15, 2);
-  const carEvenMoreFront = createCar("A", CAR_SIZE.LARGE, 20, 2);
-  const r3 = ai.decideCommandForActivatedCar(carFront, progressionState, [], [carFront, carEvenMoreFront], [5, 6], [carFront, carEvenMoreFront], "A");
-  assert(r3 === null, "Command : aucune Command si ni Rear/arrière ni dé 1-3 pertinent");
+  // Airstrike IMMÉDIAT : adversaire en tête ET un de ses véhicules
+  // sur la tuile Lead (col 16-23) -> Airstrike même si PAS le
+  // dernier tour du round.
+  const carFront = createCar("A", CAR_SIZE.MEDIUM, 15, 2); // ni Rear ni la plus en arrière -> Nitro inéligible
+  const myOther = createCar("A", CAR_SIZE.LARGE, 10, 2); // plus en arrière que carFront -> c'est LUI le "rearmost", pas carFront
+  const enemyLeaderOnLead = createCar("B", CAR_SIZE.SMALL, 18, 3); // sur la tuile Lead (16-23), et devant tout le monde -> en tête de la course
+  const allCars2 = [carFront, myOther, enemyLeaderOnLead];
+  const r2 = ai.decideNitroOrAirstrikeForLot(carFront, progressionState, [carFront, myOther], [1, 4], 4, allCars2, "A", false);
+  assert(r2.command && r2.command.type === "airstrike-pending" && r2.command.target === enemyLeaderOnLead && r2.command.dieValue === 1 && r2.movementDie === 4,
+    "decideNitroOrAirstrikeForLot : Airstrike immédiat si adversaire en tête ET sur la tuile Lead, sans attendre le dernier tour");
+
+  // Airstrike au DERNIER TOUR (adversaire en tête, mais PAS sur Lead)
+  const enemyLeaderOutsideLead = createCar("B", CAR_SIZE.SMALL, 24, 3); // en tête de la course, mais au-delà de la tuile Lead (16-23)
+  const allCars3 = [carFront, myOther, enemyLeaderOutsideLead];
+  const r3 = ai.decideNitroOrAirstrikeForLot(carFront, progressionState, [carFront, myOther], [1, 4], 4, allCars3, "A", true);
+  assert(r3.command && r3.command.type === "airstrike-pending" && r3.command.target === enemyLeaderOutsideLead,
+    "decideNitroOrAirstrikeForLot : Airstrike au dernier tour du round, même sans adversaire sur Lead");
+
+  // Report : ni Nitro, ni adversaire sur Lead, ni dernier tour ->
+  // petit dé au mouvement, gros dé rendu, pas de Command.
+  const r4 = ai.decideNitroOrAirstrikeForLot(carFront, progressionState, [carFront, myOther], [1, 4], 4, allCars3, "A", false);
+  assert(r4.command === null && r4.movementDie === 1,
+    "decideNitroOrAirstrikeForLot : report (petit dé au mouvement, gros dé rendu) si aucune condition Airstrike n'est remplie");
 }
 
 // -----------------------------------------------------------------
@@ -308,6 +361,48 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
   const enemyLeader3 = createCar("B", CAR_SIZE.LARGE, 20, 2);
   const d3 = ai.decideNoFinishLine(progressionState, board, [rearCar3, frontCar3, enemyLeader3], [], { A: [4, 2] }, "A", roundState);
   assert(d3.car === frontCar3, "commandAlreadyUsed : pas Rear + pas en tête -> voiture la plus en avant reçoit le dé");
+}
+
+// -----------------------------------------------------------------
+// SECTION 6ter — decideNoFinishLine, étape 5 (Repair / Nitro /
+// Airstrike / report), intégration complète
+// -----------------------------------------------------------------
+{
+  const board = emptyBoard();
+  const progressionState = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 } };
+  const roundState = { commandUsedThisRound: { A: false }, turnsThisRound: { A: 0 } };
+
+  // 1. Repair : un inopérable existe, un 6 est dans le pool -> réservé
+  // AVANT le partitionnement, donc le lot du véhicule activé (n=1 ici)
+  // ne contient QUE le reste du pool (le 6 en est exclu).
+  const activeCar = createCar("A", CAR_SIZE.MEDIUM, 12, 2);
+  const inoperableCar = createCar("A", CAR_SIZE.SMALL, 3, 2);
+  inoperableCar.status = CAR_STATUS.INOPERABLE;
+  const dRepair = ai.decideNoFinishLine(progressionState, board, [activeCar, inoperableCar], [], { A: [6, 4] }, "A", roundState);
+  assert(dRepair.command && dRepair.command.type === "repair" && dRepair.command.dieValue === 6 && dRepair.command.target === inoperableCar,
+    "decideNoFinishLine (étape 5) : Repair joué avec le 6 réservé en amont, ciblant l'inopérable");
+  assert(dRepair.dieValue === 4, "decideNoFinishLine (étape 5) : le mouvement utilise le reste du pool (le 6 réservé n'y est plus)");
+
+  // 2. Airstrike au dernier tour du round (pas de Nitro possible :
+  // véhicule ni sur Rear ni le plus en arrière de l'équipe).
+  const roundStateLastTurn = { commandUsedThisRound: { A: false }, turnsThisRound: { A: 2 } };
+  const rearCarAlreadyMoved = createCar("A", CAR_SIZE.SMALL, 2, 1);
+  rearCarAlreadyMoved.movedThisRound = true;
+  const frontActingCar = createCar("A", CAR_SIZE.MEDIUM, 15, 2);
+  const enemy = createCar("B", CAR_SIZE.SMALL, 10, 3);
+  const dAirstrike = ai.decideNoFinishLine(progressionState, board, [rearCarAlreadyMoved, frontActingCar, enemy], [], { A: [1, 4] }, "A", roundStateLastTurn);
+  assert(dAirstrike.command && dAirstrike.command.type === "airstrike" && dAirstrike.command.dieValue === 1,
+    "decideNoFinishLine (étape 5) : Airstrike au dernier tour (petit dé), Nitro non éligible ici");
+  assert(dAirstrike.dieValue === 4, "decideNoFinishLine (étape 5) : le gros dé part au mouvement pour l'Airstrike");
+  assert(dAirstrike.command.target.owner === "B", "decideNoFinishLine (étape 5) : Airstrike cible bien l'adversaire");
+
+  // 3. Report : ni Nitro, ni Airstrike (pas le dernier tour, aucun
+  // adversaire en tête sur la tuile Lead) -> petit dé au mouvement,
+  // aucune Command.
+  const roundStateEarly = { commandUsedThisRound: { A: false }, turnsThisRound: { A: 0 } };
+  const dDefer = ai.decideNoFinishLine(progressionState, board, [rearCarAlreadyMoved, frontActingCar, enemy], [], { A: [1, 4] }, "A", roundStateEarly);
+  assert(dDefer.command === null, "decideNoFinishLine (étape 5) : report -> aucune Command jouée ce tour");
+  assert(dDefer.dieValue === 1, "decideNoFinishLine (étape 5) : report -> le PETIT dé sert au mouvement (le gros est rendu au pool)");
 }
 
 // -----------------------------------------------------------------
