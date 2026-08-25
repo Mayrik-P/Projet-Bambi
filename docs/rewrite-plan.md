@@ -235,18 +235,118 @@ siennes.
       empruntées en conditions réelles sur 200 parties dédiées
       (11779 décisions) : Repair 164, Nitro 2644, Airstrike 463,
       Report 2564 — aucune n'est un chemin mort.
-- [ ] **6. Branche Finish Line Rush** — dépend de la trajectoire
-      (étape 1) et réutilise les concepts de Command de l'étape 5.
-      À noter pour la relecture de cette étape : la branche "commande
-      déjà jouée" équivalente y a sa PROPRE version (nœud distinct
-      repéré lors de la lecture du PDF pour l'étape 5, jamais détaillé
-      — à relire en entier avant de coder, ne rien supposer identique
-      à l'étape 4).
+- [x] **6. Branche Finish Line Rush** — `decideFinishLineRush` était en
+      réalité du code v2 légataire (jamais réaudité contre l'arbre v3,
+      malgré des commentaires affirmant le contraire à deux reprises —
+      voir écarts 1 et 2 ci-dessous) : réécrite intégralement.
+      **Écart 1 — Coast, voiture ciblée (⚠️ À CONFIRMER AVEC MAYRIK)** :
+      l'ancien code sélectionnait la voiture opérable la plus EN AVANT
+      (`frontmostEligibleCar`), avec un commentaire affirmant "Cas
+      particulier formalisé avec Mayrik". Relecture à 600 dpi du
+      document (fichier inchangé, hash MD5 identique vérifié avant et
+      après l'étape 5) : le libellé de ce nœud Coast est MOT POUR MOT
+      identique à celui de la branche "Finish Line pas en place" —
+      "le véhicule opérable le plus en ARRIÈRE de l'équipe"
+      (`rearmostEligibleCar`). Implémenté selon cette lecture directe,
+      qui contredit un commentaire affirmant une confirmation
+      antérieure de Mayrik — donc explicitement signalé pour
+      vérification plutôt que résolu silencieusement.
+      **Écart 2 — Coast, Slam sur l'arc avant, absent** : un second
+      commentaire ("MISE À JOUR DE L'ARBRE... recherche la case la
+      moins dangereuse") décrivait une heuristique de recherche de
+      case la moins dangereuse, absente du document tel que relu.
+      L'arbre prévoit en réalité un nœud "Un véhicule adverse opérable
+      strictement plus petit est-il dans l'arc avant ?" -> Slam direct
+      délibéré (sauf si cet adversaire est déjà à moins de 2 cases de
+      la ligne d'arrivée, pour ne pas le pousser encore plus près).
+      Ce même nœud existe aussi pour le Coast de "Finish Line pas en
+      place" (jamais implémenté non plus jusqu'ici) — corrigé aux DEUX
+      endroits avec un helper partagé (`findFrontArcSlamTarget`,
+      nouvelle Section 7ter).
+      **Reste de la branche** (voiture = la plus en avant non-encore-
+      activée, dé = le plus gros du pool sans lot, trajectoire de base
+      -> "Atteindra-t-on la ligne d'arrivée ?" -> si non et Command pas
+      encore jouée : essai Nitro avec re-vérification, repli Airstrike
+      si le Nitro ne suffit finalement pas ; si Command déjà jouée et
+      un adversaire opérable à moins de 10 cases de l'arrivée :
+      recherche d'une trajectoire alternative permettant de le tirer)
+      fidèle à l'arbre — mais **écart 3** trouvé au passage : l'ancien
+      code tentait aussi un Drift de secours entre l'échec du Nitro et
+      l'Airstrike (avec son propre test dédié) — ce nœud n'existe pas
+      dans le document ; supprimé, test corrigé en conséquence.
+      12 tests dédiés ajoutés/corrigés (184→187 tests IA) : 5 anciens
+      tests désormais faux corrigés (Drift inexistant, voiture Coast
+      arrière vs avant, Slam vs "moins dangereuse" ×2), 4 nouveaux
+      (Airstrike sans Drift, Coast+Slam loin de l'arrivée, Coast+Slam
+      annulé près de l'arrivée). 212/212 moteur inchangés.
+      Self-play 800 parties/48358 décisions : 0 crash, 0 décision
+      illégale, 0 état incohérent (pas même l'artefact Blast Off/
+      Finish Line habituel). Toutes les branches vérifiées
+      effectivement empruntées sur 300 parties dédiées (17258
+      décisions, comptage temporaire retiré après coup) : Coast+Slam
+      14, Coast normal 365, atteinte directe 35, Nitro réussi 42,
+      Airstrike joué 249, cas "Command déjà jouée + adversaire proche"
+      12 trajectoires alternatives trouvées sur 165 évaluations.
+      **Suivi post-livraison (allers-retours avec Mayrik)** :
+      1. Écart 1 (Coast, voiture ciblée) : confirmé — erreur de
+         copier/coller dans le document à ce nœud précis. C'est bien
+         la voiture opérable la plus EN AVANT (comme l'ancien code v2
+         le faisait déjà), pas la plus en arrière. Code et tests
+         corrigés en conséquence, PDF corrigé par Mayrik de son côté.
+      2. Écart 2 (Slam sur l'arc avant du Coast) : confirmé comme ajout
+         volontaire de cette version de l'arbre — rien à changer.
+      3. Écart 3 (Drift absent de la cascade "commande pas encore
+         jouée") : confirmé comme un vrai manque de l'arbre d'origine.
+         Mayrik a repris l'arbre en plusieurs passes successives
+         (chacune relue en détail avant tout correctif code, jamais de
+         rustine à la va-vite) :
+         - 1ʳᵉ passe : ajout du nœud Drift-bloqué ("L'arc avant... est-il
+           composé de 3 cases impassables/occupées ?" → "Dans le
+           lot/pôle de dé y a-t-il un 3-4-5 ?" → Drift), MAIS un nœud
+           "Le dé attribué au véhicule est-il un 1 ?" y était
+           structurellement inatteignable : gated par "le pôle contient
+           un 3/4/5", cette condition impose déjà que le plus gros dé
+           du pôle (= le dé attribué) vaille au moins 3, donc ne peut
+           jamais valoir 1. Repéré et signalé avant tout code.
+         - 2ᵉ passe : incohérence de terminologie "lot" vs "pôle" (cette
+           branche ne construit plus de lot depuis toujours, contrairement
+           à l'autre) — repérée et signalée, pas encore le nœud "=1".
+         - 3ᵉ passe (finale) : Mayrik a supprimé le nœud "=1" plutôt que
+           de le reformuler — structure finale à 3 branches, TOUTES
+           réellement atteignables : "pôle a un 3-4-5 ?" → OUI : Drift
+           direct (dé mouvement inchangé) ; NON → "dernier tour du
+           round ?" → OUI : Airstrike (plus petit dé du pôle, mouvement
+           inchangé) ; NON : report — dé assigné retiré, le plus petit
+           dé du pôle devient le nouveau dé de mouvement, aucune
+           Command. Confirmée cohérente après relecture complète et
+           comparaison pixel-par-pixel avec la version précédente
+           (aucun autre changement caché).
+      Implémenté avec `isFrontArcFullyBlocked` (réutilisé tel quel) et
+      les mêmes helpers Airstrike (`findFrontmostCar`,
+      `findAiAirstrikePlacement`) que le reste du fichier — aucun
+      nouveau helper nécessaire, cette branche ne raisonnant jamais sur
+      un lot. 7 tests dédiés ajoutés/corrigés (187→194 tests IA) : 3
+      nouveaux pour la cascade Drift-bloqué (Drift direct, Airstrike
+      dernier tour, report), 1 test Coast corrigé (avant, pas arrière),
+      2 commentaires de tests mis à jour pour refléter les échanges
+      avec Mayrik. 212/212 moteur inchangés.
+      Self-play 800 parties/46315 décisions : 0 crash, 0 décision
+      illégale, 0 état incohérent. Le blocage de l'arc avant s'est
+      révélé rare dans ce contexte précis (le véhicule en tête de la
+      course a naturellement de l'espace devant lui, contrairement à
+      la branche "pas de Finish Line" où les voitures restent
+      groupées) — confirmé réellement atteignable et correctement géré
+      sur un échantillon élargi (500 parties/250 tours max : 1
+      occurrence réelle capturée, routée vers Drift sans anomalie) ;
+      les 3 sous-branches sont chacune couvertes avec certitude par un
+      test dédié construit spécifiquement pour les déclencher.
 - [ ] **7. Validation globale** — self-play à grande échelle toutes
       branches confondues (`tools/generate-full-game.js` ou
-      équivalent), revue qualitative au viewer si besoin.
+      équivalent), revue qualitative au viewer si besoin. Plus aucun
+      point ouvert connu avant de la lancer.
 
 ## État courant
 
-Étapes 0, 1, 2, 3, 4 et 5 terminées (184/184 tests IA, 212/212 tests
-moteur). Prochaine action : étape 6 (branche Finish Line Rush).
+Étapes 0, 1, 2, 3, 4, 5 et 6 terminées (194/194 tests IA, 212/212
+tests moteur). Prochaine action : étape 7 (validation globale) — aucun
+point ouvert connu.
