@@ -139,11 +139,47 @@ siennes.
       hors self-play global : 600/600 entrées réussies sur 100
       parties, ordre Large→Medium→Small systématiquement respecté,
       Nitro et Airstrike tous deux observés en conditions réelles.
-- [ ] **4. Branche "Commande déjà jouée" (pas de Finish Line)** —
-      petite, isolée. Un seul écart connu à corriger : sélection du
-      véhicule via une sous-logique dédiée (Rear ? → en tête ? →
-      arrière/avant, SANS le partitionnement en lots ni la nuance
-      "<6 cases").
+- [x] **4. Branche "Commande déjà jouée" (pas de Finish Line)** —
+      nouvelle fonction dédiée `chooseCommandAlreadyUsedRecipient`,
+      câblée en tête de `decideNoFinishLine` (avant tout
+      partitionnement en lots) dès que `commandUsedThisRound[playerName]`
+      est vrai.
+      **Écart confirmé en relisant le PDF en détail** : le code
+      utilisait auparavant `chooseLotRecipient` (pensé pour la branche
+      "lot pas encore attribué") pour CE cas aussi — donc appliquait à
+      tort la nuance "adversaire à moins de 6 cases" et un
+      partitionnement en lots (`partitionIntoBalancedLots`) alors que
+      le document source ne les mentionne à aucun moment ici.
+      Logique confirmée par lecture fine du schéma (arbre dédié,
+      entièrement séparé du sous-arbre "lot") : "La voiture la plus à
+      l'arrière de l'équipe [parmi les non-encore-activées] est-elle
+      sur la tuile Rear ?" → OUI **ou** (NON + "Ce joueur IA a-t-il un
+      véhicule en tête de la course ?" = OUI) → le plus gros dé
+      DISPONIBLE DANS LE POOL ENTIER (jamais un lot) va à la voiture
+      non-encore-activée la plus à l'arrière — les deux flèches vertes
+      convergent bien vers la même case sur le document source, à
+      vérifier avec attention car contre-intuitif au premier abord.
+      → NON + NON → le plus gros dé va au véhicule jouable le plus en
+      avant (seul cas qui bascule vers l'avant). Aucun Drift/Command à
+      évaluer (déjà joués ce round, cohérent avec le code existant qui
+      les court-circuitait déjà via `commandAlreadyUsed`).
+      8 tests dédiés ajoutés (160→168 tests IA) : 3 unitaires sur
+      `chooseCommandAlreadyUsedRecipient` (Rear=oui, pas-Rear+en-tête,
+      pas-Rear+pas-en-tête) + 5 d'intégration sur `decideNoFinishLine`
+      (dé = max du pool entier et non un lot, `command: null`,
+      sélection Rear, sélection "pas en tête" vers l'avant). 212/212
+      moteur inchangés.
+      Self-play 800 parties/48090 décisions : 0 crash, 0 décision
+      illégale ; 2 états incohérents, même artefact préexistant déjà
+      documenté (Blast Off atterrissant sur la Finish Line, juste
+      après une victoire) — confirmé par comparaison directe contre le
+      code AVANT cette étape (baseline 500 parties/30272 décisions :
+      3 états incohérents, même signature) : taux comparable, aucune
+      régression attribuable à cette étape. Branche vérifiée
+      effectivement empruntée en conditions réelles (comptage
+      instrumenté temporaire, retiré après coup) : 922 activations sur
+      5937 décisions (~15,5%) sur 100 parties dédiées — donc bien
+      exercée par le self-play, pas un chemin mort.
 - [ ] **5. Branche Lot + Command (pas de Finish Line)** — la plus
       grosse (Repair/Nitro/Drift/Airstrike), mais conceptuellement
       déjà correcte et confirmée par l'audit — portage rigoureux plus
@@ -156,6 +192,6 @@ siennes.
 
 ## État courant
 
-Étapes 0, 1, 2 et 3 terminées (160/160 tests IA, 212/212 tests moteur).
-Prochaine action : étape 4 (branche "Commande déjà jouée", pas de
-Finish Line).
+Étapes 0, 1, 2, 3 et 4 terminées (168/168 tests IA, 212/212 tests moteur).
+Prochaine action : étape 5 (branche "Lot + Command", pas de Finish
+Line).
