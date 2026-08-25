@@ -427,10 +427,61 @@ siennes.
       parties supplémentaires post-correctif, 0 crash, 0 décision
       illégale.
 
+- [x] **9. Correctif post-rewrite — Nitro gâché quand le terrain
+      plafonne le mouvement** (trouvé par Mayrik en revue qualitative
+      d'une partie : un véhicule gardait une Command Nitro avec un dé
+      1 alors que le tour se terminait dans de la boue — le mouvement
+      n'allait pas plus loin, la Command était gâchée pour rien).
+      Mayrik a mis à jour l'arbre en conséquence, en plusieurs passes
+      relues avant tout correctif code (jamais de rustine à la
+      va-vite) :
+      - Branche **1er round** (lot à 2 dés, Nitro éligible) : tente
+        désormais le **PLUS PETIT** dé 1-2-3 (coût minimal, contre le
+        plus gros avant), avec un nouveau test explicite "cette
+        trajectoire va-t-elle plus loin vers l'arrivée qu'avec le seul
+        gros dé du lot, sans Nitro ?" — si non, Command abandonnée, le
+        petit dé n'est jamais consommé (retourne disponible), le gros
+        dé seul part au mouvement.
+      - Branche **pas de Finish Line, commande pas encore jouée**
+        (généralisation demandée par Mayrik, PAS à toutes les branches
+        Nitro — "certaines ont une autre logique") : même test, mais
+        le dé Nitro reste le **PLUS GROS** ≤3 (différence assumée,
+        contexte différent du 1er round — lot déjà équilibré
+        différemment). Si le test échoue, impasse TERMINALE (pas de
+        repli vers Airstrike, contrairement au cas "position
+        inéligible").
+      **Un aller-retour utile pendant la relecture** : une première
+      version de l'arbre intercalait par erreur une vraie "Phase de
+      Mouvement" entre le calcul de trajectoire et le nouveau test —
+      repéré avant tout code (une Phase de Mouvement représente une
+      exécution réelle, impossible à "annuler" proprement une fois les
+      hazards/Slams résolus), corrigé par Mayrik sur le document avant
+      implémentation.
+      Implémenté en réutilisant `chooseBestTrajectory`/
+      `chooseGeneralTrajectory`/`chooseEntryTrajectory` déjà en place
+      pour comparer les deux trajectoires (avec/sans Nitro) via
+      `destination.col`, avec un `precomputedTraj` transmis à
+      l'appelant pour éviter un recalcul redondant quand le Nitro est
+      conservé.
+      6 tests dédiés ajoutés/corrigés (196→199 tests IA) : 2 pour le
+      1er round (Nitro conservé sur plateau ouvert avec le petit dé,
+      Nitro abandonné sur un mur bloquant identique avec ou sans
+      boost), 2 pour `decideNitroOrAirstrikeForLot` (idem, plus gros
+      dé), et les 2 tests existants (choix "plus gros" au 1er round)
+      corrigés pour refléter le nouveau comportement "plus petit".
+      212/212 moteur inchangés.
+      Self-play 2500 parties post-correctif : 0 crash, 0 décision
+      illégale. **Audit ciblé** (400 parties, instrumentation
+      temporaire retirée après coup) : 5295 évaluations Nitro (3907
+      conservées, 1388 abandonnées) — **0 incohérence** : jamais un
+      Nitro conservé sans progression réelle constatée, jamais un
+      Nitro abandonné alors qu'il aidait réellement.
+
 ## État courant
 
-Étapes 0 à 8 terminées — le rewrite est complet, et un bug post-rewrite
-trouvé en revue qualitative (cible de tir figée avant un Slam) est
-corrigé. **196/196 tests IA, 212/212 tests moteur** (dont le nouveau
-Test 72bis). Plus aucune étape au plan ; toute évolution future
-partirait d'un nouveau besoin (pas d'un correctif de ce rewrite).
+Étapes 0 à 9 terminées — le rewrite est complet, et deux bugs
+post-rewrite trouvés en revue qualitative d'une partie simulée (cible
+de tir figée avant un Slam ; Nitro gâché quand le terrain plafonne le
+mouvement) sont corrigés. **199/199 tests IA, 212/212 tests moteur.**
+Plus aucune étape au plan ; toute évolution future partirait d'un
+nouveau besoin (pas d'un correctif de ce rewrite).
