@@ -1377,6 +1377,42 @@ if (typeof module !== "undefined" && module.exports) {
 }
 
 // ===================================================================
+// SECTION 6bis — "Commande déjà jouée ce round" (branche dédiée,
+// "Finish Line PAS en place" — étape 4)
+// ===================================================================
+// Traduction directe du sous-arbre dédié (distinct de chooseLotRecipient
+// ci-dessus) : "La voiture la plus à l'arrière de l'équipe [parmi les
+// non-encore-activées] est-elle sur la tuile Rear ?" -> OUI: cette
+// voiture reçoit le plus gros dé DISPONIBLE DANS LE POOL (pas de lot).
+// -> NON: "Ce joueur IA a-t-il un véhicule en tête de la course ?" ->
+// OUI: le véhicule le plus À L'ARRIÈRE reçoit quand même le plus gros
+// dé (même case que la branche Rear=OUI, confirmé par la convergence
+// des deux flèches vertes sur le document source) -> NON: le véhicule
+// jouable le plus EN AVANT reçoit le plus gros dé.
+//
+// Différences volontaires avec chooseLotRecipient (arbre "lot pas
+// encore attribué") : pas de nuance "adversaire à moins de 6 cases"
+// ici, et pas de partitionIntoBalancedLots — un seul dé (le plus gros
+// du pool restant) est directement assigné, jamais un lot.
+function chooseCommandAlreadyUsedRecipient(notYetActivated, myOperableCars, allCars, progressionState) {
+  const rearmostNotYetActivated = rearmostEligibleCar(notYetActivated);
+  if (isOnRearTile(rearmostNotYetActivated, progressionState)) {
+    return rearmostNotYetActivated;
+  }
+
+  const myFrontmost = frontmostEligibleCar(myOperableCars);
+  const iAmLeading = !isAnyOpponentLeading(myFrontmost.owner, allCars);
+  if (iAmLeading) {
+    return rearmostNotYetActivated;
+  }
+  return frontmostEligibleCar(notYetActivated);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  Object.assign(module.exports, { chooseCommandAlreadyUsedRecipient });
+}
+
+// ===================================================================
 // SECTION 7bis — ORCHESTRATEUR : "Premier round du jeu" (étape 3)
 // ===================================================================
 // Traduction directe de la branche dédiée au round 1 (racine de
@@ -1517,8 +1553,43 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
 
   const commandAlreadyUsed = !!roundState.commandUsedThisRound[playerName];
 
-  // --- Branches 1/2/3 : construction des lots, choix de la voiture,
-  // puis éventuellement une Command programmée pour CETTE activation.
+  // --- Étape 4 : Command déjà jouée ce round — branche dédiée,
+  // ENTIÈREMENT distincte de la construction de lots ci-dessous (pas
+  // de partitionIntoBalancedLots, pas de Drift/Command à évaluer :
+  // déjà joués ce round). Un seul dé, le plus gros DISPONIBLE DANS LE
+  // POOL, est directement assigné à la voiture choisie.
+  if (commandAlreadyUsed) {
+    const car = chooseCommandAlreadyUsedRecipient(notYetActivated, myOperableCars, allCars, progressionState);
+    const movementDieFinal = Math.max(...myPool);
+
+    let destination, slam, roadBonusPath;
+    if (car.col === null) {
+      const traj = chooseEntryTrajectory(board, car, movementDieFinal, allCars, allChoppers, false, roundState.roadDie || 0);
+      destination = traj.destination;
+      slam = traj.slam;
+      roadBonusPath = traj.roadBonusPath;
+    } else {
+      const traj = chooseGeneralTrajectory(board, car, movementDieFinal, allCars, allChoppers, false, roundState.roadDie || 0);
+      destination = traj.destination;
+      slam = traj.slam;
+      roadBonusPath = traj.roadBonusPath;
+    }
+
+    return {
+      car,
+      dieValue: movementDieFinal,
+      command: null,
+      destination,
+      isEntry: car.col === null,
+      isCoast: false,
+      slam,
+      roadBonusPath
+    };
+  }
+
+  // --- Branches 1/2/3 (Command pas encore jouée) : construction des
+  // lots, choix de la voiture, puis éventuellement une Command
+  // programmée pour CETTE activation.
   const lotCount = n;
   const lots = partitionIntoBalancedLots([...myPool], lotCount);
   const lotsBySum = lots.map((l) => l.reduce((s, v) => s + v, 0));
@@ -1538,7 +1609,7 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
   let actualMovementDie = movementDie;
   let driftBlockHandledThisTurn = false;
 
-  if (!commandAlreadyUsed && car.col !== null) {
+  if (car.col !== null) {
     // Le pré-check Drift ne s'applique qu'aux voitures déjà sur le
     // plateau (une entrée round 1 n'a pas d'"arc avant" figé à
     // vérifier de la même façon) et uniquement à cette branche
@@ -1562,7 +1633,9 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
     }
   }
 
-  if (!driftBlockHandledThisTurn && !commandAlreadyUsed) {
+  if (!driftBlockHandledThisTurn) {
+    // (commandAlreadyUsed est nécessairement false ici : la branche
+    // dédiée ci-dessus a déjà retourné dans le cas contraire.)
     const remainingDiceForCommand = [...biggestLot];
     remainingDiceForCommand.splice(remainingDiceForCommand.indexOf(actualMovementDie), 1);
     // Un lot peut n'avoir qu'1 dé (pas de Command possible avec CE

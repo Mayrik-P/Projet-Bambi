@@ -216,6 +216,39 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
 }
 
 // -----------------------------------------------------------------
+// SECTION 5bis — chooseCommandAlreadyUsedRecipient (étape 4)
+// -----------------------------------------------------------------
+{
+  const progressionState = { rearTile: { cols: 8 } };
+
+  // Cas 1 : la plus à l'arrière (parmi les non-encore-activées) est
+  // sur la tuile Rear -> elle reçoit le dé, quel que soit qui est en
+  // tête (pas de nuance <6 cases dans cette branche).
+  const rearCar = createCar("A", CAR_SIZE.SMALL, 3, 2);
+  const midCar = createCar("A", CAR_SIZE.MEDIUM, 12, 2);
+  const r1 = ai.chooseCommandAlreadyUsedRecipient([rearCar, midCar], [rearCar, midCar], [rearCar, midCar], progressionState);
+  assert(r1 === rearCar, "commandAlreadyUsedRecipient : voiture la plus arrière sur la tuile Rear reçoit le dé");
+
+  // Cas 2 : pas sur Rear, mais ce joueur est en tête de la course ->
+  // c'est quand même la voiture la plus À L'ARRIÈRE qui reçoit le dé
+  // (convergence des deux flèches vertes sur le document source —
+  // différent de chooseLotRecipient, qui renforcerait le leader).
+  const leaderCar = createCar("A", CAR_SIZE.LARGE, 20, 2);
+  const rearCar2 = createCar("A", CAR_SIZE.SMALL, 12, 2);
+  const anyEnemy = createCar("B", CAR_SIZE.MEDIUM, 5, 2);
+  const r2 = ai.chooseCommandAlreadyUsedRecipient([leaderCar, rearCar2], [leaderCar, rearCar2], [leaderCar, rearCar2, anyEnemy], progressionState);
+  assert(r2 === rearCar2, "commandAlreadyUsedRecipient : pas Rear, en tête -> le plus en ARRIÈRE reçoit quand même le dé");
+
+  // Cas 3 : pas sur Rear, pas en tête -> le véhicule jouable le plus
+  // EN AVANT reçoit le dé (seul cas qui diffère du cas Rear).
+  const rearCar3 = createCar("A", CAR_SIZE.SMALL, 10, 2);
+  const midCar3 = createCar("A", CAR_SIZE.MEDIUM, 14, 2);
+  const enemyLeader = createCar("B", CAR_SIZE.LARGE, 20, 2);
+  const r3 = ai.chooseCommandAlreadyUsedRecipient([rearCar3, midCar3], [rearCar3, midCar3], [rearCar3, midCar3, enemyLeader], progressionState);
+  assert(r3 === midCar3, "commandAlreadyUsedRecipient : pas Rear, pas en tête -> le plus en AVANT reçoit le dé");
+}
+
+// -----------------------------------------------------------------
 // SECTION 6 — decideNoFinishLine (orchestrateur, branche générale)
 // -----------------------------------------------------------------
 {
@@ -237,6 +270,44 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
   const dCoast = ai.decideNoFinishLine(progressionState, board, allCars, [], { A: [3] }, "A", roundState);
   assert(dCoast && dCoast.isCoast === true, "decideNoFinishLine : Coast déclenché quand 0 véhicule éligible restant");
   assert(dCoast.dieValue === 3, "decideNoFinishLine : Coast utilise bien le dé assigné (valeur faciale non pertinente pour la distance)");
+}
+
+// -----------------------------------------------------------------
+// SECTION 6bis — decideNoFinishLine, branche "Command déjà jouée"
+// (étape 4)
+// -----------------------------------------------------------------
+{
+  const board = emptyBoard();
+  const progressionState = { rearTile: { cols: 8 } };
+  const roundState = { commandUsedThisRound: { A: true } };
+
+  // 1. Aucun lot : le dé retenu est le PLUS GROS DU POOL ENTIER, pas
+  // le résultat d'un partitionIntoBalancedLots (qui donnerait un lot
+  // différent avec 3 véhicules/4 dés).
+  const small = createCar("A", CAR_SIZE.SMALL, 4, 1);
+  const medium = createCar("A", CAR_SIZE.MEDIUM, 6, 2);
+  const large = createCar("A", CAR_SIZE.LARGE, 5, 3);
+  const allCars = [small, medium, large];
+  const dicePool = { A: [6, 5, 3, 4] };
+  const d = ai.decideNoFinishLine(progressionState, board, allCars, [], dicePool, "A", roundState);
+  assert(!!d && !!d.car, "commandAlreadyUsed : retourne une décision complète");
+  assert(d.dieValue === 6, "commandAlreadyUsed : le dé de mouvement est le PLUS GROS DU POOL ENTIER (pas un lot)");
+  assert(d.command === null, "commandAlreadyUsed : aucune Command supplémentaire (déjà jouée ce round)");
+
+  // 2. La voiture la plus à l'arrière est sur la tuile Rear -> c'est
+  // elle qui reçoit le dé (et pas la logique de lot habituelle).
+  const rearCar = createCar("A", CAR_SIZE.SMALL, 3, 2);
+  const otherCar = createCar("A", CAR_SIZE.MEDIUM, 15, 2);
+  const d2 = ai.decideNoFinishLine(progressionState, board, [rearCar, otherCar], [], { A: [5, 2] }, "A", roundState);
+  assert(d2.car === rearCar, "commandAlreadyUsed : voiture sur Rear reçoit le dé (sélection dédiée, pas chooseLotRecipient)");
+
+  // 3. Pas sur Rear, pas en tête -> la plus en avant reçoit le dé
+  // (comportement qui diffère de chooseLotRecipient dans ce cas).
+  const rearCar3 = createCar("A", CAR_SIZE.SMALL, 10, 2);
+  const frontCar3 = createCar("A", CAR_SIZE.MEDIUM, 14, 2);
+  const enemyLeader3 = createCar("B", CAR_SIZE.LARGE, 20, 2);
+  const d3 = ai.decideNoFinishLine(progressionState, board, [rearCar3, frontCar3, enemyLeader3], [], { A: [4, 2] }, "A", roundState);
+  assert(d3.car === frontCar3, "commandAlreadyUsed : pas Rear + pas en tête -> voiture la plus en avant reçoit le dé");
 }
 
 // -----------------------------------------------------------------
