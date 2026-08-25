@@ -1604,6 +1604,39 @@ function decideFirstRound(progressionState, board, allCars, allChoppers, dicePoo
 }
 
 // ===================================================================
+// SECTION 7ter — COAST : cible Slam sur l'arc avant (partagée entre
+// "Finish Line pas en place" et "Finish Line Rush" — étape 6)
+// ===================================================================
+// CORRECTIF (étape 6, en relisant l'arbre pour la branche Finish Line
+// Rush) : le document précise, pour CHAQUE branche Coast (pas
+// seulement celle de Finish Line Rush — le même nœud existe aussi
+// pour "Finish Line pas en place", jusqu'ici jamais implémenté) :
+// "Il y a-t-il un véhicule adverse opérable strictement plus petit
+// dans l'arc avant de la case actuelle du véhicule ?" -> OUI : ce
+// véhicule adverse est défini comme destination (Slam direct,
+// délibéré) -> NON : Recherche de la meilleure trajectoire (flux
+// normal). L'ancien code des deux branches Coast ignorait ce nœud et
+// laissait le Slam éventuel émerger (ou non) du hasard de la cascade
+// normale de `computeReachableDestinations`.
+/** "Un véhicule adverse opérable strictement plus petit est-il dans l'arc avant ?" -> ce véhicule, sinon null. */
+function findFrontArcSlamTarget(car, allCars) {
+  const arc = getFrontArc(car);
+  const myRank = CAR_SIZE_RANK[car.size];
+  for (const spot of arc) {
+    const occupant = getCarAt(allCars, spot.col, spot.row);
+    if (!occupant) continue;
+    if (occupant.owner === car.owner) continue;
+    if (occupant.status !== CAR_STATUS.OPERABLE) continue;
+    if (CAR_SIZE_RANK[occupant.size] < myRank) return occupant;
+  }
+  return null;
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  Object.assign(module.exports, { findFrontArcSlamTarget });
+}
+
+// ===================================================================
 // SECTION 8 — ORCHESTRATEUR : "Finish Line PAS encore en place"
 // ===================================================================
 // Traduction de la branche gauche de l'arbre (compteur "combien de
@@ -1624,14 +1657,28 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
   // --- Branche 0 : Coast ---
   // "C'est un Coast = on attribue un dé au hasard au véhicule
   // opérable le plus en arrière de l'équipe et il vaut 1."
+  // CORRECTIF (étape 6) : le nœud "un véhicule adverse opérable
+  // strictement plus petit est-il dans l'arc avant ?" -> Slam direct
+  // était jusqu'ici ignoré (voir findFrontArcSlamTarget, Section 7ter)
+  // — le Coast retombait sur la cascade normale de destinations, où
+  // un Slam pouvait émerger par hasard mais n'était jamais visé
+  // délibérément comme le prescrit l'arbre.
   if (n === 0) {
     const eligibleForCoast = myOperableCars.filter((c) => c.coastCount < 2);
     if (eligibleForCoast.length === 0) return null; // plus aucun tour possible ce round pour ce joueur
     const car = rearmostEligibleCar(eligibleForCoast);
     const dieValue = myPool[0]; // "il vaut 1" = distance fixe, la face du dé physique importe peu
     const dests = computeReachableDestinations(board, car, 1, allCars, allChoppers);
-    const destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
-    return { car, dieValue, command: null, destination, isEntry: false, isCoast: true };
+    const slamTarget = findFrontArcSlamTarget(car, allCars);
+    let destination;
+    if (slamTarget) {
+      destination = dests.find((d) => d.terminalReason === "slam" && d.slamTarget === slamTarget)
+        || dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "exits-front")
+        || dests[0];
+    } else {
+      destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
+    }
+    return { car, dieValue, command: null, destination, isEntry: false, isCoast: true, slam: destination.terminalReason === "slam" };
   }
 
   const commandAlreadyUsed = !!roundState.commandUsedThisRound[playerName];
@@ -1813,173 +1860,201 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
   if (myPool.length === 0) return null;
   const finishColStart = progressionState.rearTile.cols + progressionState.middleTile.cols + progressionState.leadTile.cols;
 
-  // "On assigne le dé le plus gros à la voiture de cette équipe la
-  // plus en avant de la course n'ayant pas encore été activée ce
-  // round." La Finish Line, une fois en place, reste en place pour
-  // le reste de la partie : cette branche ne redescend JAMAIS vers
-  // decideNoFinishLine (ce serait réinjecter artificiellement une
-  // réponse "non" à la toute première question de l'arbre alors que
-  // l'état réel du plateau dit toujours "oui").
-  //
-  // Cas particulier formalisé avec Mayrik : si toutes les voitures
-  // opérables ont déjà été activées ce round, on réactive en Coast
-  // (dé = 1, comme tout Coast) la voiture opérable la plus EN AVANT
-  // vers la ligne d'arrivée, "et on recherche la case d'arrivée la
-  // moins dangereuse" (texte de l'arbre, mise à jour de Mayrik) —
-  // parmi les destinations "normal" atteignables à 1 pas, on retient
-  // celle qui traverse le MOINS de cases dangereuses. Pas besoin
-  // d'une branche séparée dans l'arbre, ce même nœud d'assignation la
-  // résout déjà sans avoir à la nommer explicitement. Aucune Command
-  // n'est possible sur un tour de Coast (rulebook p.8 : "You may NOT
-  // assign a die to a command on a turn you are coasting").
   const myOperableCars = allCars.filter((c) => c.owner === playerName && c.status === CAR_STATUS.OPERABLE);
   const notYetActivated = myOperableCars.filter((c) => !c.movedThisRound);
 
+  // --- Coast (n=0) --- RÉÉCRIT (étape 6). Deux points relus avec
+  // Mayrik après ma première lecture du document :
+  // (1) la voiture est bien la plus EN AVANT de l'équipe
+  // (frontmostEligibleCar), comme l'ancien code le faisait déjà —
+  // le document contenait une erreur de copier/coller à ce nœud
+  // précis (texte "en arrière" au lieu de "en avant", confirmé par
+  // Mayrik, correction prévue de son côté sur le PDF) ;
+  // (2) le nœud "un véhicule adverse opérable strictement plus petit
+  // est-il dans l'arc avant ?" (Slam direct, voir
+  // findFrontArcSlamTarget, Section 7ter) est en revanche un AJOUT
+  // volontaire de cette nouvelle version de l'arbre (confirmé par
+  // Mayrik) — absent de l'ancien code v2, qui se contentait de
+  // chercher la case "normal" la moins dangereuse. La nuance "adversaire
+  // à moins de 2 cases de la ligne d'arrivée ?" annule le Slam pour ne
+  // pas risquer de le pousser sur (ou au-delà de) la ligne d'arrivée.
   if (notYetActivated.length === 0) {
     const eligibleForCoast = myOperableCars.filter((c) => c.coastCount < 2);
     if (eligibleForCoast.length === 0) return null; // plus aucun tour possible ce round pour ce joueur
     const car = frontmostEligibleCar(eligibleForCoast);
     const dieValue = myPool[0]; // "il vaut 1" = distance fixe, la face du dé physique importe peu
     const dests = computeReachableDestinations(board, car, 1, allCars, allChoppers);
-    const normalDests = dests.filter((d) => d.terminalReason === "normal");
+    const slamTarget = findFrontArcSlamTarget(car, allCars);
     let destination;
-    if (normalDests.length > 0) {
-      // "on recherche la case d'arrivée la moins dangereuse" — parmi
-      // les destinations normales, celle qui traverse le moins de
-      // cases dangereuses (jetons cachés ou hazards révélés classés
-      // dangereux, cf. isDangerousCell).
-      normalDests.sort((a, b) => a.dangerousCellsCrossed - b.dangerousCellsCrossed);
-      destination = normalDests[0];
+    if (slamTarget && (finishColStart - slamTarget.col) >= 2) {
+      destination = dests.find((d) => d.terminalReason === "slam" && d.slamTarget === slamTarget)
+        || dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "exits-front")
+        || dests[0];
     } else {
-      destination = dests.find((d) => d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
+      destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
     }
     return { car, dieValue, command: null, destination, isEntry: false, isCoast: true, slam: destination.terminalReason === "slam" };
   }
 
+  // --- "On assigne le dé le plus gros à la voiture de cette équipe
+  // la plus en avant de la course n'ayant pas encore été activée ce
+  // round." Un seul dé, jamais un lot (même principe qu'à l'étape 4).
+  // La Finish Line, une fois en place, reste en place pour le reste
+  // de la partie : cette branche ne redescend JAMAIS vers
+  // decideNoFinishLine.
   const car = frontmostEligibleCar(notYetActivated);
   const biggestDie = Math.max(...myPool);
 
-  // Cas limite (en pratique quasi jamais atteint : toutes les
-  // voitures entrent normalement bien avant que la Finish Line
-  // n'apparaisse, dès le round 1) mais géré proprement plutôt que de
-  // laisser une voiture "car.col === null" glisser dans les calculs
-  // de trajectoire ci-dessous (computeReachableDestinations suppose
-  // toujours une position de départ réelle sur le plateau). Entrée
-  // normale (p.9, voir chooseEntryTrajectory) — les acrobaties
-  // Nitro/Drift/Airstrike pour rallier directement la ligne d'arrivée
-  // n'ont pas de sens tant que la voiture n'a pas encore mis une roue
-  // sur le plateau.
+  // Cas limite quasi jamais atteint en pratique (toutes les voitures
+  // entrent normalement bien avant l'apparition de la Finish Line,
+  // dès le round 1) — entrée normale, sans acrobaties de Command pour
+  // rallier directement la ligne (pas de sens tant que la voiture n'a
+  // pas encore mis une roue sur le plateau).
   if (car.col === null) {
     const traj = chooseEntryTrajectory(board, car, biggestDie, allCars, allChoppers, false, roundState.roadDie || 0);
     return { car, dieValue: biggestDie, command: null, destination: traj.destination, isEntry: true, isCoast: false, slam: traj.slam, roadBonusPath: traj.roadBonusPath };
   }
 
-  const baseDests = computeReachableDestinations(board, car, biggestDie, allCars, allChoppers);
-
-  if (canReachFinishLine(baseDests, finishColStart)) {
-    const destination = baseDests.find((d) => (d.terminalReason === "normal" || d.terminalReason === "exits-front") && d.col >= finishColStart);
-    return { car, dieValue: biggestDie, command: null, destination, isEntry: car.col === null, isCoast: false, slam: false };
+  // "Recherche de la meilleure trajectoire" (dé assigné seul) ->
+  // "Atteindra-t-on la ligne d'arrivée avec cette destination ?"
+  const baseTraj = chooseGeneralTrajectory(board, car, biggestDie, allCars, allChoppers, false, roundState.roadDie || 0);
+  if (baseTraj.destination.col >= finishColStart) {
+    // Cas simple : on peut déjà l'atteindre avec le seul dé assigné —
+    // aucune Command, aucune autre considération (arbre : ce nœud ne
+    // mène qu'à "Phase de Mouvement" direct).
+    return { car, dieValue: biggestDie, command: null, destination: baseTraj.destination, isEntry: false, isCoast: false, slam: baseTraj.slam, roadBonusPath: baseTraj.roadBonusPath };
   }
 
   const commandAlreadyUsed = !!roundState.commandUsedThisRound[playerName];
   let command = null;
-  let effectiveDieValue = biggestDie;
+  let dieValueFinal = biggestDie; // peut être remplacé par le plus petit dé du pôle (cas "blocage sans 3/4/5, pas dernier tour")
+  let destination = baseTraj.destination;
+  let slam = baseTraj.slam;
+  let roadBonusPath = baseTraj.roadBonusPath;
 
   if (!commandAlreadyUsed) {
-    const remaining = [...myPool];
-    remaining.splice(remaining.indexOf(biggestDie), 1);
-    const nitroDice = remaining.filter((v) => v >= 1 && v <= 3);
+    // CORRECTIF (étape 6, arbre repensé par Mayrik) : cette branche ne
+    // construit JAMAIS de lot ("on ne cherche plus à équilibrer les
+    // tours de jeu, mais à maximiser les actions des véhicules en
+    // tête" — confirmé) — tous les nœuds ci-dessous raisonnent sur le
+    // POOL entier, jamais sur un lot de 2 dés comme dans l'autre
+    // branche. "L'arc avant de la case actuelle de ce véhicule est-il
+    // composé de 3 cases soit impassables soit occupées par des
+    // véhicules ?" passe AVANT la considération Nitro (même priorité
+    // que l'autre branche).
+    const frontBlocked = isFrontArcFullyBlocked(car, board, allCars);
 
-    let solved = false;
-    for (const nd of nitroDice.sort((a, b) => b - a)) {
-      const dests = computeReachableDestinations(board, car, biggestDie + nd, allCars, allChoppers);
-      if (canReachFinishLine(dests, finishColStart)) {
-        command = { type: "nitro", dieValue: nd };
-        effectiveDieValue = biggestDie + nd;
-        solved = true;
-        break;
-      }
-    }
+    if (frontBlocked) {
+      const poolHas345 = myPool.some((v) => v >= 3 && v <= 5);
 
-    if (!solved) {
-      // "Une Commande drift permet-elle d'atteindre la ligne
-      // d'arrivée avec le dé Assigné ?" — Drift ne change pas le
-      // BUDGET de mouvement, seulement la capacité à traverser le
-      // PREMIER véhicule rencontré sans s'arrêter dessus.
-      const driftDice = remaining.filter((v) => v >= 3 && v <= 5);
-      if (driftDice.length > 0) {
-        const driftDests = computeReachableDestinations(board, car, biggestDie, allCars, allChoppers, true);
-        if (canReachFinishLine(driftDests, finishColStart)) {
-          command = { type: "drift", dieValue: Math.min(...driftDice) };
-          solved = true;
+      if (poolHas345) {
+        // "Programmation Commande Drift avec le plus petit dé du pôle
+        // de valeur 3 ou 4 ou 5" — SANS condition supplémentaire
+        // (l'ancien nœud "le dé attribué est-il un 1 ?", qui s'est
+        // révélé structurellement inatteignable, a été retiré par
+        // Mayrik plutôt que reformulé). Le dé de mouvement reste celui
+        // déjà assigné (biggestDie) ; seul le déblocage de l'arc avant
+        // change via driftAvailable=true.
+        const driftDie = Math.min(...myPool.filter((v) => v >= 3 && v <= 5));
+        const driftTraj = chooseGeneralTrajectory(board, car, biggestDie, allCars, allChoppers, true, roundState.roadDie || 0);
+        command = { type: "drift", dieValue: driftDie };
+        destination = driftTraj.destination;
+        slam = driftTraj.slam;
+        roadBonusPath = driftTraj.roadBonusPath;
+      } else {
+        // Aucun 3/4/5 nulle part dans le pôle : le Drift est
+        // impossible, quel que soit le tour.
+        const isLastTurnOfRound = ((roundState.turnsThisRound && roundState.turnsThisRound[playerName]) || 0) === 2;
+        if (isLastTurnOfRound) {
+          // "Attribution du plus petit dé du pôle à la Command
+          // Airstrike" — le mouvement reste sur la destination déjà
+          // calculée (toujours bloquée) avec le dé d'origine.
+          const smallestDie = Math.min(...myPool);
+          const enemies = allCars.filter((c) => c.owner !== playerName && c.status !== CAR_STATUS.ELIMINATED);
+          const target = enemies.length > 0 ? findFrontmostCar(enemies) : null;
+          const placement = target ? findAiAirstrikePlacement(board, target, allCars, allChoppers) : null;
+          if (placement) {
+            command = { type: "airstrike", dieValue: smallestDie, target, placement };
+          }
+        } else {
+          // "On retire le dé assigné au véhicule, on Assigne le dé le
+          // plus petit du pôle au véhicule" -> nouvelle recherche de
+          // trajectoire avec ce petit dé (mouvement minimal, aucune
+          // Command ce tour-ci).
+          const smallestDie = Math.min(...myPool);
+          const fallbackTraj = chooseGeneralTrajectory(board, car, smallestDie, allCars, allChoppers, false, roundState.roadDie || 0);
+          dieValueFinal = smallestDie;
+          destination = fallbackTraj.destination;
+          slam = fallbackTraj.slam;
+          roadBonusPath = fallbackTraj.roadBonusPath;
         }
       }
-    }
+    } else {
+      const remaining = poolMinusOne(myPool, biggestDie);
+      const nitroDice = remaining.filter((v) => v >= 1 && v <= 3);
 
-    if (!solved) {
-      // "Dé restant le plus petit sur Airstrike... sera joué dans
-      // tous les cas qui suivent."
-      const smallestRemaining = Math.min(...remaining);
-      const enemies = allCars.filter((c) => c.owner !== playerName && c.status !== CAR_STATUS.ELIMINATED);
-      if (enemies.length > 0) {
-        const target = findFrontmostCar(enemies);
-        const placement = findAiAirstrikePlacement(board, target, allCars, allChoppers);
+      if (nitroDice.length > 0) {
+        // "Attribution du plus gros dé 1 ou 2 ou 3 à la commande
+        // Nitro" -> "Nouvelle recherche de la meilleure trajectoire
+        // avec dé Assigné + dé Nitro" -> "Atteindra-t-on la ligne
+        // d'arrivée avec cette destination ?" (RECHECK).
+        const nitroDie = Math.max(...nitroDice);
+        const nitroTraj = chooseGeneralTrajectory(board, car, biggestDie + nitroDie, allCars, allChoppers, false, roundState.roadDie || 0);
+        if (nitroTraj.destination.col >= finishColStart) {
+          command = { type: "nitro", dieValue: nitroDie };
+          destination = nitroTraj.destination;
+          slam = nitroTraj.slam;
+          roadBonusPath = nitroTraj.roadBonusPath;
+        }
+        // sinon : "retrait de la Commande Nitro" — on retombe sur
+        // l'Airstrike ci-dessous, exactement comme si aucun dé 1-2-3
+        // n'avait été disponible.
+      }
+
+      if (!command && remaining.length > 0) {
+        // "Attribution du dé du pôle le plus petit à la Command
+        // Airstrike" — la destination/trajectoire reste celle du dé de
+        // base (l'Airstrike ne change pas le mouvement de ce tour).
+        const smallestDie = Math.min(...remaining);
+        const enemies = allCars.filter((c) => c.owner !== playerName && c.status !== CAR_STATUS.ELIMINATED);
+        const target = enemies.length > 0 ? findFrontmostCar(enemies) : null;
+        const placement = target ? findAiAirstrikePlacement(board, target, allCars, allChoppers) : null;
         if (placement) {
-          command = { type: "airstrike", dieValue: smallestRemaining, target, placement };
+          command = { type: "airstrike", dieValue: smallestDie, target, placement };
         }
       }
     }
-  }
-
-  // Suite commune : cible adverse à moins de 10 cases de l'arrivée ?
-  const enemiesOperable = allCars.filter((c) => c.owner !== playerName && c.status === CAR_STATUS.OPERABLE);
-  const nearFinishEnemy = enemiesOperable.find((c) => (finishColStart - c.col) < 10);
-
-  const driftActiveForRest = !!(command && command.type === "drift");
-  const finalDests = computeReachableDestinations(board, car, effectiveDieValue, allCars, allChoppers, driftActiveForRest);
-  let destination = null;
-
-  if (nearFinishEnemy) {
-    const leader = findFrontmostCar(enemiesOperable);
-    const shootable = finalDests.filter((d) => {
-      if (d.terminalReason !== "normal") return false;
-      const arc = getFrontArc({ col: d.col, row: d.row });
-      return arc.some((a) => a.col === leader.col && a.row === leader.row);
-    });
-    if (shootable.length > 0) {
-      // "Cette case peut-elle être atteinte avec un dé disponible
-      // dans le pôle et plus petit que celui Assigné ?" — dépenser la
-      // valeur minimale suffisante (principe déjà connu). CORRECTIF
-      // (trouvé via le harnais de robustesse à grande échelle,
-      // vraies parties simulées) : la version précédente changeait
-      // `dieValue` pour le dé plus petit trouvé, mais réutilisait la
-      // DESTINATION calculée pour l'ANCIEN dé plus gros — incohérence
-      // dieValue/destination.path qui corrompait l'exécution réelle
-      // (voiture retrouvée hors bornes après plusieurs tours). On
-      // recalcule maintenant la destination EXACTEMENT pour le dé
-      // finalement retenu, jamais un mélange des deux.
-      const smallerDice = myPool.filter((v) => v < effectiveDieValue && v !== (command && command.dieValue));
-      let usedDie = effectiveDieValue;
-      let usedDestination = shootable[0];
-      for (const sd of smallerDice.sort((a, b) => a - b)) {
-        const smallerDests = computeReachableDestinations(board, car, sd, allCars, allChoppers);
-        const match = smallerDests.find((d) => shootable.some((s) => s.col === d.col && s.row === d.row));
-        if (match) {
-          usedDie = sd;
-          usedDestination = match;
-          break;
-        }
+  } else {
+    // "Un véhicule adverse opérable est-il à moins de 10 cases de
+    // l'arrivée ?" -> "Recherche d'une nouvelle trajectoire
+    // permettant de tirer sur le véhicule adverse opérable le plus
+    // en avant de la course" -> "Il y a-t-il une nouvelle trajectoire
+    // éligible ?"
+    const enemiesOperable = allCars.filter((c) => c.owner !== playerName && c.status === CAR_STATUS.OPERABLE);
+    const nearFinishEnemy = enemiesOperable.some((c) => (finishColStart - c.col) < 10);
+    if (nearFinishEnemy) {
+      const leader = findFrontmostCar(enemiesOperable);
+      const altDests = computeReachableDestinations(board, car, biggestDie, allCars, allChoppers);
+      const shootable = altDests.filter((d) => {
+        if (d.terminalReason !== "normal") return false;
+        const arc = getFrontArc({ col: d.col, row: d.row });
+        return arc.some((a) => a.col === leader.col && a.row === leader.row);
+      });
+      if (shootable.length > 0) {
+        // L'arbre ne précise pas de départage au-delà de "une
+        // nouvelle trajectoire éligible" — on retient la plus
+        // avancée, cohérente avec l'objectif "rush".
+        shootable.sort((a, b) => b.col - a.col);
+        destination = shootable[0];
+        slam = false;
+        roadBonusPath = null;
       }
-      return {
-        car, dieValue: usedDie === effectiveDieValue ? biggestDie : usedDie,
-        command: usedDie === effectiveDieValue ? command : null,
-        destination: usedDestination, isEntry: car.col === null, isCoast: false, slam: false
-      };
+      // sinon (aucune trajectoire éligible) : on garde la destination
+      // d'origine (baseTraj), déjà affectée par défaut ci-dessus.
     }
   }
 
-  const traj = chooseGeneralTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActiveForRest, roundState.roadDie || 0);
-  return { car, dieValue: biggestDie, command, destination: traj.destination, isEntry: car.col === null, isCoast: false, slam: traj.slam, roadBonusPath: traj.roadBonusPath };
+  return { car, dieValue: dieValueFinal, command, destination, isEntry: false, isCoast: false, slam, roadBonusPath };
 }
 
 if (typeof module !== "undefined" && module.exports) {

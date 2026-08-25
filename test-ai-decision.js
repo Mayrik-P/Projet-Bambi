@@ -435,31 +435,32 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
   assert(d3.command && d3.command.type === "nitro", "FinishLineRush : Command Nitro bien programmée pour atteindre l'arrivée");
 }
 {
-  // Ligne d'arrivée atteignable seulement AVEC Drift (adversaires
-  // bloquant TOUTES les directions viables du départ — Nitro ne
-  // résout rien puisque le blocage est POSITIONNEL, pas une question
-  // de budget, et aucune route de contournement n'existe ici).
+  // Arc avant NON bloqué ici (aucun voisin gênant) -> cascade Nitro
+  // classique, pas de Drift à considérer (le nœud Drift ne s'évalue
+  // que si l'arc avant est bloqué — voir tests dédiés plus bas).
+  // Ni le dé seul, ni le Nitro (recalcul de trajectoire avec dé+Nitro)
+  // ne permettent d'atteindre la ligne d'arrivée -> retrait du Nitro,
+  // Airstrike avec le PLUS PETIT dé restant.
   const board = emptyBoard();
   const progressionStateFL = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 }, finishLineTile: {} };
-  const carBlocked = createCar("A", CAR_SIZE.SMALL, 20, 0);
-  const blocker1 = createCar("B", CAR_SIZE.SMALL, 21, 0); // front
-  const blocker2 = createCar("B", CAR_SIZE.MEDIUM, 20, 1); // front-right (front-left hors plateau depuis row=0)
-  const allCars4 = [carBlocked, blocker1, blocker2];
-  const dicePool4 = { A: [5, 4, 2] };
+  const carFar = createCar("A", CAR_SIZE.SMALL, 10, 2);
+  const enemy = createCar("B", CAR_SIZE.SMALL, 15, 3);
+  const allCars4 = [carFar, enemy];
+  const dicePool4 = { A: [6, 5, 3, 2] }; // 6 (base) + 3 (nitro) = 9 -> col 19, encore loin des 24
   const roundState4 = { commandUsedThisRound: { A: false } };
   const d4 = ai.decideAssignAndCommand(progressionStateFL, board, allCars4, [], dicePool4, "A", roundState4);
-  assert(d4.destination.col >= 24, "FinishLineRush : ligne d'arrivée atteinte grâce au Drift quand toutes les directions de départ sont bloquées");
-  assert(d4.command && d4.command.type === "drift", "FinishLineRush : Command Drift bien programmée (Nitro ne peut rien résoudre ici, blocage positionnel)");
+  assert(d4.command && d4.command.type === "airstrike", "FinishLineRush : Airstrike (arc avant non bloqué, Nitro insuffisant) quand ni le dé seul ni le Nitro ne suffisent");
+  assert(d4.command.dieValue === 2, "FinishLineRush : Airstrike utilise le PLUS PETIT dé restant du pool");
+  assert(d4.command.target.owner === "B", "FinishLineRush : Airstrike cible bien l'adversaire");
+  assert(d4.destination.col < 24, "FinishLineRush : la ligne d'arrivée n'est pas atteinte ce tour (Airstrike ne change pas le mouvement)");
 }
 {
-  // CORRECTIF (relecture complète de l'arbre avec Mayrik) : la Finish
-  // Line, une fois en place, reste en place pour le reste de la
-  // partie — decideFinishLineRush ne doit JAMAIS rebasculer vers
-  // decideNoFinishLine, y compris quand toutes les voitures opérables
-  // ont déjà été activées ce round (ex-garde-fou "pool > véhicules
-  // restants", supprimé car il provoquait cette bascule à tort). Dans
-  // ce cas, on réactive en Coast la voiture opérable la plus EN AVANT
-  // vers l'arrivée — jamais de Command sur un tour de Coast.
+  // CONFIRMÉ PAR MAYRIK : erreur de copier/coller dans le document à
+  // ce nœud précis (corrigée depuis côté PDF) — c'est bien la voiture
+  // opérable la plus EN AVANT qui est réactivée en Coast ici
+  // (contrairement à la branche "pas de Finish Line", qui prend la
+  // plus en arrière) : cohérent avec l'objectif de cette branche
+  // ("maximiser les actions des véhicules en tête").
   const board = emptyBoard();
   const progressionStateFL = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 }, finishLineTile: {} };
   const carFront = createCar("A", CAR_SIZE.SMALL, 20, 2);
@@ -471,31 +472,86 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
   const roundState5 = { commandUsedThisRound: { A: false } };
   const d5 = ai.decideAssignAndCommand(progressionStateFL, board, allCars5, [], dicePool5, "A", roundState5);
   assert(d5.isCoast === true, "FinishLineRush/Coast : toutes voitures déjà activées -> réactivation en Coast, pas de bascule vers decideNoFinishLine");
-  assert(d5.car === carFront, "FinishLineRush/Coast : c'est la voiture la plus EN AVANT qui est réactivée (objectif ligne d'arrivée), pas la plus en arrière");
+  assert(d5.car === carFront, "FinishLineRush/Coast : c'est la voiture la plus EN AVANT qui est réactivée (confirmé par Mayrik)");
   assert(d5.command === null, "FinishLineRush/Coast : aucune Command possible sur un tour de Coast");
   assert(d5.destination.stepsUsed === 1, "FinishLineRush/Coast : distance fixe de 1 case, quelle que soit la face du dé assigné");
 }
 {
-  // MISE À JOUR DE L'ARBRE (nouveau PDF fourni par Mayrik) : le Coast
-  // de la branche Finish Line recherche maintenant explicitement "la
-  // case d'arrivée la moins dangereuse" parmi les destinations à 1
-  // pas — pas juste la première trouvée. On place un hazard face
-  // caché sur la case front-left pour vérifier que le Coast l'évite
-  // au profit d'une case front/front-right sans hazard.
+  // CORRECTIF (étape 6) : le nœud "un véhicule adverse opérable
+  // strictement plus petit est-il dans l'arc avant ?" -> Slam direct
+  // (findFrontArcSlamTarget) remplace l'ancienne heuristique "case la
+  // moins dangereuse" (absente du document, jamais présente dans
+  // aucune des versions relues). Ici : un adversaire plus petit est
+  // en front-right, à plus de 2 cases de la ligne d'arrivée -> Slam
+  // direct attendu (au lieu d'éviter un hazard, comme l'ancien test
+  // le vérifiait).
   const board = emptyBoard();
   const progressionStateFL = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 }, finishLineTile: {} };
-  const carFront = createCar("A", CAR_SIZE.SMALL, 20, 2);
+  const carFront = createCar("A", CAR_SIZE.MEDIUM, 10, 2);
   carFront.movedThisRound = true; // aucune voiture opérable "pas encore activée" ce round -> Coast
-  const engineFrontArc = engine.getFrontArc({ col: carFront.col, row: carFront.row });
-  const dangerousCell = engineFrontArc[0]; // front-left
-  board.grid[dangerousCell.row][dangerousCell.col].hazard = "unknown"; // jeton face caché
-  const allCars6 = [carFront];
+  const smallerEnemy = createCar("B", CAR_SIZE.SMALL, 10, 3); // front-right (row impaire depuis row2 -> diagColOffset=1)
+  const allCars6 = [carFront, smallerEnemy];
   const dicePool6 = { A: [4] };
   const roundState6 = { commandUsedThisRound: { A: false } };
   const d6 = ai.decideAssignAndCommand(progressionStateFL, board, allCars6, [], dicePool6, "A", roundState6);
-  assert(d6.isCoast === true, "FinishLineRush/Coast+hazard : toujours un Coast");
-  assert(!(d6.destination.col === dangerousCell.col && d6.destination.row === dangerousCell.row), "FinishLineRush/Coast : la case la moins dangereuse est retenue, la case avec hazard face caché est évitée");
-  assert(d6.destination.dangerousCellsCrossed === 0, "FinishLineRush/Coast : la destination retenue ne traverse aucune case dangereuse quand une alternative saine existe");
+  assert(d6.isCoast === true, "FinishLineRush/Coast+Slam : toujours un Coast");
+  assert(d6.slam === true && d6.destination.slamTarget === smallerEnemy, "FinishLineRush/Coast : Slam délibéré sur l'adversaire plus petit dans l'arc avant (loin de la ligne d'arrivée)");
+}
+{
+  // Même scénario, mais l'adversaire plus petit est à MOINS de 2
+  // cases de la ligne d'arrivée (finishColStart=24) -> le Slam est
+  // annulé (on ne le pousse pas plus près), trajectoire normale.
+  const board = emptyBoard();
+  const progressionStateFL = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 }, finishLineTile: {} };
+  const carFront = createCar("A", CAR_SIZE.MEDIUM, 23, 2);
+  carFront.movedThisRound = true;
+  const smallerEnemyNearFinish = createCar("B", CAR_SIZE.SMALL, 23, 3); // front-right, col23 -> à 1 case de la Finish Line (24)
+  const allCars7 = [carFront, smallerEnemyNearFinish];
+  const dicePool7 = { A: [4] };
+  const roundState7 = { commandUsedThisRound: { A: false } };
+  const d7 = ai.decideAssignAndCommand(progressionStateFL, board, allCars7, [], dicePool7, "A", roundState7);
+  assert(d7.isCoast === true, "FinishLineRush/Coast, adversaire près de l'arrivée : toujours un Coast");
+  assert(!(d7.slam && d7.destination.slamTarget === smallerEnemyNearFinish), "FinishLineRush/Coast : PAS de Slam si l'adversaire plus petit est déjà à moins de 2 cases de la ligne d'arrivée");
+}
+
+// -----------------------------------------------------------------
+// SECTION 7bis — decideFinishLineRush, arc avant bloqué (étape 6,
+// arbre repensé par Mayrik : plus de lot dans cette branche, tout se
+// raisonne sur le POOL entier)
+// -----------------------------------------------------------------
+{
+  // Cas 1 : bloqué + le pôle contient un 3, 4 ou 5 -> Drift direct,
+  // SANS condition supplémentaire (l'ancien nœud "le dé attribué
+  // est-il un 1 ?", structurellement inatteignable, a été retiré par
+  // Mayrik). Le dé de mouvement reste celui déjà assigné (le plus
+  // gros du pôle) ; le Drift utilise le PLUS PETIT dé 3-4-5 du pôle.
+  const board = emptyBoard();
+  const progressionStateFL = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 }, finishLineTile: {} };
+  const carA = createCar("A", CAR_SIZE.MEDIUM, 10, 2);
+  const blockersA = [createCar("B", CAR_SIZE.SMALL, 10, 1), createCar("B", CAR_SIZE.SMALL, 11, 2), createCar("B", CAR_SIZE.SMALL, 10, 3)];
+  const dA = ai.decideAssignAndCommand(progressionStateFL, board, [carA, ...blockersA], [], { A: [6, 5, 4, 2] }, "A", { commandUsedThisRound: { A: false }, turnsThisRound: { A: 0 } });
+  assert(dA.command && dA.command.type === "drift" && dA.command.dieValue === 4, "FinishLineRush, arc bloqué : Drift direct avec le plus petit dé 3-4-5 du pôle (4, pas 5)");
+  assert(dA.dieValue === 6, "FinishLineRush, arc bloqué + Drift : le dé de mouvement reste le plus gros du pôle, inchangé");
+  assert(dA.destination.col > 10, "FinishLineRush, arc bloqué + Drift : le Drift débloque bien l'arc avant (progression au-delà du blocage)");
+
+  // Cas 2 : bloqué + AUCUN 3/4/5 dans tout le pôle + dernier tour du
+  // round -> Airstrike (le plus petit dé du pôle), mouvement inchangé
+  // (toujours bloqué, mais on rentabilise le tour).
+  const carB = createCar("A", CAR_SIZE.MEDIUM, 10, 2);
+  const blockersB = [createCar("B", CAR_SIZE.SMALL, 10, 1), createCar("B", CAR_SIZE.SMALL, 11, 2), createCar("B", CAR_SIZE.SMALL, 10, 3)];
+  const enemyB = createCar("B", CAR_SIZE.SMALL, 15, 4);
+  const dB = ai.decideAssignAndCommand(progressionStateFL, board, [carB, ...blockersB, enemyB], [], { A: [6, 2, 1, 6] }, "A", { commandUsedThisRound: { A: false }, turnsThisRound: { A: 2 } });
+  assert(dB.command && dB.command.type === "airstrike" && dB.command.dieValue === 1, "FinishLineRush, arc bloqué, aucun 3-4-5, dernier tour : Airstrike avec le plus petit dé du pôle");
+  assert(dB.dieValue === 6, "FinishLineRush, arc bloqué + Airstrike dernier tour : le dé de mouvement reste le plus gros du pôle");
+
+  // Cas 3 : bloqué + AUCUN 3/4/5 + PAS le dernier tour -> report : on
+  // retire le dé assigné, on repart avec le PLUS PETIT dé du pôle
+  // pour un mouvement minimal, aucune Command.
+  const carC = createCar("A", CAR_SIZE.MEDIUM, 10, 2);
+  const blockersC = [createCar("B", CAR_SIZE.SMALL, 10, 1), createCar("B", CAR_SIZE.SMALL, 11, 2), createCar("B", CAR_SIZE.SMALL, 10, 3)];
+  const dC = ai.decideAssignAndCommand(progressionStateFL, board, [carC, ...blockersC], [], { A: [6, 2, 1, 6] }, "A", { commandUsedThisRound: { A: false }, turnsThisRound: { A: 0 } });
+  assert(dC.command === null, "FinishLineRush, arc bloqué, aucun 3-4-5, pas dernier tour : aucune Command (report)");
+  assert(dC.dieValue === 1, "FinishLineRush, report : le dé de mouvement devient le PLUS PETIT du pôle (le gros dé est rendu)");
 }
 
 
