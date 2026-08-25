@@ -340,13 +340,51 @@ siennes.
       occurrence réelle capturée, routée vers Drift sans anomalie) ;
       les 3 sous-branches sont chacune couvertes avec certitude par un
       test dédié construit spécifiquement pour les déclencher.
-- [ ] **7. Validation globale** — self-play à grande échelle toutes
-      branches confondues (`tools/generate-full-game.js` ou
-      équivalent), revue qualitative au viewer si besoin. Plus aucun
-      point ouvert connu avant de la lancer.
+- [x] **7. Validation globale** — la validation à grande échelle a
+      tout de suite révélé un vrai bug, resté invisible aux 194 tests
+      dédiés jusqu'ici : dans `decideFinishLineRush` (branche arc avant
+      bloqué, étape 6), quand le SEUL dé de valeur 3-4-5 du pôle est
+      justement celui déjà assigné au mouvement (ex. pool `[4,1,2,2]`,
+      dé de mouvement = 4), le code réutilisait cette même valeur pour
+      la Command Drift — deux usages de la même valeur alors qu'un seul
+      dé physique de cette valeur existe dans le pôle. 1 décision
+      illégale détectée sur 116552 (soit sur ~2000 parties) avant
+      correctif.
+      **Corrigé** en appliquant la même discipline que partout ailleurs
+      dans le fichier (`poolMinusOne`, déjà utilisé pour Nitro juste à
+      côté) : le pôle "restant" (hors dé déjà assigné) est calculé
+      AVANT de chercher un 3-4-5 pour Drift ou un plus petit dé pour
+      Airstrike/report — pas seulement le pôle brut. Nouveau cas
+      limite couvert explicitement : si after exclusion il ne reste
+      plus aucun dé (pool réduit au seul dé déjà assigné), on conserve
+      simplement le mouvement bloqué d'origine, sans Command (aucune
+      ressource disponible) — comportement sûr, non explicitement
+      dessiné dans l'arbre mais cohérent avec les autres impasses
+      similaires du fichier.
+      2 tests dédiés ajoutés (194→196 tests IA), reproduisant exactement
+      le pool capturé par le harnais de robustesse. 212/212 moteur
+      inchangés.
+      **Validation à grande échelle post-correctif** : 10500 parties
+      (~615000 décisions rejouées), 0 crash, **0 décision illégale**,
+      taux d'état incohérent conforme à l'artefact préexistant déjà
+      documenté (Blast Off/Finish Line, jamais lié à l'IA elle-même) —
+      confirmé par inspection du détail de plusieurs occurrences.
+      **Revue qualitative** (`tools/generate-full-game.js`, 5 parties
+      complètes générées, 265 tours cumulés) : 4 parties sur 5 se
+      terminent par une victoire "finish-line" (la branche de l'étape 6
+      est régulièrement décisive, pas un cas marginal). Bonne diversité
+      de Command observée : Nitro 71, Coast 28, Airstrike 18, Repair 1,
+      Drift 1 — Repair et Drift restent rares par nature de leurs
+      conditions de déclenchement, mais confirmés non nuls sur cet
+      échantillon.
+      Le module `ai-decision.js` est désormais considéré
+      **entièrement réaligné avec l'arbre de décision v3 à jour**,
+      toutes branches confondues.
 
 ## État courant
 
-Étapes 0, 1, 2, 3, 4, 5 et 6 terminées (194/194 tests IA, 212/212
-tests moteur). Prochaine action : étape 7 (validation globale) — aucun
-point ouvert connu.
+Étapes 0 à 7 terminées — le rewrite est complet. **196/196 tests IA,
+212/212 tests moteur.** Validation à grande échelle : 10500 parties
+post-correctif final, 0 crash, 0 décision illégale. Plus aucune étape
+au plan ; toute évolution future partirait d'un nouveau besoin (pas
+d'un correctif de ce rewrite).
