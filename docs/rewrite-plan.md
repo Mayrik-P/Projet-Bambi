@@ -381,10 +381,56 @@ siennes.
       **entièrement réaligné avec l'arbre de décision v3 à jour**,
       toutes branches confondues.
 
+- [x] **8. Correctif post-rewrite — cible de tir figée avant un Slam**
+      (trouvé par Mayrik en relisant une partie complète au viewer, pas
+      par le harnais automatisé — le motif est rare et discret dans un
+      simple compte de décisions légales/illégales).
+      **Bug** : `decision.shotTarget` était calculé UNE SEULE FOIS par
+      l'IA, à la décision, à partir de la destination *prévue*
+      (`computeShotTargetForDecision`, étape 2). Or un Slam résout ses
+      propres dés (dé de slam + dé de direction) PENDANT l'exécution du
+      mouvement — après la décision de l'IA, qui ne peut donc pas
+      connaître à l'avance la case d'arrivée réelle. `resolveShootStep`
+      (engine.js) utilisait pourtant cette cible figée telle quelle :
+      dès que le rebond envoyait le véhicule ailleurs que prévu, la
+      cible prévisionnelle n'était plus dans l'arc avant réel → tir
+      refusé ("X n'est pas dans l'arc avant de Y → tir impossible"),
+      alors qu'une autre cible, bien réelle, se trouvait dans l'arc
+      avant de la case d'arrivée effective (typiquement la victime du
+      Slam elle-même, projetée à proximité immédiate).
+      **Corrigé** dans `engine.js` (`resolveShootStep`) : nouveau
+      paramètre optionnel `options.shootTargetFn(car, allCars)`,
+      appelé — s'il est fourni — avec le véhicule dans son état FINAL
+      (mouvement et Slam entièrement résolus), en priorité sur
+      `options.shootTarget` (conservé comme repli, nécessaire pour
+      l'Airstrike — tir fixe depuis un chopper, jamais affecté par un
+      Slam de voiture — et pour ne rien casser des tests déjà en
+      place). Câblé une seule fois dans
+      `tools/run-shadow-legality.js` (`shootTargetFn:
+      (currentCar, cars) => ai.chooseShootTarget(...)`), sur les DEUX
+      chemins concernés (mouvement normal et Coast) — ils partagent
+      déjà `resolveShootStep` comme point d'entrée unique (étape 2),
+      donc un seul correctif suffit ; `tools/generate-full-game.js` et
+      `tools/generate-review-cases.js` en héritent automatiquement via
+      `playOneShadowTurn`, sans y toucher.
+      1 test dédié ajouté dans `test-engine.js` (Test 72bis),
+      reproduisant fidèlement le cas capturé par Mayrik au viewer
+      (Slam qui recule le tireur, cible prévue devenue invalide,
+      nouvelle cible correctement visée et touchée). 212/212 moteur,
+      196/196 IA — aucune régression.
+      **Audit ciblé à grande échelle** (400 parties self-play,
+      instrumentation temporaire retirée après coup) : 1592 tours
+      contenant un Slam, dont 472 avec une tentative de tir dans la
+      foulée — 239 touchés, **0 "tir impossible"** sur cet échantillon
+      (le motif exact du bug signalé par Mayrik n'apparaît plus).
+      Complète également la validation self-play standard : 1000
+      parties supplémentaires post-correctif, 0 crash, 0 décision
+      illégale.
+
 ## État courant
 
-Étapes 0 à 7 terminées — le rewrite est complet. **196/196 tests IA,
-212/212 tests moteur.** Validation à grande échelle : 10500 parties
-post-correctif final, 0 crash, 0 décision illégale. Plus aucune étape
-au plan ; toute évolution future partirait d'un nouveau besoin (pas
-d'un correctif de ce rewrite).
+Étapes 0 à 8 terminées — le rewrite est complet, et un bug post-rewrite
+trouvé en revue qualitative (cible de tir figée avant un Slam) est
+corrigé. **196/196 tests IA, 212/212 tests moteur** (dont le nouveau
+Test 72bis). Plus aucune étape au plan ; toute évolution future
+partirait d'un nouveau besoin (pas d'un correctif de ce rewrite).
