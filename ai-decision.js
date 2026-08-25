@@ -1945,9 +1945,21 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
     const frontBlocked = isFrontArcFullyBlocked(car, board, allCars);
 
     if (frontBlocked) {
-      const poolHas345 = myPool.some((v) => v >= 3 && v <= 5);
+      // CORRECTIF (étape 7, trouvé par le harnais de robustesse à
+      // grande échelle — 1 décision illégale sur 116552, jamais vue
+      // dans les 194 tests dédiés) : `remaining` doit exclure le
+      // biggestDie DÉJÀ assigné au mouvement AVANT de chercher un
+      // 3-4-5 pour le Drift (ou un plus petit dé pour Airstrike) —
+      // sinon, quand le SEUL 3-4-5 du pôle est justement biggestDie
+      // lui-même (ex. pool [4,1,2,2], biggestDie=4), le code utilisait
+      // deux fois la même valeur physique de dé (mouvement ET
+      // Command), ce qu'aucune règle du jeu n'autorise. Même
+      // discipline que partout ailleurs dans ce fichier
+      // (`poolMinusOne`, déjà utilisé pour Nitro juste en dessous).
+      const remaining = poolMinusOne(myPool, biggestDie);
+      const remaining345 = remaining.filter((v) => v >= 3 && v <= 5);
 
-      if (poolHas345) {
+      if (remaining345.length > 0) {
         // "Programmation Commande Drift avec le plus petit dé du pôle
         // de valeur 3 ou 4 ou 5" — SANS condition supplémentaire
         // (l'ancien nœud "le dé attribué est-il un 1 ?", qui s'est
@@ -1955,39 +1967,45 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
         // Mayrik plutôt que reformulé). Le dé de mouvement reste celui
         // déjà assigné (biggestDie) ; seul le déblocage de l'arc avant
         // change via driftAvailable=true.
-        const driftDie = Math.min(...myPool.filter((v) => v >= 3 && v <= 5));
+        const driftDie = Math.min(...remaining345);
         const driftTraj = chooseGeneralTrajectory(board, car, biggestDie, allCars, allChoppers, true, roundState.roadDie || 0);
         command = { type: "drift", dieValue: driftDie };
         destination = driftTraj.destination;
         slam = driftTraj.slam;
         roadBonusPath = driftTraj.roadBonusPath;
       } else {
-        // Aucun 3/4/5 nulle part dans le pôle : le Drift est
+        // Aucun 3/4/5 DISTINCT du dé déjà assigné : le Drift est
         // impossible, quel que soit le tour.
         const isLastTurnOfRound = ((roundState.turnsThisRound && roundState.turnsThisRound[playerName]) || 0) === 2;
-        if (isLastTurnOfRound) {
+        if (isLastTurnOfRound && remaining.length > 0) {
           // "Attribution du plus petit dé du pôle à la Command
           // Airstrike" — le mouvement reste sur la destination déjà
           // calculée (toujours bloquée) avec le dé d'origine.
-          const smallestDie = Math.min(...myPool);
+          const smallestDie = Math.min(...remaining);
           const enemies = allCars.filter((c) => c.owner !== playerName && c.status !== CAR_STATUS.ELIMINATED);
           const target = enemies.length > 0 ? findFrontmostCar(enemies) : null;
           const placement = target ? findAiAirstrikePlacement(board, target, allCars, allChoppers) : null;
           if (placement) {
             command = { type: "airstrike", dieValue: smallestDie, target, placement };
           }
-        } else {
+        } else if (!isLastTurnOfRound && remaining.length > 0) {
           // "On retire le dé assigné au véhicule, on Assigne le dé le
           // plus petit du pôle au véhicule" -> nouvelle recherche de
           // trajectoire avec ce petit dé (mouvement minimal, aucune
-          // Command ce tour-ci).
-          const smallestDie = Math.min(...myPool);
+          // Command ce tour-ci). Ici un seul dé est consommé au total
+          // (le grand est simplement abandonné, pas de double-usage
+          // possible), donc pas besoin de `remaining` pour ce choix —
+          // mais on ne l'utilise QUE s'il en reste au moins un.
+          const smallestDie = Math.min(...remaining);
           const fallbackTraj = chooseGeneralTrajectory(board, car, smallestDie, allCars, allChoppers, false, roundState.roadDie || 0);
           dieValueFinal = smallestDie;
           destination = fallbackTraj.destination;
           slam = fallbackTraj.slam;
           roadBonusPath = fallbackTraj.roadBonusPath;
         }
+        // sinon (remaining.length === 0, pool réduit au seul dé déjà
+        // assigné) : rien d'autre à faire — mouvement bloqué d'origine
+        // conservé, aucune Command (aucune ressource disponible).
       }
     } else {
       const remaining = poolMinusOne(myPool, biggestDie);

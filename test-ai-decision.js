@@ -552,6 +552,20 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
   const dC = ai.decideAssignAndCommand(progressionStateFL, board, [carC, ...blockersC], [], { A: [6, 2, 1, 6] }, "A", { commandUsedThisRound: { A: false }, turnsThisRound: { A: 0 } });
   assert(dC.command === null, "FinishLineRush, arc bloqué, aucun 3-4-5, pas dernier tour : aucune Command (report)");
   assert(dC.dieValue === 1, "FinishLineRush, report : le dé de mouvement devient le PLUS PETIT du pôle (le gros dé est rendu)");
+
+  // Cas 4 (CORRECTIF étape 7, trouvé par le harnais de robustesse à
+  // grande échelle — 1 décision illégale sur 116552, jamais vue dans
+  // les tests dédiés jusqu'ici) : le SEUL 3-4-5 du pôle est justement
+  // le plus gros dé (déjà assigné au mouvement) -> il n'y a PAS de
+  // second dé 3-4-5 disponible pour la Command Drift (utiliser deux
+  // fois la même valeur reviendrait à jouer deux fois le même dé
+  // physique). Doit retomber sur la cascade "aucun 3-4-5 distinct"
+  // (ici : pas dernier tour -> report sur le plus petit dé restant).
+  const carD = createCar("A", CAR_SIZE.MEDIUM, 10, 2);
+  const blockersD = [createCar("B", CAR_SIZE.SMALL, 10, 1), createCar("B", CAR_SIZE.SMALL, 11, 2), createCar("B", CAR_SIZE.SMALL, 10, 3)];
+  const dD = ai.decideAssignAndCommand(progressionStateFL, board, [carD, ...blockersD], [], { A: [4, 1, 2, 2] }, "A", { commandUsedThisRound: { A: false }, turnsThisRound: { A: 0 } });
+  assert(dD.command === null, "FinishLineRush, arc bloqué, seul 3-4-5 = dé déjà assigné : aucune Command Drift (pas de second dé distinct)");
+  assert(dD.dieValue === 1, "FinishLineRush, cas 4 : report sur le plus petit dé restant (1), le 4 déjà assigné n'est pas dédoublé");
 }
 
 
