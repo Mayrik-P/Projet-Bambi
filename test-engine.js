@@ -11,7 +11,8 @@ const {
   createCar,
   moveCar,
   CAR_SIZE,
-  CAR_STATUS
+  CAR_STATUS,
+  getFrontArc
 } = require("./engine.js");
 
 function section(title) {
@@ -1254,6 +1255,48 @@ turnResult.log.forEach((l) => console.log("  " + l));
 console.log("Statut de fragileCar après la mine (attendu 'inoperable') :", fragileCar.status);
 console.log("Aucun tir tenté (attendu shootResult:null) :", turnResult.shootResult);
 console.log("target72 AUCUN dégât (attendu 0) :", target72.damageTokens.length);
+
+// -----------------------------------------------------------------
+// TEST 72bis : shootTargetFn recalcule la cible APRÈS un Slam qui
+// projette le tireur ailleurs qu'où l'IA l'avait prévu
+// -----------------------------------------------------------------
+// CORRECTIF (trouvé par Mayrik en relisant une partie complète au
+// viewer, après l'étape 7 du rewrite d'ai-decision.js) : un Slam
+// résout ses dés (dé de slam + dé de direction) PENDANT le mouvement,
+// donc APRÈS que l'IA a choisi sa cible de tir prévisionnelle
+// (computeShotTargetForDecision, basée sur la destination PRÉVUE).
+// Avant ce correctif, `resolveShootStep` utilisait aveuglément cette
+// cible figée même si le rebond avait fini ailleurs — un tir valide
+// depuis la position RÉELLE était donc perdu ("tir impossible"),
+// alors qu'une autre cible, bien réelle, se trouvait dans l'arc avant
+// de la case d'arrivée effective.
+section("Test 72bis — shootTargetFn recalcule la cible après un Slam qui recule le tireur");
+
+tile = createTestTile(8, 6);
+const slamShooter72b = createCar("Mayrik", CAR_SIZE.MEDIUM, 0, 3);
+const slamVictim72b = createCar("IA-1", CAR_SIZE.SMALL, 1, 3); // provoque un slam dès la 1ère case
+const staleTarget72b = createCar("IA-2", CAR_SIZE.SMALL, 3, 3); // ce que l'IA visait, en pensant arriver plus loin
+const cars72b = [slamShooter72b, slamVictim72b, staleTarget72b];
+
+function findFrontArcTargetForTest(car, allCars) {
+  const arc = getFrontArc(car);
+  for (const cell of arc) {
+    const found = allCars.find((c) => c.col === cell.col && c.row === cell.row && c.owner !== car.owner && c.status === CAR_STATUS.OPERABLE);
+    if (found) return found;
+  }
+  return null;
+}
+
+turnResult = playTurnAssignMove(tile, slamShooter72b, 3, ["front", "front", "front"], cars72b, [], {
+  shootTarget: staleTarget72b,       // cible prévisionnelle, devenue fausse après le rebond
+  shootTargetFn: findFrontArcTargetForTest, // doit primer et recalculer depuis la position réelle
+  roundNumber: 2,
+  forcedDice: { slam: "top", direction: "rear", shootingDie: "any" }
+});
+turnResult.log.forEach((l) => console.log("  " + l));
+console.log("Position finale du tireur après le slam (attendu col 0, row 3) :", slamShooter72b.col, slamShooter72b.row);
+console.log("La cible PRÉVUE (staleTarget72b) n'est PAS touchée (attendu 0 dégât) :", staleTarget72b.damageTokens.length);
+console.log("La cible RÉELLE (slamVictim72b, dans l'arc avant après rebond) est touchée (attendu hit:true) :", turnResult.shootResult?.hit);
 
 // -----------------------------------------------------------------
 // TEST 73 : aucune cible fournie — pas de tir tenté, pas d'erreur,
@@ -2549,7 +2592,7 @@ console.log("N'a jamais choisi 'front' (Impassable) (attendu true) :", !path138.
 
 section("Test 138bis — Entre plusieurs trajectoires valides à distance égale, préférence à celle permettant de tirer sur un adversaire (précision ajoutée par Mayrik)");
 
-const { DIRECTIONS, getFrontArc } = require("./engine.js");
+const { DIRECTIONS } = require("./engine.js");
 
 const board138bis = createTestTile(8, 6);
 const car138bis = createCar("IA", CAR_SIZE.MEDIUM, 0, 3);

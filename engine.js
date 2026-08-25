@@ -2968,7 +2968,31 @@ function resolveShootStep(board, allCars, car, options) {
   const log = [];
   let shootResult = null;
 
-  if (!options.shootTarget) {
+  // CORRECTIF (trouvé par Mayrik en relisant une partie complète au
+  // viewer, après l'étape 7 du rewrite) : la cible de tir ne peut PAS
+  // être décidée une fois pour toutes par l'IA avant le mouvement — un
+  // Slam introduit une case d'arrivée réellement aléatoire (dé de slam
+  // + dé de direction, tirés PENDANT la résolution du mouvement
+  // ci-dessus, donc après que l'IA a pris sa décision). Le
+  // `decision.shotTarget` précalculé (voir computeShotTargetForDecision,
+  // ai-decision.js) n'est qu'une PRÉVISION basée sur la destination
+  // PRÉVUE ; une fois le Slam rebondi ailleurs, cette prévision est
+  // souvent fausse — d'où des tirs jugés "impossibles" alors qu'une
+  // cible valide existait bel et bien depuis la case RÉELLE d'arrivée.
+  // Si l'appelant fournit `options.shootTargetFn` (callback pointant
+  // vers ai.chooseShootTarget), on l'utilise pour recalculer la cible
+  // à PARTIR DE LA POSITION RÉELLE de `car` (déjà à jour à ce stade,
+  // le mouvement — Slam compris — est entièrement résolu juste
+  // au-dessus). Repli sur `options.shootTarget` (cible fixe) si aucune
+  // fonction n'est fournie — nécessaire pour l'Airstrike (tir depuis
+  // un chopper à une case fixe, jamais affecté par un Slam de voiture)
+  // et pour ne rien casser des tests existants qui passent une cible
+  // toute faite.
+  const target = options.shootTargetFn
+    ? options.shootTargetFn(car, allCars)
+    : options.shootTarget;
+
+  if (!target) {
     return { log, shootResult };
   }
 
@@ -2977,7 +3001,7 @@ function resolveShootStep(board, allCars, car, options) {
   } else if (car.status !== CAR_STATUS.OPERABLE) {
     log.push(`${car.id} n'est plus opérable → tir impossible`);
   } else {
-    shootResult = resolveShoot(board, allCars, car, options.shootTarget, options);
+    shootResult = resolveShoot(board, allCars, car, target, options);
     log.push(...shootResult.log);
   }
 
