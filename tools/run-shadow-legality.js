@@ -95,8 +95,20 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
   // shootTarget) — un tir valide était donc silencieusement perdu à
   // chaque Coast. Rattaché sur `decision` pour la compatibilité des
   // outils qui inspectent decision.shotTarget après coup (génération
-  // de parties, revue de cas).
+  // de parties, revue de cas) — cette valeur reste une PRÉVISION,
+  // affichée telle quelle par ces outils, mais n'est PLUS ce qui est
+  // réellement utilisé pour le tir (voir shootTargetFn ci-dessous).
   decision.shotTarget = ai.computeShotTargetForDecision(decision, allCars);
+
+  // CORRECTIF (post étape 7) : la cible réellement utilisée pour le
+  // tir doit être recalculée APRÈS résolution complète du mouvement
+  // (un Slam peut faire atterrir la voiture ailleurs qu'où l'IA
+  // l'avait prévu, via des dés tirés PENDANT la résolution — la
+  // position au moment de la décision n'a alors plus rien à voir avec
+  // la position réelle). `shootTargetFn` est appelé par le moteur avec
+  // la voiture dans son état FINAL (juste avant le tir) — voir
+  // engine.js, resolveShootStep.
+  const shootTargetFn = (currentCar, cars) => ai.chooseShootTarget(currentCar.col, currentCar.row, currentCar.owner, cars);
 
   let effectiveDieValue = decision.dieValue;
   const slamOptions = {};
@@ -137,7 +149,7 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
   }
 
   if (isCoastTurn) {
-    const result = playTurnCoastWithProgression(progressionState, car, decision.destination.path || [], allCars, allChoppers, playerNames, { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget });
+    const result = playTurnCoastWithProgression(progressionState, car, decision.destination.path || [], allCars, allChoppers, playerNames, { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn });
     log.push(...(result.log || []));
     if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
     return { ...result, log, decision };
@@ -151,7 +163,7 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
 
   const result = playTurnAssignMoveWithProgression(
     progressionState, car, effectiveDieValue, decision.destination.path || [], allCars, allChoppers, playerNames,
-    { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
+    { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
   );
   log.push(...(result.log || []));
   if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
