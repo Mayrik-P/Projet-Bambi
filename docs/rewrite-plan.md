@@ -597,6 +597,58 @@ de toute politique cachée). 212/212 moteur et 199/199 IA inchangés,
 self-play 800 parties post-changement : 0 crash, 0 décision illégale,
 0 état incohérent.
 
-**Prochaine étape** : rendu interactif minimal (point 2 du phasage
-ci-dessus) — repartir du rendu SVG déjà existant dans les viewers de
-debug et le rendre cliquable, plutôt que juste en lecture seule.
+## 2. Rendu interactif minimal — TERMINÉ
+
+**Objectif** : un humain doit pouvoir réellement jouer un tour, via
+de vrais clics, à travers le même moteur que l'IA — formes simples,
+zéro artwork, zéro animation (volontairement hors scope à ce stade).
+
+**Défi technique principal** : `engine.js`/`ai-decision.js`/
+`human-decision.js`/`turn-executor.js` sont des modules CommonJS
+(Node.js) ; aucun n'utilise d'API Node en dehors du système de
+modules lui-même (vérifié : aucun `fs`/`path`/`vm` dans leur propre
+logique, seulement dans les outils de chargement de tuiles). Un
+script de bundling dédié (`tools/build-bundle.js`) concatène les 4
+fichiers + les 10 fichiers de données de tuiles en un seul script
+navigateur : les lignes `require(...)` et leurs destructurations sont
+retirées (les noms deviennent directement globaux par concaténation
+dans le même scope), une seule collision de nom trouvée et résolue
+(`SIZE_RANK`, défini deux fois avec la même valeur dans `engine.js`
+et `ai-decision.js` — la déclaration d'`ai-decision.js` est retirée
+du bundle), et `loadRealTiles()` est réécrite pour collecter les
+variables globales déjà présentes plutôt que lire le système de
+fichiers. Le script régénère aussi directement `prototype.html`
+(assemblage de `template.html` + le bundle + `ui-script.js`).
+
+**Validation du bundle** : rejoué 50 parties complètes IA vs IA à
+travers le bundle navigateur (via `vm.runInContext`, en dehors de
+tout DOM) — 0 crash, résultats mécaniquement identiques à la version
+Node.
+
+**Interface construite** (`template.html` + `ui-script.js`) : plateau
+SVG interactif (même géométrie que les viewers de debug), panneau de
+choix pas à pas pour le tour humain (voiture → dé → Command
+éventuelle → destination cliquée sur le plateau → placement Airstrike
+si besoin → confirmation), bouton unique pour déclencher le tour de
+l'IA. Chaque décision humaine passe par `checkDecisionLegality` puis
+`executeDecision` — exactement le chemin déjà emprunté par l'IA.
+
+**Test réel avec jsdom** (pas une simple relecture de code) :
+installation d'un DOM headless pour simuler de VRAIS clics et
+vérifier les mises à jour réelles de l'interface. Un bug a été trouvé
+et corrigé de cette façon : l'étape de placement Airstrike était
+sautée (la vérification testait `sel.command.type`, pas encore
+construit à ce stade du flux, au lieu de `sel.commandType`, déjà
+connu) — invisible à la simple lecture, découvert uniquement en
+cliquant réellement le chemin Airstrike de bout en bout. Une fois
+corrigé, les 5 chemins de tour ont chacun été rejoués par de vrais
+clics simulés jusqu'à exécution réussie : mouvement simple, Nitro,
+Repair (avec cible choisie par le joueur), Airstrike (cible et
+placement), Coast — puis une partie humain vs IA complète jusqu'à une
+victoire réellement déclarée et affichée (itération 52-69 selon les
+graines aléatoires testées).
+
+**Prochaine étape** : boucle de jeu complète (point 3) — jouer
+plusieurs parties dessus soi-même pour repérer les premiers vrais
+problèmes d'UX (pas les règles, déjà validées) avant tout
+investissement mobile.
