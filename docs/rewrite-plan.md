@@ -507,13 +507,96 @@ siennes.
       trois parties et tous les tours, pas seulement celui initialement
       signalé.
 
-## État courant
+## État courant (rewrite d'ai-decision.js)
 
 Étapes 0 à 10 terminées — le rewrite du moteur de décision est complet
 (deux bugs post-rewrite trouvés en revue qualitative et corrigés :
 cible de tir figée avant un Slam, Nitro gâché quand le terrain
 plafonne le mouvement), et un bug d'affichage de l'outillage de
 visualisation (voitures éliminées fantômes) est également corrigé.
-**199/199 tests IA, 212/212 tests moteur.** Plus aucune étape au plan ;
-toute évolution future partirait d'un nouveau besoin (pas d'un
-correctif de ce rewrite).
+**199/199 tests IA, 212/212 tests moteur.** Plus aucune étape au plan
+sur ce volet ; toute évolution future partirait d'un nouveau besoin
+(pas d'un correctif de ce rewrite).
+
+---
+
+# Phase 2 — Prototype jouable (humain vs IA)
+
+Le rewrite ci-dessus a rendu le moteur (`engine.js`) et l'IA
+(`ai-decision.js`) solides et validés à l'échelle — mais jusqu'ici,
+AUCUN humain ne pouvait réellement jouer une partie : tout n'existait
+que via simulation programmatique (self-play) ou outils de revue en
+lecture seule. Phasage retenu (le plus proche du terrain, le moins
+coûteux à corriger, avant tout investissement mobile) :
+1. Couche d'interface joueur ↔ moteur — **fait, voir ci-dessous**.
+2. Rendu interactif minimal (web/desktop, formes simples).
+3. Boucle de jeu complète, un round entier, humain vs IA.
+4. Retour d'usage (UX, pas les règles — déjà validées).
+5. Seulement ensuite : vraies images, mobile, packaging.
+
+## 1. Couche d'interface joueur ↔ moteur — TERMINÉ
+
+**Point de départ, vérifié dans le livret de règles (p.7-8) avant tout
+code** : les conditions de position que l'IA applique pour choisir SES
+propres Commands (tuile Rear, adversaire à moins de 6 cases, "arc
+avant bloqué" pour Drift, ciblage Repair "en tête/en arrière"...) sont
+des HEURISTIQUES DE L'AUTOMATE, PAS des règles du jeu. Un humain doit
+rester entièrement libre de ses choix stratégiques ; seules les
+contraintes mécaniques réelles s'appliquent : Nitro (dé 1-3), Drift
+(dé 3-5, utilisable à tout moment pour traverser sans Slam — pas
+seulement si bloqué), Repair (dé 6, cible n'importe laquelle de ses
+voitures inopérables), Airstrike (n'importe quel dé, case vide au
+choix), une seule Command par round, jamais sur un tour de Coast.
+
+**Refactor préalable** : la logique d'exécution d'une décision
+(tirage des dés du pool, résolution de Command, mouvement/Coast/
+entrée, avancement de tour) était jusqu'ici *inlinée* dans
+`tools/run-shadow-legality.js`, écrite spécifiquement pour le harnais
+self-play IA vs IA. Extraite dans un nouveau fichier partagé
+`turn-executor.js` (`checkDecisionLegality` + `executeDecision`),
+utilisable par N'IMPORTE QUELLE source de décision — IA ou humain —
+sans aucune branche spécifique côté moteur. `run-shadow-legality.js`
+mis à jour pour utiliser ce module ; self-play réexécuté à l'identique
+(500 parties, 0 crash/illégal/incohérence) pour confirmer un refactor
+pur, sans aucun changement de comportement.
+
+**Nouveau module `human-decision.js`** — symétrique de
+`ai-decision.js` mais SANS AUCUNE politique stratégique :
+- `getTurnContext` : que peut faire ce joueur ce tour (mode
+  assign/coast, voitures activables, Command disponible ou non) —
+  sans présélectionner quoi que ce soit, contrairement aux fonctions
+  équivalentes côté IA.
+- `getReachableOptions` : délègue à `computeReachableDestinations` /
+  `computeReachableEntryDestinations` (déjà exportées par
+  `ai-decision.js`, pure géométrie/règles de terrain, aucune
+  heuristique) — renvoie TOUTES les cases atteignables, au joueur de
+  choisir, jamais UNE seule "meilleure" comme le ferait
+  `chooseGeneralTrajectory`.
+- `getAvailableCommands` : légalité pure livret (plages de dé,
+  Repair ouvert à toute voiture inopérable vivante) — zéro condition
+  de position.
+- `isValidAirstrikePlacement` / `listValidAirstrikePlacements` :
+  mêmes conditions que `engine.placeChopperAirstrike`, mais en pure
+  consultation (ne mute jamais le chopper, contrairement à la
+  fonction moteur qui le positionne réellement dès validation).
+- `buildHumanDecision` : assemble le choix du joueur dans EXACTEMENT
+  la même forme que `ai.decideAssignAndCommand` — c'est ce qui permet
+  à `turn-executor.js` de l'exécuter sans distinguer humain et IA.
+
+**47 tests dédiés** (`test-human-decision.js`) : contexte de tour
+(assign/coast/impossible), délégation fidèle des trajectoires
+atteignables, légalité des Commands strictement conforme au livret
+(notamment : Repair propose bien TOUTES les voitures inopérables, pas
+seulement celle que l'IA aurait choisie ; Airstrike accepte n'importe
+quel dé), placements Airstrike, construction de la décision, et
+surtout deux tests d'intégration bout en bout démontrant qu'une
+décision humaine s'exécute via le MÊME `executeDecision` que l'IA
+(dont un test Repair où le joueur choisit délibérément la cible
+OPPOSÉE à celle que l'IA aurait retenue, pour bien vérifier l'absence
+de toute politique cachée). 212/212 moteur et 199/199 IA inchangés,
+self-play 800 parties post-changement : 0 crash, 0 décision illégale,
+0 état incohérent.
+
+**Prochaine étape** : rendu interactif minimal (point 2 du phasage
+ci-dessus) — repartir du rendu SVG déjà existant dans les viewers de
+debug et le rendre cliquable, plutôt que juste en lecture seule.
