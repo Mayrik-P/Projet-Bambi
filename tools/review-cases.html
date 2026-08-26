@@ -96,7 +96,14 @@ function render() {
   }
 
   c.cars.forEach((car) => {
-    if (car.col === null) return; // pas encore entrée, non affichée
+    // CORRECTIF (Mayrik, en relisant une partie complète au viewer) :
+    // une voiture éliminée garde ses dernières coordonnées connues
+    // dans les données (jamais remises à null) — sans ce filtre, son
+    // icône "fantôme" restait dessinée indéfiniment sur la case où
+    // elle a péri, se superposant à toute voiture y atterrissant
+    // ensuite (illusion de deux voitures sur la même case). Seule la
+    // liste de badges de dégâts filtrait déjà ce cas, pas le plateau.
+    if (car.col === null || car.status === "eliminated") return; // pas encore entrée, non affichée
     const { cx, cy } = cellCenter(car.col, car.row);
     const isActive = car.id === c.activeCarId;
     const isCommandTarget = c.command && c.command.targetId === car.id;
