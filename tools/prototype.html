@@ -6315,6 +6315,43 @@ function getReachableOptions(board, car, dieValue, allCars, allChoppers, driftAv
 }
 
 // ===================================================================
+// SECTION 2bis — BONUS ROAD (optionnel, montant fixe imposé — p.7)
+// ===================================================================
+// CORRECTIF (Mayrik, en testant le prototype) : ce bonus n'était
+// simplement jamais proposé au joueur humain — la couche humaine
+// n'avait aucune fonction pour ça. Il s'agit d'une mécanique à part
+// du mouvement principal (voir engine.js, playTurnAssignMoveWithProgression :
+// une seconde application de moveCarWithProgression, APRÈS le
+// mouvement de base, avec le dé Road comme distance) — jamais une
+// simple addition à la distance de départ (contrairement au Nitro).
+/**
+ * "This bonus is optional, but if you use it, you must use the full
+ * amount." (p.7) — éligible seulement si le trajet choisi par le
+ * joueur est resté ENTIÈREMENT sur route, sans case dangereuse
+ * traversée, et qu'un dé Road a été tiré ce round.
+ */
+function isRoadBonusEligible(destination, roadDieValue) {
+  return roadDieValue > 0 && destination.terminalReason === "normal" && destination.allRoad === true && destination.dangerousCellsCrossed === 0;
+}
+
+/**
+ * Renvoie les destinations atteignables pour l'extension de bonus
+ * Road (distance = roadDieValue PILE, jamais moins — "you must use
+ * the full amount") depuis la destination de base déjà choisie.
+ * "This extra movement does not need to be on the road" (p.7) — donc
+ * aucun filtre de terrain ici, juste écarter les fins dangereuses,
+ * comme pour le mouvement normal. Renvoie [] si non éligible (rien à
+ * proposer) — à l'appelant de vérifier isRoadBonusEligible avant
+ * d'offrir le choix "oui/non" au joueur.
+ */
+function getRoadBonusOptions(board, car, destination, roadDieValue, allCars, allChoppers, driftAvailable = false) {
+  if (!isRoadBonusEligible(destination, roadDieValue)) return [];
+  const extCar = { ...car, col: destination.col, row: destination.row };
+  return computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable)
+    .filter((e) => (e.terminalReason === "normal" || e.terminalReason === "exits-front") && e.dangerousCellsCrossed === 0);
+}
+
+// ===================================================================
 // SECTION 3 — COMMANDS DISPONIBLES (règles du livret UNIQUEMENT, p.8)
 // ===================================================================
 /**
@@ -6402,10 +6439,16 @@ function listValidAirstrikePlacements(board, allCars, allChoppers, chopper) {
  *     adverse visée, choisie librement par le joueur parmi les
  *     opérables, ou null si aucune n'est atteignable/souhaitée).
  *   - destination : UNE des options renvoyées par getReachableOptions
- *     (Section 2), choisie par le joueur.
+ *     (Section 2), choisie par le joueur — TOUJOURS la destination de
+ *     base, jamais le point d'arrivée après bonus Road (voir
+ *     roadBonusPath ci-dessous : le moteur rejoue cette extension
+ *     comme un second mouvement séparé, après le premier).
  *   - isCoast : true si ce tour est un Coast (voir Section 1).
+ *   - roadBonusPath : le `.path` d'UNE des options renvoyées par
+ *     getRoadBonusOptions (Section 2bis), si le joueur a choisi
+ *     d'utiliser le bonus Road ce tour — sinon null/omis.
  */
-function buildHumanDecision({ car, dieValue, command, destination, isCoast = false }) {
+function buildHumanDecision({ car, dieValue, command, destination, isCoast = false, roadBonusPath = null }) {
   const isEntry = car.col === null && !isCoast;
   return {
     car,
@@ -6415,7 +6458,7 @@ function buildHumanDecision({ car, dieValue, command, destination, isCoast = fal
     isEntry,
     isCoast,
     slam: destination.terminalReason === "slam",
-    roadBonusPath: destination.roadBonusPath || null
+    roadBonusPath: roadBonusPath || null
   };
 }
 
@@ -6423,6 +6466,8 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     getTurnContext,
     getReachableOptions,
+    isRoadBonusEligible,
+    getRoadBonusOptions,
     getAvailableCommands,
     isValidAirstrikePlacement,
     listValidAirstrikePlacements,
@@ -6954,17 +6999,37 @@ function pickAirstrikeTarget(target) {
 
 function pickDestination(dest) {
   sel.destination = dest;
+  sel.step = nextStepAfterDestination(dest);
+}
+
+// CORRECTIF (Mayrik, en testant le prototype) : le bonus Road
+// n'était jamais proposé — cette étape était totalement absente.
+// "This bonus is optional" (p.7) : le joueur doit pouvoir refuser
+// autant qu'accepter, jamais un ajout automatique.
+function nextStepAfterDestination(dest) {
   // CORRECTIF (trouvé en testant réellement le chemin Airstrike avec
   // jsdom) : à ce stade, sel.command n'est PAS ENCORE construit pour
   // Airstrike (il ne l'est qu'après le placement, dans
   // pickAirstrikePlacement ci-dessous) — il faut donc tester
   // sel.commandType (déjà connu depuis pickCommandChoice), pas
   // sel.command.type qui vaudrait toujours undefined ici.
-  if (sel.commandType === "airstrike") {
-    sel.step = "airstrike-placement";
-  } else {
-    sel.step = "confirm";
-  }
+  if (sel.commandType === "airstrike") return "airstrike-placement";
+  if (isRoadBonusEligible(dest, G.roundState.roadDie)) return "road-bonus-choice";
+  return "confirm";
+}
+
+function declineRoadBonus() {
+  sel.roadBonusPath = null;
+  sel.step = sel.commandType === "airstrike" ? "airstrike-placement" : "confirm";
+}
+
+function acceptRoadBonus() {
+  sel.step = "road-bonus-destination";
+}
+
+function pickRoadBonusDestination(dest) {
+  sel.roadBonusPath = dest.path;
+  sel.step = sel.commandType === "airstrike" ? "airstrike-placement" : "confirm";
 }
 
 function pickAirstrikePlacement(col, row) {
@@ -6978,7 +7043,8 @@ function confirmTurn() {
     dieValue: sel.dieValue,
     command: sel.command || null,
     destination: sel.destination,
-    isCoast: sel.mode === "coast"
+    isCoast: sel.mode === "coast",
+    roadBonusPath: sel.roadBonusPath || null
   });
   const legality = checkDecisionLegality(decision, G.roundState.dicePool[HUMAN], HUMAN);
   if (!legality.allOk) {
@@ -7010,10 +7076,21 @@ function highlightedCells() {
   // cours (destinations atteignables, ou placements Airstrike valides).
   if (!sel.step) return [];
   if (sel.step === "destination" && sel.car && sel.dieValue != null) {
-    const driftAvailable = !!(sel.command && sel.command.type === "drift");
-    const dist = sel.mode === "coast" ? 1 : sel.dieValue;
+    const driftAvailable = !!(sel.commandType === "drift");
+    // CORRECTIF (Mayrik, en testant le prototype) : le bonus Nitro
+    // n'était jamais ajouté ici — seul le dé de mouvement brut était
+    // utilisé, quel que soit le dé Nitro choisi juste avant. Le
+    // Nitro AUGMENTE le mouvement de la valeur de son propre dé
+    // (resolveNitroCommand, engine.js), ce n'est pas une Command à
+    // part comme Repair/Airstrike.
+    let dist = sel.mode === "coast" ? 1 : sel.dieValue;
+    if (sel.commandType === "nitro" && sel.commandDieValue != null) dist += sel.commandDieValue;
     const options = getReachableOptions(board(), sel.car, dist, G.allCars, G.allChoppers, driftAvailable);
     return options.map((o) => ({ col: o.col, row: o.row, onClick: () => { pickDestination(o); render(); } }));
+  }
+  if (sel.step === "road-bonus-destination") {
+    const options = getRoadBonusOptions(board(), sel.car, sel.destination, G.roundState.roadDie, G.allCars, G.allChoppers);
+    return options.map((o) => ({ col: o.col, row: o.row, onClick: () => { pickRoadBonusDestination(o); render(); } }));
   }
   if (sel.step === "airstrike-placement") {
     const chopper = G.allChoppers.find((c) => c.owner === HUMAN);
@@ -7186,13 +7263,23 @@ function renderPanel() {
     const p = document.createElement("div");
     p.textContent = "Cliquez une case surlignée sur le plateau pour choisir la destination.";
     panel.appendChild(p);
+  } else if (sel.step === "road-bonus-choice") {
+    const p = document.createElement("div");
+    p.textContent = `Trajet resté 100% sur route ! Voulez-vous utiliser le bonus Road (+${G.roundState.roadDie} cases, montant fixe, non modifiable) ?`;
+    panel.appendChild(p);
+    choices.appendChild(choiceButton(`Oui, +${G.roundState.roadDie}`, () => { acceptRoadBonus(); render(); }));
+    choices.appendChild(choiceButton("Non merci", () => { declineRoadBonus(); render(); }));
+  } else if (sel.step === "road-bonus-destination") {
+    const p = document.createElement("div");
+    p.textContent = `Cliquez une case surlignée pour choisir où atterrir avec le bonus Road (+${G.roundState.roadDie} cases pile).`;
+    panel.appendChild(p);
   } else if (sel.step === "airstrike-placement") {
     const p = document.createElement("div");
     p.textContent = "Cliquez une case surlignée pour placer le chopper (Airstrike).";
     panel.appendChild(p);
   } else if (sel.step === "confirm") {
     const p = document.createElement("div");
-    p.textContent = `Prêt : ${sel.car.size}, dé ${sel.dieValue}${sel.command ? ", Command " + sel.command.type + " (dé " + sel.command.dieValue + ")" : ""}, destination (${sel.destination.col},${sel.destination.row}).`;
+    p.textContent = `Prêt : ${sel.car.size}, dé ${sel.dieValue}${sel.command ? ", Command " + sel.command.type + " (dé " + sel.command.dieValue + ")" : ""}, destination (${sel.destination.col},${sel.destination.row})${sel.roadBonusPath ? ", + bonus Road" : ""}.`;
     panel.appendChild(p);
     const btn = document.createElement("button");
     btn.className = "primary";
