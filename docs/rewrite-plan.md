@@ -477,11 +477,43 @@ siennes.
       Nitro conservé sans progression réelle constatée, jamais un
       Nitro abandonné alors qu'il aidait réellement.
 
+- [x] **10. Correctif outillage — voitures éliminées "fantômes" sur le
+      plateau des viewers** (trouvé par Mayrik en relisant une partie
+      complète au viewer : deux véhicules affichés sur la même case,
+      ce qui est mécaniquement impossible dans le jeu).
+      **Ce n'est PAS un bug de Slam manqué côté moteur/IA** — vérifié
+      en premier lieu : les données de partie confirment que la
+      voiture concernée était déjà correctement marquée `eliminated`
+      au moment du tour signalé. Le bug est purement dans l'outillage
+      de visualisation : une voiture éliminée conserve ses dernières
+      coordonnées connues dans les données (jamais remises à `null`),
+      et les trois templates HTML (`full-game-viewer-template.html`,
+      `assign-command-viewer-template.html`, `review-cases.html`)
+      dessinaient TOUTE voiture dont `col !== null` sans exclure le
+      statut `eliminated` — seule la liste de badges de dégâts
+      appliquait déjà ce filtre, jamais le rendu du plateau lui-même.
+      Son icône "fantôme" restait donc affichée indéfiniment sur sa
+      case de mort, se superposant à toute voiture y atterrissant
+      ensuite par la suite de la partie.
+      **Corrigé** dans les trois templates : la même garde utilisée
+      pour les badges (`car.status !== "eliminated"`) est désormais
+      appliquée aussi à la boucle de rendu SVG du plateau.
+      **Validation directe sur données réelles** (pas de test unitaire
+      ajouté ici — correctif d'affichage pur, sans logique de jeu) :
+      rejoué le filtre corrigé sur les 3 parties déjà générées pour la
+      revue qualitative de l'étape 7 (81, 42 et 63 tours). Occurrences
+      de superposition fantôme AVANT correctif : 28, 14 et 5
+      respectivement (47 au total) — **0 après correctif**, sur les
+      trois parties et tous les tours, pas seulement celui initialement
+      signalé.
+
 ## État courant
 
-Étapes 0 à 9 terminées — le rewrite est complet, et deux bugs
-post-rewrite trouvés en revue qualitative d'une partie simulée (cible
-de tir figée avant un Slam ; Nitro gâché quand le terrain plafonne le
-mouvement) sont corrigés. **199/199 tests IA, 212/212 tests moteur.**
-Plus aucune étape au plan ; toute évolution future partirait d'un
-nouveau besoin (pas d'un correctif de ce rewrite).
+Étapes 0 à 10 terminées — le rewrite du moteur de décision est complet
+(deux bugs post-rewrite trouvés en revue qualitative et corrigés :
+cible de tir figée avant un Slam, Nitro gâché quand le terrain
+plafonne le mouvement), et un bug d'affichage de l'outillage de
+visualisation (voitures éliminées fantômes) est également corrigé.
+**199/199 tests IA, 212/212 tests moteur.** Plus aucune étape au plan ;
+toute évolution future partirait d'un nouveau besoin (pas d'un
+correctif de ce rewrite).
