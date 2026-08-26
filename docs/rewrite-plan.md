@@ -648,6 +648,53 @@ placement), Coast — puis une partie humain vs IA complète jusqu'à une
 victoire réellement déclarée et affichée (itération 52-69 selon les
 graines aléatoires testées).
 
+## 2bis. Correctif — Nitro et bonus Road manquants dans le prototype
+
+Trouvés par Mayrik en jouant réellement le prototype (round 1, dé 5 +
+Nitro 3, cases proposées limitées à 3-5 au lieu des 8 attendues).
+
+**Bug 1 (Nitro)** : `ui-script.js` calculait les cases atteignables à
+partir du seul dé de mouvement, sans jamais ajouter la valeur du dé
+Nitro choisi juste avant. Corrigé : la distance utilisée pour
+`getReachableOptions` inclut désormais `dieValue + commandDieValue`
+quand une Command Nitro est sélectionnée.
+
+**Bug 2 (bonus Road), plus profond** : entièrement absent de
+`human-decision.js` — pas une case oubliée dans une liste, une
+fonctionnalité qui n'existait tout simplement pas côté couche
+humaine. Le mécanisme (p.7, "optionnel, mais si utilisé, le montant
+plein doit être pris") est une SECONDE application du mouvement,
+distincte de la première (voir `engine.js`,
+`playTurnAssignMoveWithProgression` : un second appel à
+`moveCarWithProgression` avec le dé Road comme distance, APRÈS le
+mouvement principal) — jamais une simple extension de distance comme
+le Nitro. Ajout de `isRoadBonusEligible` (éligible si le trajet de
+base est resté 100% route, sans case dangereuse, et qu'un dé Road a
+été tiré ce round) et `getRoadBonusOptions` (destinations atteignables
+pour l'extension, distance imposée = pile le dé Road, jamais moins —
+l'extension elle-même n'a pas besoin de rester sur route) dans
+`human-decision.js`. `buildHumanDecision` corrigée pour transmettre
+`roadBonusPath` séparément (le chemin de l'EXTENSION seule, jamais
+fusionné dans `destination`) — cohérent avec la façon dont le moteur
+consomme cette option.
+Côté interface (`ui-script.js`) : nouvelle étape "Voulez-vous utiliser
+le bonus Road (+X) ?" (Oui/Non) après le choix de la destination de
+base, quand éligible — jamais un ajout automatique, le joueur garde
+le choix comme l'exige le livret.
+4 tests dédiés ajoutés (dont un test d'intégration Nitro+Road combinés,
+exécuté via le vrai moteur) + le test Repair déjà existant adapté pour
+inclure un second joueur factice (un artefact "dernier joueur en jeu"
+se déclenchait à tort dans un test à un seul joueur, repéré en
+creusant l'échec initial du nouveau test) — 62/62 tests
+`test-human-decision.js`, 199/199 IA et 212/212 moteur inchangés.
+**Revalidé par de vrais clics simulés (jsdom)**, pas seulement les
+tests unitaires : Nitro seul (8 cases obtenues, plus de plafond à
+3-5), Nitro + bonus Road accepté (log confirme "BONUS ROAD disponible"
+et le mouvement complet), et bonus Road refusé (aucune mention dans
+le log, arrêt à la destination de base) — puis une partie complète
+rejouée jusqu'à victoire (itération 54) avec la nouvelle étape gérée
+à chaque case 100% route rencontrée, sans blocage.
+
 **Prochaine étape** : boucle de jeu complète (point 3) — jouer
 plusieurs parties dessus soi-même pour repérer les premiers vrais
 problèmes d'UX (pas les règles, déjà validées) avant tout
