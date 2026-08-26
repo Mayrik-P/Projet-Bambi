@@ -20,16 +20,14 @@ const fs = require("fs");
 const vm = require("vm");
 const engine = require("../engine.js");
 const ai = require("../ai-decision.js");
+const { checkDecisionLegality, executeDecision } = require("../turn-executor.js");
 
 const {
   TERRAIN, CAR_SIZE, CAR_STATUS,
   createChopper, createCarOffBoard, createRoundState,
   buildBoardFromProgressionState, createTileProgressionState,
   setupTileProgressionFromRawData, ensureRoadDieRolled, getCurrentPlayer,
-  drawSpecificDieFromPool, advanceTurn, checkGameEndConditions,
-  resolveNitroCommand, resolveRepairCommand, resolveDriftCommand,
-  resolveAirstrikeCommand, playTurnAssignMoveWithProgression,
-  playTurnAssignEnterWithProgression, playTurnCoastWithProgression
+  advanceTurn, checkGameEndConditions
 } = engine;
 
 function loadRealTiles() {
@@ -60,114 +58,15 @@ function playOneShadowTurn(progressionState, roundState, allCars, allChoppers, p
     return { ok: true, log, passed: true, decision: null };
   }
 
-  // --- CONTRÔLES DE LÉGALITÉ ---
-  const carIsMine = decision.car.owner === currentPlayer;
-  const dieInPool = poolBefore.includes(decision.dieValue);
-  let commandDieOk = true, commandDieDistinct = true, commandRangeOk = true;
-  if (decision.command) {
-    commandDieOk = poolBefore.includes(decision.command.dieValue);
-    commandDieDistinct = decision.command.dieValue !== decision.dieValue || poolBefore.filter((v) => v === decision.dieValue).length >= 2;
-    const cv = decision.command.dieValue;
-    if (decision.command.type === "nitro") commandRangeOk = cv >= 1 && cv <= 3;
-    if (decision.command.type === "drift") commandRangeOk = cv >= 3 && cv <= 5;
-    if (decision.command.type === "repair") commandRangeOk = cv === 6;
-  }
-  if (!carIsMine || !dieInPool || !commandDieOk || !commandDieDistinct || !commandRangeOk) {
-    legalityLog.push({ player: currentPlayer, pool: poolBefore, decision, carIsMine, dieInPool, commandDieOk, commandDieDistinct, commandRangeOk });
+  // --- CONTRÔLES DE LÉGALITÉ (règles mécaniques uniquement — voir
+  // turn-executor.js, partagé avec la couche joueur humain) ---
+  const legality = checkDecisionLegality(decision, poolBefore, currentPlayer);
+  if (!legality.allOk) {
+    legalityLog.push({ player: currentPlayer, pool: poolBefore, decision, ...legality });
   }
   // --- FIN CONTRÔLES ---
 
-  const { car } = decision;
-  const isCoastTurn = decision.isCoast;
-  const command = decision.command;
-
-  drawSpecificDieFromPool(roundState.dicePool, currentPlayer, decision.dieValue);
-  log.push(`ASSIGN : dé ${decision.dieValue} → ${car.id}${isCoastTurn ? " (Coast)" : ""}`);
-
-  // Étape 2 (rewrite-plan.md) : le tir est calculé ICI, une seule
-  // fois, génériquement, après que la décision (donc la destination
-  // finale) est connue — quelle que soit la branche qui a produit
-  // cette décision (mouvement normal, Coast, Finish Line Rush...).
-  // Avant ce correctif, seul le mouvement normal transmettait son
-  // shotTarget au moteur ; un Coast en calculait bien un côté
-  // décision mais il n'était JAMAIS relié à l'exécution réelle
-  // (playTurnCoastWithProgression ne recevait pas l'option
-  // shootTarget) — un tir valide était donc silencieusement perdu à
-  // chaque Coast. Rattaché sur `decision` pour la compatibilité des
-  // outils qui inspectent decision.shotTarget après coup (génération
-  // de parties, revue de cas) — cette valeur reste une PRÉVISION,
-  // affichée telle quelle par ces outils, mais n'est PLUS ce qui est
-  // réellement utilisé pour le tir (voir shootTargetFn ci-dessous).
-  decision.shotTarget = ai.computeShotTargetForDecision(decision, allCars);
-
-  // CORRECTIF (post étape 7) : la cible réellement utilisée pour le
-  // tir doit être recalculée APRÈS résolution complète du mouvement
-  // (un Slam peut faire atterrir la voiture ailleurs qu'où l'IA
-  // l'avait prévu, via des dés tirés PENDANT la résolution — la
-  // position au moment de la décision n'a alors plus rien à voir avec
-  // la position réelle). `shootTargetFn` est appelé par le moteur avec
-  // la voiture dans son état FINAL (juste avant le tir) — voir
-  // engine.js, resolveShootStep.
-  const shootTargetFn = (currentCar, cars) => ai.chooseShootTarget(currentCar.col, currentCar.row, currentCar.owner, cars);
-
-  let effectiveDieValue = decision.dieValue;
-  const slamOptions = {};
-
-  if (command && !isCoastTurn) {
-    drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);
-    roundState.commandUsedThisRound[currentPlayer] = true;
-    log.push(`COMMAND : ${command.type} (dé ${command.dieValue})`);
-
-    if (command.type === "nitro") {
-      const r = resolveNitroCommand(command.dieValue);
-      if (r.ok) effectiveDieValue += r.bonus;
-    } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target);
-    } else if (command.type === "drift") {
-      const r = resolveDriftCommand(command.dieValue);
-      if (r.ok) slamOptions.driftAvailable = true;
-    } else if (command.type === "airstrike") {
-      let chopper = allChoppers.find((ch) => ch.owner === currentPlayer);
-      if (!chopper) { chopper = createChopper(currentPlayer); allChoppers.push(chopper); }
-      if (command.placement) {
-        resolveAirstrikeCommand(
-          board, allCars, allChoppers, chopper, command.placement.col, command.placement.row,
-          { roundNumber: roundState.roundNumber, shootTarget: command.target, progressionState, allChoppers }
-        );
-      }
-    }
-  }
-
-  if (decision.isEntry) {
-    const result = playTurnAssignEnterWithProgression(
-      progressionState, car, effectiveDieValue, decision.destination.entryRow, decision.destination.path || [], allCars, allChoppers, playerNames,
-      { roundNumber: roundState.roundNumber, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
-    );
-    log.push(...(result.log || []));
-    if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log, decision };
-  }
-
-  if (isCoastTurn) {
-    const result = playTurnCoastWithProgression(progressionState, car, decision.destination.path || [], allCars, allChoppers, playerNames, { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn });
-    log.push(...(result.log || []));
-    if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log, decision };
-  }
-
-  if (car.status !== CAR_STATUS.OPERABLE) {
-    log.push(`${car.id} devenue inopérable pendant la Command → fin du tour.`);
-    log.push(...advanceTurn(roundState, allCars).log);
-    return { ok: true, log, car, decision };
-  }
-
-  const result = playTurnAssignMoveWithProgression(
-    progressionState, car, effectiveDieValue, decision.destination.path || [], allCars, allChoppers, playerNames,
-    { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
-  );
-  log.push(...(result.log || []));
-  if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-  return { ...result, log, decision };
+  return executeDecision(progressionState, roundState, allCars, allChoppers, playerNames, currentPlayer, decision);
 }
 
 function checkStateIntegrity(board, allCars) {
