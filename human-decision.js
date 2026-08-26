@@ -110,6 +110,43 @@ function getReachableOptions(board, car, dieValue, allCars, allChoppers, driftAv
 }
 
 // ===================================================================
+// SECTION 2bis — BONUS ROAD (optionnel, montant fixe imposé — p.7)
+// ===================================================================
+// CORRECTIF (Mayrik, en testant le prototype) : ce bonus n'était
+// simplement jamais proposé au joueur humain — la couche humaine
+// n'avait aucune fonction pour ça. Il s'agit d'une mécanique à part
+// du mouvement principal (voir engine.js, playTurnAssignMoveWithProgression :
+// une seconde application de moveCarWithProgression, APRÈS le
+// mouvement de base, avec le dé Road comme distance) — jamais une
+// simple addition à la distance de départ (contrairement au Nitro).
+/**
+ * "This bonus is optional, but if you use it, you must use the full
+ * amount." (p.7) — éligible seulement si le trajet choisi par le
+ * joueur est resté ENTIÈREMENT sur route, sans case dangereuse
+ * traversée, et qu'un dé Road a été tiré ce round.
+ */
+function isRoadBonusEligible(destination, roadDieValue) {
+  return roadDieValue > 0 && destination.terminalReason === "normal" && destination.allRoad === true && destination.dangerousCellsCrossed === 0;
+}
+
+/**
+ * Renvoie les destinations atteignables pour l'extension de bonus
+ * Road (distance = roadDieValue PILE, jamais moins — "you must use
+ * the full amount") depuis la destination de base déjà choisie.
+ * "This extra movement does not need to be on the road" (p.7) — donc
+ * aucun filtre de terrain ici, juste écarter les fins dangereuses,
+ * comme pour le mouvement normal. Renvoie [] si non éligible (rien à
+ * proposer) — à l'appelant de vérifier isRoadBonusEligible avant
+ * d'offrir le choix "oui/non" au joueur.
+ */
+function getRoadBonusOptions(board, car, destination, roadDieValue, allCars, allChoppers, driftAvailable = false) {
+  if (!isRoadBonusEligible(destination, roadDieValue)) return [];
+  const extCar = { ...car, col: destination.col, row: destination.row };
+  return computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable)
+    .filter((e) => (e.terminalReason === "normal" || e.terminalReason === "exits-front") && e.dangerousCellsCrossed === 0);
+}
+
+// ===================================================================
 // SECTION 3 — COMMANDS DISPONIBLES (règles du livret UNIQUEMENT, p.8)
 // ===================================================================
 /**
@@ -197,10 +234,16 @@ function listValidAirstrikePlacements(board, allCars, allChoppers, chopper) {
  *     adverse visée, choisie librement par le joueur parmi les
  *     opérables, ou null si aucune n'est atteignable/souhaitée).
  *   - destination : UNE des options renvoyées par getReachableOptions
- *     (Section 2), choisie par le joueur.
+ *     (Section 2), choisie par le joueur — TOUJOURS la destination de
+ *     base, jamais le point d'arrivée après bonus Road (voir
+ *     roadBonusPath ci-dessous : le moteur rejoue cette extension
+ *     comme un second mouvement séparé, après le premier).
  *   - isCoast : true si ce tour est un Coast (voir Section 1).
+ *   - roadBonusPath : le `.path` d'UNE des options renvoyées par
+ *     getRoadBonusOptions (Section 2bis), si le joueur a choisi
+ *     d'utiliser le bonus Road ce tour — sinon null/omis.
  */
-function buildHumanDecision({ car, dieValue, command, destination, isCoast = false }) {
+function buildHumanDecision({ car, dieValue, command, destination, isCoast = false, roadBonusPath = null }) {
   const isEntry = car.col === null && !isCoast;
   return {
     car,
@@ -210,7 +253,7 @@ function buildHumanDecision({ car, dieValue, command, destination, isCoast = fal
     isEntry,
     isCoast,
     slam: destination.terminalReason === "slam",
-    roadBonusPath: destination.roadBonusPath || null
+    roadBonusPath: roadBonusPath || null
   };
 }
 
@@ -218,6 +261,8 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     getTurnContext,
     getReachableOptions,
+    isRoadBonusEligible,
+    getRoadBonusOptions,
     getAvailableCommands,
     isValidAirstrikePlacement,
     listValidAirstrikePlacements,

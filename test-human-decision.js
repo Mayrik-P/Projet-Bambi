@@ -132,6 +132,43 @@ function freshProgressionSetup(playerNames, dicePool) {
 }
 
 // -----------------------------------------------------------------
+// SECTION 2bis — bonus Road (CORRECTIF : totalement absent de la
+// première version — jamais proposé au joueur humain)
+// -----------------------------------------------------------------
+{
+  const board = emptyBoard(); // tout ROAD par défaut
+  const car = createCar("A", CAR_SIZE.MEDIUM, 5, 2);
+  const destAllRoad = { col: 8, row: 2, terminalReason: "normal", allRoad: true, dangerousCellsCrossed: 0, path: ["front", "front", "front"] };
+
+  assert(human.isRoadBonusEligible(destAllRoad, 3) === true, "isRoadBonusEligible : éligible si trajet 100% route, sans case dangereuse, et dé Road > 0");
+  assert(human.isRoadBonusEligible(destAllRoad, 0) === false, "isRoadBonusEligible : jamais éligible si aucun dé Road n'a été tiré ce round (roadDieValue=0)");
+
+  const destWithDanger = { ...destAllRoad, dangerousCellsCrossed: 1 };
+  assert(human.isRoadBonusEligible(destWithDanger, 3) === false, "isRoadBonusEligible : inéligible si une case dangereuse a été traversée");
+
+  const destOffRoad = { ...destAllRoad, allRoad: false };
+  assert(human.isRoadBonusEligible(destOffRoad, 3) === false, "isRoadBonusEligible : inéligible si le trajet n'est pas resté 100% sur route");
+
+  const destSlam = { ...destAllRoad, terminalReason: "slam" };
+  assert(human.isRoadBonusEligible(destSlam, 3) === false, "isRoadBonusEligible : inéligible si le mouvement de base s'est terminé par un Slam");
+
+  const options = human.getRoadBonusOptions(board, car, destAllRoad, 3, [car], []);
+  assert(options.length > 0, "getRoadBonusOptions : propose des destinations quand éligible");
+  assert(options.every((o) => o.stepsUsed === 3), "getRoadBonusOptions : l'extension avance bien d'exactement le dé Road (\"must use the full amount\", p.7) — jamais moins");
+
+  const noOptions = human.getRoadBonusOptions(board, car, destOffRoad, 3, [car], []);
+  assert(noOptions.length === 0, "getRoadBonusOptions : liste vide si non éligible (pas d'exception, pas de crash)");
+
+  // L'extension "n'a pas besoin d'être sur route" (p.7) — un terrain
+  // varié après la destination de base reste valide.
+  const boardMixed = emptyBoard();
+  boardMixed.grid[2][8].terrain = TERRAIN.MUD;
+  boardMixed.grid[2][9].terrain = TERRAIN.OFF_ROAD;
+  const mixedOptions = human.getRoadBonusOptions(boardMixed, car, destAllRoad, 3, [car], []);
+  assert(mixedOptions.length > 0, "getRoadBonusOptions : l'extension n'est PAS tenue de rester sur route elle-même");
+}
+
+// -----------------------------------------------------------------
 // SECTION 3 — getAvailableCommands (règles du livret UNIQUEMENT —
 // AUCUNE condition de position façon IA : tuile Rear, adversaire à
 // telle distance... n'existent pas ici)
@@ -279,6 +316,42 @@ function freshProgressionSetup(playerNames, dicePool) {
   assert(myLarge.status === CAR_STATUS.OPERABLE, "Intégration Repair : la voiture choisie par le joueur (et PAS celle que l'IA aurait choisie) est bien réparée");
   assert(myMedium.status === CAR_STATUS.INOPERABLE, "Intégration Repair : l'autre voiture inopérable reste inchangée");
   assert(roundState.commandUsedThisRound.Mayrik === true, "Intégration Repair : la Command du round est bien marquée comme utilisée");
+}
+{
+  // Intégration Nitro + bonus Road ensemble (les deux corrections
+  // trouvées par Mayrik en testant le prototype réel) : dé mouvement
+  // 5 + Nitro 3 = 8 cases obligatoires, PUIS bonus Road (+2, trajet
+  // resté 100% route) proposé et pris.
+  const progressionState = createTileProgressionState(createTestTile(24, 6), createTestTile(24, 6), createTestTile(24, 6));
+  const board = buildBoardFromProgressionState(progressionState);
+  const car = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2);
+  // Un second joueur (même hors-jeu du point de vue de ce test) est
+  // nécessaire : sinon "dernier joueur encore en jeu" se déclenche à
+  // tort dès ce tour et coupe l'exécution avant le bonus Road.
+  const dummyOpponent = createCar("IA-Adverse", CAR_SIZE.SMALL, 0, 0);
+  const allCars = [car, dummyOpponent];
+  const allChoppers = [];
+  const roundState = createRoundState(["Mayrik", "IA-Adverse"], { Mayrik: [5, 3, 2, 1], "IA-Adverse": [1, 1, 1, 1] });
+  roundState.roundNumber = 2;
+  roundState.roadDie = 2;
+
+  const dieValue = 5, nitroValue = 3;
+  const withNitro = human.getReachableOptions(board, car, dieValue + nitroValue, allCars, allChoppers);
+  assert(withNitro.some((o) => o.stepsUsed === 8), "Intégration Nitro : les options atteignables reflètent bien dé+Nitro cumulés (8 cases), pas le dé seul");
+  const destination = withNitro.find((o) => o.terminalReason === "normal" && o.allRoad === true && o.dangerousCellsCrossed === 0);
+
+  assert(human.isRoadBonusEligible(destination, roundState.roadDie) === true, "Intégration Road : la destination Nitro (100% route) reste éligible au bonus Road");
+  const bonusOptions = human.getRoadBonusOptions(board, car, destination, roundState.roadDie, allCars, allChoppers);
+  const bonusChoice = bonusOptions[0];
+
+  const decision = human.buildHumanDecision({ car, dieValue, command: { type: "nitro", dieValue: nitroValue }, destination, roadBonusPath: bonusChoice.path });
+  const legality = checkDecisionLegality(decision, roundState.dicePool.Mayrik, "Mayrik");
+  assert(legality.allOk === true, "Intégration Nitro+Road : décision légale");
+
+  const result = executeDecision(progressionState, roundState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], "Mayrik", decision);
+  assert(result.ok === true, "Intégration Nitro+Road : exécution réussie");
+  assert(car.col === bonusChoice.col && car.row === bonusChoice.row, "Intégration Nitro+Road : la voiture atterrit bien sur la case d'arrivée du bonus Road (au-delà des 8 cases du mouvement Nitro)");
+  assert(car.col > destination.col, "Intégration Nitro+Road : la voiture a bien progressé AU-DELÀ de la destination Nitro grâce au bonus Road");
 }
 {
   // Une décision illégale (dé pas dans le pool) doit être détectée
