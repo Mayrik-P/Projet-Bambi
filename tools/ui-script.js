@@ -215,6 +215,8 @@ function commitAssignAndCommand() {
   sel.slamOptions = slamOptions;
   sel.remaining = intent.isCoast ? 1 : effectiveDieValue;
   sel.roadEligible = true; // accumulé pas à pas (ET logique) tout au long du mouvement
+  sel.hadSlam = false; // un Slam met fin à la phase de mouvement complète (p.9) : plus de bonus Road possible ensuite
+  sel.hadDamage = false; // p.9/p.12 : "A car loses its remaining moves when it takes damage" — même effet que le Slam sur le bonus Road, quelle que soit la source du dégât (aujourd'hui, uniquement la Mine)
   sel.roadBonusOffered = false;
   sel.inRoadBonus = false;
 
@@ -263,8 +265,12 @@ function checkStuckAtMovementStart() {
 // (voir turn-executor.js), jamais réconciliées côté moteur pour ne
 // pas risquer de régression sur le chemin IA qui les utilise aussi.
 function extractStepOutcome(result, isEntryStep) {
-  if (isEntryStep) return { remainingAfter: result.remaining, roadEligible: result.roadEligible };
-  return { remainingAfter: result.moveResult ? result.moveResult.remaining : result.remaining, roadEligible: result.roadEligible };
+  if (isEntryStep) return { remainingAfter: result.remaining, roadEligible: result.roadEligible, slam: result.slam };
+  return {
+    remainingAfter: result.moveResult ? result.moveResult.remaining : result.remaining,
+    roadEligible: result.roadEligible,
+    slam: result.moveResult ? result.moveResult.slam : result.slam
+  };
 }
 
 function buildStopMessage(log, pointsLost, fallbackReason) {
@@ -289,8 +295,9 @@ function buildTileAdvanceMessage(log) {
 // l'exécution réelle du pas.
 function handleStepResult(remainingBefore, option, result, isEntryStep) {
   logTurn(result.log || []);
-  const { remainingAfter, roadEligible } = extractStepOutcome(result, isEntryStep);
+  const { remainingAfter, roadEligible, slam } = extractStepOutcome(result, isEntryStep);
   sel.roadEligible = sel.roadEligible && !!roadEligible;
+  sel.hadSlam = sel.hadSlam || !!slam;
   sel.remaining = remainingAfter;
 
   if (result.gameOver) {
@@ -368,15 +375,33 @@ function pickMoveStep(option) {
   executeMoveStepNow(option, sel.slamOptions);
 }
 
+// Détecte un dégât reçu par la voiture ACTIVE pendant ce pas (p.9/p.12,
+// "loses its remaining moves when it takes damage") en comparant le
+// nombre de jetons de dégât avant/après — plutôt que de faire remonter
+// une information dédiée depuis le moteur à travers plusieurs couches
+// (moveCar → resolveHazard → applyDamage) rien que pour ce besoin.
+// `sel.car` est le MÊME objet muté en place par le moteur (jamais une
+// copie), donc cette comparaison est fiable quelle que soit la source
+// du dégât (aujourd'hui, uniquement la Mine — cf. resolveHazard).
+function detectDamageTaken(car, damageCountBefore, action) {
+  const result = action();
+  if (car.damageTokens.length > damageCountBefore) sel.hadDamage = true;
+  return result;
+}
+
 function executeEntryRowNow(option, slamOptions) {
   const remainingBefore = sel.remaining;
-  const result = executeEntryStep(G.progressionState, G.allCars, sel.car, remainingBefore, option.entryRow, slamOptions);
+  const damageBefore = sel.car.damageTokens.length;
+  const result = detectDamageTaken(sel.car, damageBefore, () =>
+    executeEntryStep(G.progressionState, G.allCars, sel.car, remainingBefore, option.entryRow, slamOptions));
   handleStepResult(remainingBefore, option, result, true);
 }
 
 function executeMoveStepNow(option, slamOptions) {
   const remainingBefore = sel.remaining;
-  const result = executeMoveStep(G.progressionState, G.allCars, G.allChoppers, PLAYER_NAMES, sel.car, remainingBefore, option.direction, slamOptions);
+  const damageBefore = sel.car.damageTokens.length;
+  const result = detectDamageTaken(sel.car, damageBefore, () =>
+    executeMoveStep(G.progressionState, G.allCars, G.allChoppers, PLAYER_NAMES, sel.car, remainingBefore, option.direction, slamOptions));
   handleStepResult(remainingBefore, option, result, false);
 }
 
@@ -437,7 +462,7 @@ function continueAfterStop() {
 // ===================================================================
 function proceedAfterMovement() {
   const car = sel.car;
-  if (!sel.roadBonusOffered && !sel.inRoadBonus && car.status === CAR_STATUS.OPERABLE && sel.roadEligible && G.roundState.roadDie) {
+  if (!sel.roadBonusOffered && !sel.inRoadBonus && !sel.hadSlam && !sel.hadDamage && car.status === CAR_STATUS.OPERABLE && sel.roadEligible && G.roundState.roadDie) {
     sel.roadBonusOffered = true;
     sel.step = "road-bonus-choice";
     return;
@@ -477,6 +502,11 @@ function proceedToShootPhase() {
     return;
   }
   sel.shootTargets = getShootTargetOptions(car, G.allCars);
+  if (sel.shootTargets.length === 0) {
+    logTurn([`Aucune cible à portée pour ${car.id} → tir automatiquement passé.`]);
+    finishHumanTurn();
+    return;
+  }
   sel.step = "shoot";
 }
 
