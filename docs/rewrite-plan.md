@@ -695,7 +695,134 @@ le log, arrêt à la destination de base) — puis une partie complète
 rejouée jusqu'à victoire (itération 54) avec la nouvelle étape gérée
 à chaque case 100% route rencontrée, sans blocage.
 
-**Prochaine étape** : boucle de jeu complète (point 3) — jouer
-plusieurs parties dessus soi-même pour repérer les premiers vrais
-problèmes d'UX (pas les règles, déjà validées) avant tout
-investissement mobile.
+## Point 3 (mouvement/tir case par case) — TERMINÉ
+
+Retour d'usage de Mayrik après avoir joué sur `tools/prototype.html` :
+le joueur humain veut choisir lui-même chaque case de destination une
+par une (case par case dans l'arc avant courant, effets appliqués à
+chaque case avant de proposer la suivante) et choisir librement sa
+cible de tir en fin de mouvement (y compris ne pas tirer) — remplace
+complètement l'ancien système (destination précalculée d'un coup +
+`shootTargetFn` automatique), sans mode "auto" à conserver.
+
+Aucune modification du moteur nécessaire pour le principe de base :
+`moveCar`/`moveCarWithProgression` acceptaient déjà un `chosenPath`
+d'une seule direction et appliquent cette case unique (effets compris)
+sans aller plus loin — restructuration entièrement côté orchestration
+(`turn-executor.js`/`human-decision.js`/`tools/ui-script.js`) pour
+boucler un pas à la fois piloté par les clics du joueur, plus une
+nouvelle fonction de liste de cibles de tir valides (`getShootTargetOptions`,
+basée sur `getFrontArc`) à la place du choix automatique.
+
+Décisions actées par Mayrik au fil de l'implémentation :
+- Le Bonus Road devient lui aussi case par case (même boucle que le
+  mouvement principal).
+- Quand un Slam/hazard fait perdre des mouvements restants, un message
+  explicite s'affiche (style "reste des mouvements perdus à cause de
+  [raison]") avec un bouton Continuer, plutôt qu'un enchaînement
+  automatique.
+- Ordre de sélection UX : le joueur choisit d'abord le DÉ puis le
+  VÉHICULE (jamais l'inverse), pour coller à l'expérience physique du
+  dashboard en carton.
+- Règle de relance de Slam (p.9, propriétaire de la voiture plus
+  grande peut relancer les 2 dés une fois) implémentée côté moteur
+  (`engine.js` : `resolveSlam` décomposé en `rollSlamDice`/
+  `finalizeSlam` pour permettre une vraie pause interactive) et câblée :
+  le joueur humain est interrogé en direct quand SA voiture est la
+  plus grande ; politique de simplification pour l'IA — elle relance
+  TOUJOURS quand sa propre voiture est celle qui bougerait suite au
+  Slam et qu'une relance est possible, jamais de calcul de probabilité.
+
+Câblé dans `tools/ui-script.js` (mouvement/entrée/tir/Bonus Road case
+par case, popup de mouvements perdus, décalage de tuile annoncé à
+l'écran avant de laisser choisir la vraie case suivante) — validé par
+clics réels via jsdom (jamais juste relire le JS).
+
+## 2ter. Correctifs — deux écarts remontés en jouant contre l'IA
+
+Remontés par Mayrik (captures d'écran, parties réelles sur
+`tools/prototype.html`), tous deux dans `tools/ui-script.js`
+uniquement (aucune règle, aucun bug moteur en cause) :
+
+**Écart 1 (tir proposé sans aucune cible)** : `proceedToShootPhase()`
+passait systématiquement à l'étape "shoot" après avoir calculé
+`getShootTargetOptions`, même quand ce tableau était vide (aucun
+véhicule adverse dans l'arc avant). Corrigé : si
+`sel.shootTargets.length === 0`, le tour se termine directement
+(`finishHumanTurn()`), avec un log explicite ("Aucune cible à
+portée... → tir automatiquement passé"), sans jamais afficher l'étape
+de choix.
+
+**Écart 2 (bonus Road proposé après un Slam)** : un Slam force
+`remaining` à 0 (p.9) et met donc fin à la phase de mouvement
+COMPLÈTE, pas seulement au mouvement programmé par le dé — mais comme
+la case percutée reste une case route, `sel.roadEligible` restait vrai
+et `proceedAfterMovement()` offrait quand même le bonus Road. Corrigé
+par un nouveau drapeau `sel.hadSlam` (accumulé pas à pas comme
+`sel.roadEligible`, réinitialisé à chaque nouveau tour dans
+`commitAssignAndCommand`, positionné dans `handleStepResult` dès qu'un
+pas — mouvement ou entrée en jeu — renvoie un `slam`), qui bloque
+désormais l'offre du bonus Road dès qu'un Slam a eu lieu à n'importe
+quel moment du mouvement.
+
+**Validation** : 212/212 tests moteur, 203/203 tests IA, 99/99 tests
+couche humaine inchangés (aucun de ces trois fichiers modifié). 4
+tests dédiés via jsdom (vrais appels sur le bundle navigateur réel
+généré par `build-bundle.js`, pas une relecture de code) : tir non
+proposé sans cible (avec vérification du log et de la fin de tour) ;
+bonus Road bloqué après Slam ; non-régression — bonus Road toujours
+proposé normalement en l'absence de Slam ; détection du Slam
+directement depuis un résultat réaliste de `handleStepResult` (forme
+exacte de `moveCarWithProgression`/`moveCarEnteringBoard`), isolée du
+reste de l'enchaînement pour vérifier précisément le point de
+détection.
+
+## 2quater. Correctif — dégât reçu en mouvement (pas seulement Slam) bloque aussi le bonus Road
+
+Suite du correctif 2ter : Mayrik a fait remarquer que la même logique
+(fin de la phase de mouvement complète) doit s'appliquer à un dégât
+reçu pendant le mouvement, pas seulement à un Slam — exemple donné :
+Mine → dégât → Blast Off → atterrissage sur une case route → plus de
+mouvement, mais dégât reçu donc pas de bonus Road non plus.
+
+**Vérification dans le livret** (p.9 : *"A car loses its remaining
+moves when it takes damage."*, p.12 : *"If your car was moving, it
+loses any remaining moves"*) : c'est bien une règle générale,
+indépendante de la source du dégât — pas une règle spécifique au Slam.
+
+**Constat sur le code existant** : dans le jeu de base (v1), le seul
+hazard qui inflige un dégât à la voiture qui bouge est la Mine (le
+Wreck ne fait qu'un Slam, sans dégât — vérifié p.7 et dans
+`resolveHazard`). La Mine forçait déjà correctement `remaining: 0`
+dans `engine.js` (rien à corriger côté moteur), mais rien côté
+`tools/ui-script.js` ne bloquait l'offre du bonus Road pour cette
+raison — exactement la même faille que le Slam, juste pour une autre
+cause.
+
+**Correctif** (uniquement `tools/ui-script.js`) : nouveau drapeau
+`sel.hadDamage`, initialisé à `false` à chaque tour comme
+`sel.hadSlam`. Plutôt que de faire remonter une information dédiée
+depuis le moteur à travers plusieurs couches (`moveCar` →
+`resolveHazard` → `applyDamage`) rien que pour ce besoin,
+`executeMoveStepNow`/`executeEntryRowNow` comparent simplement
+`car.damageTokens.length` avant/après le pas (`car` est le même objet
+muté en place par le moteur, jamais une copie) — fiable quelle que
+soit la source du dégât, y compris si une extension future en ajoute
+d'autres. `proceedAfterMovement()` bloque désormais l'offre du bonus
+Road si `sel.hadSlam` OU `sel.hadDamage` est vrai.
+
+**Validation** : 212/212 tests moteur, 203/203 tests IA, 99/99 tests
+couche humaine inchangés (aucun de ces trois fichiers touché). 2 tests
+dédiés supplémentaires via jsdom sur le vrai bundle navigateur : bonus
+Road bloqué après un dégât (drapeau forcé) ; et surtout une vraie Mine
+posée sur le plateau réel puis une vraie case cliquée (`pickMoveStep`),
+avec un jeton de dégât forcé à `dent` pour isoler le test d'un effet
+d'élimination parasite (Blast Off) — confirme que `sel.hadDamage` est
+détecté automatiquement depuis le vrai moteur, pas seulement en le
+forçant à la main.
+
+**État courant** : Phase 2, point 3 fonctionnellement complet et
+stabilisé sur les écarts remontés jusqu'ici. Mayrik continue à jouer
+des parties complètes sur `tools/prototype.html` pour faire remonter
+d'éventuels autres écarts avant tout investissement dans les vraies
+images/mobile/packaging (point 5 du phasage).
