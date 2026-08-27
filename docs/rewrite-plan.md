@@ -840,3 +840,16 @@ Remonté par Mayrik (cas 3, capture d'écran) : une voiture humaine entrant sur 
 **Validation** : 212/212 tests moteur, 203/203 tests IA, 99/99 tests couche humaine inchangés. 4 tests dédiés via jsdom sur le vrai bundle navigateur : relance proposée au joueur pour un Slam révélé par un vrai Wreck posé sur le plateau réel ; choix de relance du joueur appliqué à la vraie résolution bout en bout (dés forcés identiques à l'aperçu, log confirmant la relance) ; non-régression complète du chemin pré-existant (occupant déjà visible, pas un Wreck) ; épave confirmée toujours visible sur le plateau ET absente du badge de dégâts (portée finale après le correctif du correctif).
 
 **État courant** : Phase 2, point 3 toujours fonctionnellement complet et stabilisé sur tous les écarts remontés jusqu'ici (2ter, 2quater, 2quinquies). Mayrik continue à jouer des parties complètes sur `tools/prototype.html`.
+
+## 2sexies. Simplification — Airstrike : suppression du double choix (cible séparée + placement)
+
+Retour de Mayrik : le flux Airstrike demandait d'abord une "cible visée" dans une liste (facultative), PUIS un placement du chopper sur le plateau — un double choix redondant, puisque la cible n'a de sens qu'une fois le chopper posé (son arc avant dépend de sa position).
+
+**Nouveau flux demandé et implémenté** (uniquement `tools/ui-script.js`, aucun changement moteur ni `human-decision.js` — `sel.command = {type:"airstrike", dieValue, target, placement}` garde exactement la même forme consommée par `executeAssignAndCommand`) :
+1. Choisir Airstrike → directement le placement du chopper sur le plateau (case surlignée cliquable, comme avant).
+2. Une fois posé, si son arc avant contient au moins un adversaire : nouvelle étape "airstrike-shoot-arc" — les 3 cases de l'arc avant du chopper (celles présentes sur le plateau affiché) deviennent surlignées et cliquables, exactement comme pour un déplacement. Cliquer une case OCCUPÉE par un adversaire = tirer dessus ; cliquer une case VIDE = ne pas tirer. Un bouton "Ne pas tirer" reste disponible en secours (utile si l'arc est entièrement occupé par des adversaires mais que le joueur veut quand même décliner, ou si une case de l'arc tombe hors du plateau affiché).
+3. Si l'arc avant du chopper ne contient AUCUN adversaire dès le placement : aucune étape n'est proposée, passage direct à `commit` avec `target: null` — même philosophie que le correctif du tir normal sans cible (2ter).
+
+Techniquement : `getShootTargetOptions`/`getFrontArc` (déjà génériques, ne lisent que `owner`/`col`/`row`) sont réutilisés tels quels sur un chopper HYPOTHÉTIQUE (copie, jamais muté) placé à la case choisie, pour calculer par avance qui serait dans son arc — le vrai placement n'a lieu qu'à l'exécution réelle (`commitAssignAndCommand`).
+
+**Validation** : 212/212 tests moteur, 203/203 tests IA, 99/99 tests couche humaine inchangés (aucun des trois fichiers touché). 4 tests dédiés via jsdom sur le vrai bundle navigateur : placement puis visée d'une case occupée de l'arc (cible correctement identifiée) ; case vide de l'arc cliquée (décline) ; bouton "Ne pas tirer" toujours disponible malgré une cible existante ; aucune étape intermédiaire quand l'arc avant est entièrement vide dès le placement.
