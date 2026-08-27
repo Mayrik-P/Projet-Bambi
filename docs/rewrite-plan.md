@@ -821,8 +821,22 @@ d'élimination parasite (Blast Off) — confirme que `sel.hadDamage` est
 détecté automatiquement depuis le vrai moteur, pas seulement en le
 forçant à la main.
 
-**État courant** : Phase 2, point 3 fonctionnellement complet et
-stabilisé sur les écarts remontés jusqu'ici. Mayrik continue à jouer
-des parties complètes sur `tools/prototype.html` pour faire remonter
-d'éventuels autres écarts avant tout investissement dans les vraies
-images/mobile/packaging (point 5 du phasage).
+## 2quinquies. Correctif — relance de Slam non proposée pour un Slam révélé par un Wreck ; retrait de tout affichage UI des épaves
+
+Remonté par Mayrik (cas 3, capture d'écran) : une voiture humaine entrant sur une case dont le hazard face cachée s'avère être un Wreck subit un Slam contre l'épave créée — la relance (p.9) part alors automatiquement sur la politique de l'IA, sans jamais demander au joueur, alors que sa voiture est la plus grande.
+
+**Diagnostic confirmé avec Mayrik** : c'est une règle générale, pas spécifique au Wreck — *"Le joueur doit pouvoir décider lui-même s'il souhaite relancer le Slam ou pas"*, pour tout Slam impliquant une voiture de joueur. Le mécanisme de prévisualisation existant (`beginSlamSequence`/`previewSlam`) ne se déclenchait que pour un occupant DÉJÀ VISIBLE sur la case ciblée (`option.outcome === "slam"`, connu à l'avance par `getMovementStepOptions`/`getEntryRowOptions`) — un Slam révélé par un hazard face cachée (Wreck) n'est jamais marqué ainsi, puisqu'un jeton caché n'est pas un "occupant" aux yeux de ces fonctions, et retombait donc silencieusement sur `ai.decideSlamRerollDefault`, y compris pour la voiture du joueur.
+
+**Point clé qui rend le correctif possible** : contrairement aux dés de Slam (vraiment aléatoires), la présence d'un Wreck sur une case est une donnée déjà connue du plateau (`cell.hazard`), et une épave a une taille TOUJOURS connue à l'avance (Small, Inopérable — p.7). On peut donc déterminer qui sera "plus grand" avant même d'exécuter le pas, exactement comme pour un occupant déjà visible — sans tricher sur le hasard.
+
+**Correctif** (`tools/ui-script.js` uniquement) :
+- `buildPredictedSlamOpponent(col, row)` : renvoie l'occupant réel s'il y en a un, sinon — si la case porte un hazard Wreck non révélé — une épave HYPOTHÉTIQUE construite avec exactement les mêmes propriétés que celle que `resolveHazard` (engine.js) créera réellement (Small, Inopérable, `isWreck`).
+- `maybeBeginSlamSequence` remplace le test `option.outcome === "slam"` dans `pickEntryRow`/`pickMoveStep` : démarre la prévisualisation dès qu'un adversaire de Slam est prévisible, occupant réel ou Wreck.
+- `matchesPreviewedSlam` généralise le raccord entre la prévisualisation et la vraie exécution : par identité d'objet pour un occupant déjà réel (comportement inchangé), ou par (voiture active persistante + `isWreck` sur l'autre + lancer forcé identique) pour un Wreck — l'épave réelle créée à l'exécution est un NOUVEL objet, jamais celui prévisualisé, donc l'identité seule ne suffit plus dans ce cas.
+- Reste hors de portée (limitation assumée, déjà documentée) : un Slam EN CHAÎNE consécutif (nouvelle paire de voitures révélée en poussant un véhicule sur une case déjà occupée) — impossible de mettre le moteur en pause une seconde fois dans le même appel.
+
+**Nettoyage de l'affichage des épaves** (demande de Mayrik, un problème connexe repéré dans la même capture — le badge `null small : 0 dégât(s) [INOPÉRABLE]`) — **corrigé une première fois trop largement** (épave entièrement masquée du plateau), Mayrik a signalé qu'une épave est un vrai pion physique sur le plateau (p.7) qui doit rester visible. Portée finale : les épaves (`car.isWreck`) restent affichées sur le plateau (`renderBoard`), avec une couleur neutre dédiée et un repère "W" au lieu de la couleur de propriétaire habituelle (`OWNER_COLOR[null]` produisait auparavant une case noire, invisible/confuse) ; seuls le badge de dégâts (`damageRow`, qui les traitait à tort comme une "équipe" à part) et le libellé de tir "brut" ("null small" → "l'épave") sont retirés. Mécaniquement, les épaves restent entièrement fonctionnelles (Slam, tir, blocage de case) dans tous les cas.
+
+**Validation** : 212/212 tests moteur, 203/203 tests IA, 99/99 tests couche humaine inchangés. 4 tests dédiés via jsdom sur le vrai bundle navigateur : relance proposée au joueur pour un Slam révélé par un vrai Wreck posé sur le plateau réel ; choix de relance du joueur appliqué à la vraie résolution bout en bout (dés forcés identiques à l'aperçu, log confirmant la relance) ; non-régression complète du chemin pré-existant (occupant déjà visible, pas un Wreck) ; épave confirmée toujours visible sur le plateau ET absente du badge de dégâts (portée finale après le correctif du correctif).
+
+**État courant** : Phase 2, point 3 toujours fonctionnellement complet et stabilisé sur tous les écarts remontés jusqu'ici (2ter, 2quater, 2quinquies). Mayrik continue à jouer des parties complètes sur `tools/prototype.html`.
