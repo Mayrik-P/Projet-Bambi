@@ -174,7 +174,7 @@ function pickCommandChoice(type) {
 function pickCommandDie(dieValue) {
   sel.commandDieValue = dieValue;
   if (sel.commandType === "airstrike") {
-    sel.step = "airstrike-target";
+    sel.step = "airstrike-placement"; // plus d'étape de "cible visée" séparée (retour de Mayrik) — la cible se choisit directement en désignant une case de l'arc avant du chopper, une fois posé
   } else {
     sel.command = { type: sel.commandType, dieValue };
     sel.step = "commit";
@@ -186,13 +186,39 @@ function pickRepairTarget(target) {
   sel.step = "commit";
 }
 
-function pickAirstrikeTarget(target) {
-  sel.airstrikeTarget = target; // peut être null ("aucune cible visée")
-  sel.step = "airstrike-placement";
+// Airstrike (p.8) — nouveau flux en 2 étapes au lieu de 3 (retour de
+// Mayrik) : poser le chopper, PUIS viser directement une case de son
+// arc avant (case occupée par un adversaire = tir dessus, case vide
+// ou "Ne pas tirer" = aucun tir) — plus de liste de cibles séparée
+// avant le placement, qui obligeait à un double choix redondant.
+function pickAirstrikePlacement(col, row) {
+  sel.airstrikePlacement = { col, row };
+  const chopper = G.allChoppers.find((c) => c.owner === HUMAN);
+  // Chopper HYPOTHÉTIQUE (copie, jamais muté) : juste posé au bon
+  // endroit pour calculer son arc avant AVANT le vrai placement, qui
+  // n'aura lieu qu'à l'exécution réelle (commitAssignAndCommand).
+  const hypotheticalChopper = { ...chopper, col, row };
+  const targets = getShootTargetOptions(hypotheticalChopper, G.allCars);
+  if (targets.length === 0) {
+    // Rien à viser depuis cette case -> aucune raison de demander quoi
+    // que ce soit (même logique que le tir normal sans cible).
+    sel.command = { type: "airstrike", dieValue: sel.commandDieValue, target: null, placement: { col, row } };
+    sel.step = "commit";
+    return;
+  }
+  sel.step = "airstrike-shoot-arc";
 }
 
-function pickAirstrikePlacement(col, row) {
-  sel.command = { type: "airstrike", dieValue: sel.commandDieValue, target: sel.airstrikeTarget || null, placement: { col, row } };
+function pickAirstrikeShootCell(col, row) {
+  const target = G.allCars.find(
+    (c) => c.col === col && c.row === row && c.owner !== HUMAN && c.status !== CAR_STATUS.ELIMINATED && !c.isChopper
+  ) || null; // case vide cliquée -> null -> pas de tir
+  sel.command = { type: "airstrike", dieValue: sel.commandDieValue, target, placement: sel.airstrikePlacement };
+  sel.step = "commit";
+}
+
+function declineAirstrikeShoot() {
+  sel.command = { type: "airstrike", dieValue: sel.commandDieValue, target: null, placement: sel.airstrikePlacement };
   sel.step = "commit";
 }
 
@@ -643,6 +669,12 @@ function highlightedCells() {
     const placements = listValidAirstrikePlacements(b, G.allCars, G.allChoppers, chopper);
     return placements.map((p) => ({ col: p.col, row: p.row, onClick: () => { pickAirstrikePlacement(p.col, p.row); render(); } }));
   }
+  if (sel.step === "airstrike-shoot-arc") {
+    const chopper = G.allChoppers.find((c) => c.owner === HUMAN);
+    const hypotheticalChopper = { ...chopper, ...sel.airstrikePlacement };
+    const arc = getFrontArc(hypotheticalChopper).filter((a) => isOnBoard(b, a.col, a.row));
+    return arc.map((a) => ({ col: a.col, row: a.row, onClick: () => { pickAirstrikeShootCell(a.col, a.row); render(); } }));
+  }
   return [];
 }
 
@@ -726,7 +758,7 @@ function choiceButton(label, onClick, selected) {
 // Étapes AVANT commitAssignAndCommand() : "Annuler" reste possible,
 // aucun dé n'a encore quitté le pool. Au-delà (mouvement, tir), plus
 // de retour en arrière — un dé assigné ne se rend pas.
-const PRE_COMMIT_STEPS = new Set(["car", "die", "command", "command-die", "repair-target", "airstrike-target", "airstrike-placement", "commit"]);
+const PRE_COMMIT_STEPS = new Set(["car", "die", "command", "command-die", "repair-target", "airstrike-placement", "airstrike-shoot-arc", "commit"]);
 
 function renderPanel() {
   const panel = document.getElementById("panel");
@@ -808,17 +840,15 @@ function renderPanel() {
     panel.appendChild(p);
     const myInoperable = G.allCars.filter((c) => c.owner === HUMAN && c.status === "inoperable");
     myInoperable.forEach((c) => choices.appendChild(choiceButton(`${c.size} (col ${c.col},row ${c.row})`, () => { pickRepairTarget(c); render(); })));
-  } else if (sel.step === "airstrike-target") {
-    const p = document.createElement("div");
-    p.textContent = "Airstrike — cible visée (facultatif) :";
-    panel.appendChild(p);
-    choices.appendChild(choiceButton("Aucune cible", () => { pickAirstrikeTarget(null); render(); }));
-    const enemies = G.allCars.filter((c) => c.owner !== HUMAN && c.status === "operable");
-    enemies.forEach((c) => choices.appendChild(choiceButton(`${c.owner} ${c.size}`, () => { pickAirstrikeTarget(c); render(); })));
   } else if (sel.step === "airstrike-placement") {
     const p = document.createElement("div");
     p.textContent = "Cliquez une case surlignée pour placer le chopper (Airstrike).";
     panel.appendChild(p);
+  } else if (sel.step === "airstrike-shoot-arc") {
+    const p = document.createElement("div");
+    p.textContent = "Chopper placé — cliquez une case surlignée (son arc avant) pour tirer dessus si elle est occupée, ou :";
+    panel.appendChild(p);
+    choices.appendChild(choiceButton("Ne pas tirer", () => { declineAirstrikeShoot(); render(); }));
   } else if (sel.step === "commit") {
     const p = document.createElement("div");
     p.textContent = `Prêt : ${sel.car.size}, dé ${sel.dieValue}${sel.command ? ", Command " + sel.command.type + " (dé " + sel.command.dieValue + ")" : ""}. Le tour va commencer — plus d'annulation possible au-delà.`;
