@@ -358,21 +358,65 @@ function continueAfterTileAdvance() {
 }
 
 // ===================================================================
-// SLAM — APERÇU ET RELANCE (p.9, retour de Mayrik) — seul le TOUT
-// PREMIER Slam d'un pas est proposé de façon interactive au joueur
-// humain (voir previewSlam/decideSlamRerollDefault, human-decision.js
-// et ai-decision.js) : un Slam en chaîne éventuel (nouvelle paire de
-// voitures jamais prévisualisée) retombe automatiquement sur la même
-// politique par défaut, faute de pouvoir mettre le moteur en pause une
-// seconde fois dans le même appel.
+// SLAM — APERÇU ET RELANCE (p.9, retour de Mayrik) — la relance est
+// proposée au joueur humain dès que la voiture PLUS GRANDE dans le
+// Slam est la sienne, quelle que soit l'ORIGINE du Slam :
+//   - un occupant déjà visible sur la case ciblée (option.outcome ===
+//     "slam", connu par avance par getMovementStepOptions/
+//     getEntryRowOptions) ;
+//   - un hazard Wreck ENCORE NON RÉVÉLÉ sur la case ciblée (jamais
+//     marqué "slam" par ces fonctions, puisqu'un jeton face cachée
+//     n'est pas un "occupant" à leurs yeux) — retour de Mayrik (cas 3,
+//     25/08) : ce Slam-là passait auparavant directement par la
+//     politique par défaut de l'IA, sans jamais demander au joueur,
+//     alors qu'une épave a une taille TOUJOURS connue à l'avance
+//     (Small, Inopérable) — rien d'aléatoire à attendre pour savoir
+//     qui est le plus grand, contrairement aux dés de Slam eux-mêmes.
+// Seul un Slam EN CHAÎNE (une paire de voitures différente, révélée
+// en poussant un véhicule sur une case DÉJÀ occupée par autre chose)
+// reste hors de portée de cette prévisualisation : impossible de
+// mettre le moteur en pause une seconde fois dans le même appel —
+// limitation assumée, retombe sur la politique par défaut.
 function pickEntryRow(option) {
-  if (option.outcome === "slam") { beginSlamSequence("entry", option, 0, option.entryRow); return; }
+  if (maybeBeginSlamSequence("entry", option, 0, option.entryRow)) return;
   executeEntryRowNow(option, sel.slamOptions);
 }
 
 function pickMoveStep(option) {
-  if (option.outcome === "slam") { beginSlamSequence("move", option, option.col, option.row); return; }
+  if (maybeBeginSlamSequence("move", option, option.col, option.row)) return;
   executeMoveStepNow(option, sel.slamOptions);
+}
+
+// Détermine l'ADVERSAIRE prévisible d'un Slam sur (col,row), sans
+// aucun effet de bord : soit un occupant déjà réellement présent dans
+// G.allCars, soit — si la case porte un hazard Wreck encore face
+// cachée — une épave HYPOTHÉTIQUE construite avec EXACTEMENT les
+// mêmes propriétés que celle que `resolveHazard` (engine.js, cas
+// WRECK) créera réellement à l'exécution (Small, Inopérable,
+// isWreck) : seule la taille compte pour savoir qui est "plus grand"
+// (p.9), et elle est déterministe pour une épave — rien à deviner.
+function buildPredictedSlamOpponent(col, row) {
+  const occupant = getCarAt(G.allCars, col, row, sel.car);
+  if (occupant) return occupant;
+  const cell = getSpace(board(), col, row);
+  if (cell && cell.hazard === HAZARD_TYPES.WRECK) {
+    const wreck = createCar(null, CAR_SIZE.SMALL, col, row);
+    wreck.status = CAR_STATUS.INOPERABLE;
+    wreck.isWreck = true;
+    return wreck;
+  }
+  return null;
+}
+
+// Démarre la prévisualisation si un Slam est prévisible pour ce pas —
+// renvoie true si le joueur doit répondre avant toute exécution
+// réelle (l'appelant ne doit alors PAS exécuter le pas lui-même).
+function maybeBeginSlamSequence(kind, option, col, row) {
+  if (option.outcome !== "slam" && option.outcome !== "normal") return false;
+  const occupant = buildPredictedSlamOpponent(col, row);
+  if (!occupant) return false;
+  beginSlamSequence(kind, option, occupant);
+  return true;
 }
 
 // Détecte un dégât reçu par la voiture ACTIVE pendant ce pas (p.9/p.12,
@@ -408,9 +452,11 @@ function executeMoveStepNow(option, slamOptions) {
 // Prévisualise le Slam à venir (aucun effet de bord, voir previewSlam)
 // et décide s'il faut interrompre pour demander au joueur humain, ou
 // appliquer directement la politique par défaut (tailles égales, ou
-// voiture plus grande appartenant à l'IA).
-function beginSlamSequence(kind, option, col, row) {
-  const occupant = getCarAt(G.allCars, col, row, sel.car);
+// voiture plus grande appartenant à l'IA). `occupant` est déjà résolu
+// par l'appelant (voir buildPredictedSlamOpponent) — un occupant réel
+// OU une épave hypothétique, peu importe ici : previewSlam ne regarde
+// que les tailles.
+function beginSlamSequence(kind, option, occupant) {
   const preview = previewSlam(sel.car, occupant);
   sel.pendingSlamStep = { kind, option };
   sel.slamPreview = preview;
@@ -424,16 +470,33 @@ function beginSlamSequence(kind, option, col, row) {
 
 // Le joueur a répondu (ou aucune décision n'était nécessaire) : on
 // rejoue EXACTEMENT le même lancer initial déjà prévisualisé
-// (forcedDice), avec sa réponse pour CE Slam précis — tout Slam en
-// chaîne consécutif (paire de voitures différente) retombe sur la
-// politique par défaut, jamais reposé au joueur une seconde fois.
+// (forcedDice), avec sa réponse pour CE Slam précis.
+// `matchesPreviewedSlam` reconnaît ce Slam précis à l'exécution réelle
+// de deux façons : (a) la MÊME paire d'objets qu'à la prévisualisation
+// (cas d'un occupant déjà réel — inchangé) ; (b) LA voiture active
+// (sel.car, objet persistant, jamais recréé) face à une épave nouvellement
+// créée par resolveHazard — objet forcément différent de l'épave
+// hypothétique prévisualisée, mais reconnaissable par construction
+// (isWreck) + par le lancer forcé identique (slamRoll/directionRoll).
+// Tout AUTRE Slam (chaîne consécutive, paire différente) retombe sur
+// la politique par défaut, jamais reposé au joueur une seconde fois.
+function matchesPreviewedSlam(ctx, preview) {
+  const sameRoll = ctx.slamRoll === preview.slamRoll && ctx.directionRoll === preview.directionRoll;
+  if (!sameRoll) return false;
+  const samePairByIdentity = ctx.topCar === preview.topCar && ctx.bottomCar === preview.bottomCar;
+  const wreckPair =
+    (ctx.topCar === sel.car && ctx.bottomCar.isWreck) ||
+    (ctx.bottomCar === sel.car && ctx.topCar.isWreck);
+  return samePairByIdentity || wreckPair;
+}
+
 function resolveSlamSequence(wantsReroll) {
   const { kind, option } = sel.pendingSlamStep;
   const preview = sel.slamPreview;
   const slamOptions = {
     ...sel.slamOptions,
     forcedDice: { slam: preview.slamRoll, direction: preview.directionRoll },
-    decideReroll: (ctx) => (ctx.topCar === preview.topCar && ctx.bottomCar === preview.bottomCar) ? wantsReroll : decideSlamRerollDefault(ctx)
+    decideReroll: (ctx) => matchesPreviewedSlam(ctx, preview) ? wantsReroll : decideSlamRerollDefault(ctx)
   };
   sel.pendingSlamStep = null;
   sel.slamPreview = null;
@@ -626,13 +689,19 @@ function renderBoard() {
     if (car.col === null || car.status === "eliminated") return;
     const { cx, cy } = cellCenter(car.col, car.row);
     const isActive = sel.car === car;
-    const color = OWNER_COLOR[car.owner];
+    // Une épave est un vrai pion physique sur le plateau (p.7) — elle
+    // reste toujours visible (Slam, tir), simplement avec une couleur
+    // neutre (aucun propriétaire) et un repère "W" au lieu d'une
+    // taille, plutôt que la couleur de propriétaire habituelle
+    // (`OWNER_COLOR[null]` serait `undefined`, invisible/noir).
+    const color = car.isWreck ? "#6b6b6b" : OWNER_COLOR[car.owner];
+    const label = car.isWreck ? "W" : car.size[0].toUpperCase();
     let extra = "";
     if (isActive) extra += `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5"/>`;
     svg.insertAdjacentHTML("beforeend", `<g>
       ${extra}
       <rect x="${cx - 12}" y="${cy - 10}" width="24" height="20" rx="4" fill="${color}" stroke="#000" stroke-width="1" ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
-      <text x="${cx}" y="${cy + 4}" font-size="11" fill="#fff" text-anchor="middle" font-weight="bold">${car.size[0].toUpperCase()}</text>
+      <text x="${cx}" y="${cy + 4}" font-size="11" fill="#fff" text-anchor="middle" font-weight="bold">${label}</text>
       ${car.status === "inoperable" ? `<line x1="${cx - 12}" y1="${cy - 10}" x2="${cx + 12}" y2="${cy + 10}" stroke="#fff" stroke-width="1.5"/>` : ""}
       ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#ffb347"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#111">${car.damageTokens.length}</text>` : ""}
     </g>`);
@@ -815,7 +884,8 @@ function renderPanel() {
     panel.appendChild(p);
     choices.appendChild(choiceButton("Ne pas tirer", () => { pickShootTarget(null); render(); }));
     (sel.shootTargets || []).forEach((t) => {
-      choices.appendChild(choiceButton(`Tirer sur ${t.owner} ${t.size}`, () => { pickShootTarget(t); render(); }));
+      const label = t.isWreck ? "l'épave" : `${t.owner} ${t.size}`; // aucun affichage UI "brut" d'une épave (owner null) — retour de Mayrik
+      choices.appendChild(choiceButton(`Tirer sur ${label}`, () => { pickShootTarget(t); render(); }));
     });
   }
 
@@ -843,7 +913,7 @@ function render() {
   renderPanel();
 
   document.getElementById("damageRow").innerHTML = G.allCars
-    .filter((car) => car.status !== "eliminated")
+    .filter((car) => car.status !== "eliminated" && !car.isWreck) // les épaves n'ont aucun affichage UI (retour de Mayrik)
     .map((car) => `<span class="badge">${car.owner} ${car.size} : ${car.damageTokens.length} dégât(s)${car.status === "inoperable" ? " [INOPÉRABLE]" : ""}</span>`)
     .join("");
 
