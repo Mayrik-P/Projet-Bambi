@@ -46,8 +46,8 @@ let humanSrc = fs.readFileSync(path.join(repoRoot, "human-decision.js"), "utf8")
 humanSrc = stripRequiresAndDestructuring(humanSrc, [
   'const engine = require("./engine.js");\nconst ai = require("./ai-decision.js");\n'
 ]);
-humanSrc = humanSrc.replace(/const \{ CAR_STATUS, TERRAIN, getSpace, getCarAt \} = engine;/, "// (destructuring engine.js retiré pour le bundle navigateur — noms déjà globaux)");
-humanSrc = humanSrc.replace(/const \{ computeReachableDestinations, computeReachableEntryDestinations \} = ai;/, "// (destructuring ai-decision.js retiré pour le bundle navigateur — noms déjà globaux)");
+humanSrc = humanSrc.replace(/const \{([\s\S]*?)\} = engine;/, "// (destructuring engine.js retiré pour le bundle navigateur — noms déjà globaux)");
+humanSrc = humanSrc.replace(/const \{([\s\S]*?)\} = ai;/, "// (destructuring ai-decision.js retiré pour le bundle navigateur — noms déjà globaux)");
 
 // --- turn-executor.js ---
 let executorSrc = fs.readFileSync(path.join(repoRoot, "turn-executor.js"), "utf8");
@@ -59,15 +59,14 @@ executorSrc = executorSrc.replace(/const \{([\s\S]*?)\} = engine;/, "// (destruc
 // à quelques endroits précis (pas seulement via le destructuring
 // ci-dessus) — remplacés par leur nom nu, déjà global après
 // concaténation.
-executorSrc = executorSrc.replace(/\bai\.computeShotTargetForDecision\b/g, "computeShotTargetForDecision");
-executorSrc = executorSrc.replace(/\bai\.chooseShootTarget\b/g, "chooseShootTarget");
+executorSrc = executorSrc.replace(/\bai\.(\w+)\b/g, "$1");
 executorSrc = executorSrc.replace(/\bengine\.buildBoardFromProgressionState\b/g, "buildBoardFromProgressionState");
 // Contrairement à engine.js/ai-decision.js/human-decision.js,
 // turn-executor.js exporte SANS garde `typeof module !== "undefined"`
 // (il n'a jamais eu besoin de tourner ailleurs qu'en Node jusqu'ici) —
 // on retire ce bloc pour le bundle navigateur ; les fonctions restent
 // accessibles directement par leur nom dans le scope global concaténé.
-executorSrc = executorSrc.replace(/\nmodule\.exports = \{ checkDecisionLegality, executeDecision \};\n/, "\n// (module.exports retiré pour le bundle navigateur — fonctions déjà globales)\n");
+executorSrc = executorSrc.replace(/\nmodule\.exports = \{[\s\S]*?\};\n/, "\n// (module.exports retiré pour le bundle navigateur — fonctions déjà globales)\n");
 
 // --- tiles/data/*.js : déjà du JS vanilla (const TILE_VENDETTA_XXX = {...}) ---
 const tilesDir = path.join(repoRoot, "tiles", "data");
