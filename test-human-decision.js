@@ -13,7 +13,10 @@ const fs = require("fs");
 const vm = require("vm");
 const engine = require("./engine.js");
 const human = require("./human-decision.js");
-const { checkDecisionLegality, executeDecision } = require("./turn-executor.js");
+const {
+  checkDecisionLegality, executeDecision,
+  executeAssignAndCommand, executeEntryStep, executeMoveStep, executeShoot, executeEndOfTurn
+} = require("./turn-executor.js");
 
 const {
   TERRAIN, CAR_SIZE, CAR_STATUS,
@@ -380,6 +383,249 @@ function freshProgressionSetup(playerNames, dicePool) {
   const decision = human.buildHumanDecision({ car, dieValue: 2, command: { type: "nitro", dieValue: 2 }, destination });
   const legality = checkDecisionLegality(decision, roundState.dicePool.Mayrik, "Mayrik");
   assert(legality.allOk === false && legality.commandDieDistinct === false, "checkDecisionLegality : refuse d'utiliser deux fois le même dé physique (une seule occurrence de 2 dans le pool)");
+}
+
+// ===================================================================
+// SECTION 6 — MOUVEMENT CASE PAR CASE (Point 3, retour de Mayrik)
+// ===================================================================
+{
+  // Cas de base : les 3 cases de l'arc avant, toutes route, assez de
+  // mouvement restant -> les 3 sont proposées, coût 1, outcome normal.
+  const board = emptyBoard(24, 6, TERRAIN.ROAD);
+  const car = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2);
+  const options = human.getMovementStepOptions(board, car, 3, [car]);
+  assert(options.length === 3, "getMovementStepOptions : les 3 cases de l'arc avant sont proposées sur route dégagée");
+  assert(options.every((o) => o.terrain === TERRAIN.ROAD && o.cost === 1 && o.outcome === "normal"), "getMovementStepOptions : coût 1 et outcome 'normal' sur route dégagée");
+}
+{
+  // Case Impassable dans l'arc avant : jamais une entrée volontaire ->
+  // exclue de la liste (pas juste déconseillée).
+  const board = emptyBoard(24, 6, TERRAIN.ROAD);
+  const car = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2);
+  const frontArc = engine.getFrontArc(car);
+  const frontCell = frontArc.find((a) => a.name === "front");
+  board.grid[frontCell.row][frontCell.col].terrain = TERRAIN.IMPASSABLE;
+  const options = human.getMovementStepOptions(board, car, 3, [car]);
+  assert(options.length === 2, "getMovementStepOptions : une case Impassable est exclue (jamais une entrée volontaire)");
+  assert(!options.some((o) => o.direction === "front"), "getMovementStepOptions : la direction menant à l'Impassable n'apparaît pas du tout");
+}
+{
+  // Boue (coût 2) avec 1 seul point restant -> exception p.7 : la case
+  // reste proposée, au coût réduit au restant (1).
+  const board = emptyBoard(24, 6, TERRAIN.ROAD);
+  const car = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2);
+  const frontArc = engine.getFrontArc(car);
+  const frontCell = frontArc.find((a) => a.name === "front");
+  board.grid[frontCell.row][frontCell.col].terrain = TERRAIN.MUD;
+  const optionsWith1 = human.getMovementStepOptions(board, car, 1, [car]);
+  const optionsWith2 = human.getMovementStepOptions(board, car, 2, [car]);
+  assert(optionsWith1.some((o) => o.direction === "front" && o.cost === 1), "getMovementStepOptions : exception Boue à 1 point restant — case proposée à coût 1");
+  assert(optionsWith2.some((o) => o.direction === "front" && o.cost === 2), "getMovementStepOptions : Boue à coût normal (2) quand plus d'un point restant");
+}
+{
+  // Coût de terrain > mouvement restant (hors exception Boue) -> case exclue.
+  const board = emptyBoard(24, 6, TERRAIN.ROAD);
+  const car = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2);
+  const frontArc = engine.getFrontArc(car);
+  const frontCell = frontArc.find((a) => a.name === "front");
+  board.grid[frontCell.row][frontCell.col].terrain = TERRAIN.MUD;
+  const options = human.getMovementStepOptions(board, car, 1, [car]);
+  const remaining0 = options.find((o) => o.direction === "front");
+  assert(remaining0.cost === 1, "getMovementStepOptions : Boue avec 1 point restant reste proposée (exception)");
+  const optionsNoBudget = human.getMovementStepOptions(board, { ...car }, 0, [car]);
+  assert(optionsNoBudget.length === 0, "getMovementStepOptions : aucun mouvement restant -> aucune case proposée");
+}
+{
+  // Case occupée par une voiture adverse dans l'arc avant -> outcome 'slam', jamais caché.
+  const board = emptyBoard(24, 6, TERRAIN.ROAD);
+  const car = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2);
+  const frontArc = engine.getFrontArc(car);
+  const frontCell = frontArc.find((a) => a.name === "front");
+  const occupant = createCar("IA-Adverse", CAR_SIZE.SMALL, frontCell.col, frontCell.row);
+  const options = human.getMovementStepOptions(board, car, 3, [car, occupant]);
+  const frontOption = options.find((o) => o.direction === "front");
+  assert(frontOption.outcome === "slam", "getMovementStepOptions : une case occupée reste un choix légal, signalé comme 'slam'");
+}
+{
+  // Sortie latérale (bord haut/bas du plateau) -> outcome 'eliminated-edge', reste un choix légal.
+  const board = emptyBoard(24, 3, TERRAIN.ROAD); // 3 rangées : row 0 est au bord haut
+  const car = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 0);
+  const options = human.getMovementStepOptions(board, car, 3, [car]);
+  const frontLeft = options.find((o) => o.direction === "front-left");
+  assert(frontLeft.outcome === "eliminated-edge", "getMovementStepOptions : sortie latérale en bord de plateau proposée avec outcome 'eliminated-edge'");
+}
+{
+  // Sortie AVANT (bord de la tuile de tête) -> outcome 'exits-front', jamais une élimination.
+  const board = emptyBoard(6, 6, TERRAIN.ROAD);
+  const car = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2); // col 5 = dernière colonne (0..5)
+  const options = human.getMovementStepOptions(board, car, 3, [car]);
+  const front = options.find((o) => o.direction === "front");
+  assert(front.outcome === "exits-front", "getMovementStepOptions : sortie par l'avant signalée comme 'exits-front', pas une élimination");
+}
+
+// ===================================================================
+// SECTION 7 — ENTRÉE EN JEU CASE PAR CASE (colonne 0 entière)
+// ===================================================================
+{
+  const board = emptyBoard(24, 6, TERRAIN.ROAD);
+  const options = human.getEntryRowOptions(board, 3, []);
+  assert(options.length === 6, "getEntryRowOptions : toutes les rangées de la colonne 0 sont proposées (plateau tout en route)");
+  assert(options.every((o) => o.cost === 1 && o.outcome === "normal"), "getEntryRowOptions : coût 1 et 'normal' sur route dégagée");
+}
+{
+  const board = emptyBoard(24, 6, TERRAIN.ROAD);
+  board.grid[2][0].terrain = TERRAIN.IMPASSABLE;
+  const options = human.getEntryRowOptions(board, 3, []);
+  assert(!options.some((o) => o.entryRow === 2), "getEntryRowOptions : une case Impassable en colonne 0 est exclue");
+  assert(options.length === 5, "getEntryRowOptions : les 5 autres rangées restent proposées");
+}
+{
+  const board = emptyBoard(24, 6, TERRAIN.ROAD);
+  const occupant = createCar("IA-Adverse", CAR_SIZE.SMALL, 0, 1);
+  const options = human.getEntryRowOptions(board, 3, [occupant]);
+  const row1 = options.find((o) => o.entryRow === 1);
+  assert(row1.outcome === "slam", "getEntryRowOptions : une rangée d'entrée occupée reste proposée, signalée 'slam'");
+}
+
+// ===================================================================
+// SECTION 8 — CIBLE DE TIR LIBRE
+// ===================================================================
+{
+  const shooter = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2);
+  const frontArc = engine.getFrontArc(shooter);
+  const frontCell = frontArc.find((a) => a.name === "front");
+  const enemyInArc = createCar("IA-Adverse", CAR_SIZE.SMALL, frontCell.col, frontCell.row);
+  const enemyOutOfArc = createCar("IA-Adverse", CAR_SIZE.SMALL, 10, 5);
+  const ownCarInArc = createCar("Mayrik", CAR_SIZE.LARGE, frontArc.find((a) => a.name === "front-left").col, frontArc.find((a) => a.name === "front-left").row);
+  const eliminatedInArc = createCar("IA-Adverse", CAR_SIZE.SMALL, frontArc.find((a) => a.name === "front-right").col, frontArc.find((a) => a.name === "front-right").row);
+  eliminatedInArc.status = CAR_STATUS.ELIMINATED;
+  const chopper = createChopper("IA-Adverse");
+  chopper.col = frontCell.col; chopper.row = frontCell.row; chopper.placed = true;
+
+  const targets = human.getShootTargetOptions(shooter, [shooter, enemyInArc, enemyOutOfArc, ownCarInArc, eliminatedInArc]);
+  assert(targets.length === 1 && targets[0] === enemyInArc, "getShootTargetOptions : seule la voiture adverse opérable dans l'arc avant est proposée (jamais sa propre voiture, une voiture hors arc, ou une voiture déjà éliminée)");
+}
+{
+  const shooter = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2);
+  const targets = human.getShootTargetOptions(shooter, [shooter]);
+  assert(targets.length === 0, "getShootTargetOptions : liste vide si aucune cible -> à l'appelant de proposer 'ne pas tirer'");
+}
+
+// ===================================================================
+// SECTION 9 — EXÉCUTION PAS À PAS (turn-executor.js)
+// ===================================================================
+{
+  // ASSIGN + COMMAND Nitro : le dé de mouvement ET le dé de Command
+  // sont bien retirés du pool, effectiveDieValue inclut le bonus.
+  const { progressionState, allCars, allChoppers, roundState } = freshProgressionSetup(["Mayrik", "IA-Adverse"], { Mayrik: [4, 2, 6, 1], "IA-Adverse": [1, 1, 1, 1] });
+  const car = allCars.find((c) => c.owner === "Mayrik" && c.size === CAR_SIZE.MEDIUM);
+  const result = executeAssignAndCommand(roundState, allCars, allChoppers, progressionState, "Mayrik", { car, dieValue: 4, command: { type: "nitro", dieValue: 2 }, isCoast: false });
+  assert(result.effectiveDieValue === 4 + 2, "executeAssignAndCommand : Nitro (dé 2) ajoute bien le bonus attendu au dé de mouvement");
+  assert(!roundState.dicePool.Mayrik.includes(4) && !roundState.dicePool.Mayrik.includes(2), "executeAssignAndCommand : les deux dés (mouvement + Command) sont retirés du pool");
+  assert(roundState.commandUsedThisRound.Mayrik === true, "executeAssignAndCommand : la Command du round est marquée comme utilisée");
+}
+{
+  // Entrée en jeu case par case : consomme le coût de la case
+  // d'entrée, rend le reste du mouvement. Tuiles de TEST (sans hazard
+  // caché) pour un résultat déterministe.
+  const rear = createTestTile(24, 6), middle = createTestTile(24, 6), lead = createTestTile(24, 6);
+  const progressionState = createTileProgressionState(rear, middle, lead);
+  const car = createCarOffBoard("Mayrik", CAR_SIZE.MEDIUM);
+  const allCars = [car];
+  const board = buildBoardFromProgressionState(progressionState);
+  const entryOptions = human.getEntryRowOptions(board, 4, allCars);
+  const chosen = entryOptions[0];
+  const result = executeEntryStep(progressionState, allCars, car, 4, chosen.entryRow, {});
+  assert(result.ok === true, "executeEntryStep : entrée réussie");
+  assert(car.col === 0 && car.row === chosen.entryRow, "executeEntryStep : la voiture est bien positionnée sur la rangée d'entrée choisie");
+  assert(result.remaining === 4 - chosen.cost, "executeEntryStep : le mouvement restant reflète le coût de la case d'entrée");
+}
+{
+  // Un pas de mouvement normal : le mouvement restant diminue
+  // exactement du coût de ce pas, sans jamais imposer le reste du
+  // trajet. Tuiles de TEST (sans hazard caché) pour un résultat
+  // déterministe — contrairement aux tuiles réelles, dont le hasard
+  // des hazards est justement testé plus loin par ailleurs.
+  const rear = createTestTile(24, 6), middle = createTestTile(24, 6), lead = createTestTile(24, 6);
+  const progressionState = createTileProgressionState(rear, middle, lead);
+  const allCars = [createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2)];
+  const allChoppers = [];
+  const car = allCars[0];
+  const board = buildBoardFromProgressionState(progressionState);
+  const step1Options = human.getMovementStepOptions(board, car, 3, allCars);
+  const step1 = step1Options.find((o) => o.outcome === "normal");
+  const result1 = executeMoveStep(progressionState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], car, 3, step1.direction, {});
+  assert(result1.ok === true, "executeMoveStep : un pas normal s'exécute normalement");
+  assert(result1.moveResult.remaining === 3 - step1.cost, "executeMoveStep : le mouvement restant après un seul pas correspond exactement au coût de ce pas");
+  assert(human.computePointsLost(3, step1, result1.moveResult.remaining) === 0, "computePointsLost : aucune perte sur un pas normal");
+}
+{
+  // Un pas qui percute une voiture adverse (Slam) doit forcer l'arrêt
+  // du mouvement (tous les points restants perdus) — détecté par
+  // computePointsLost, jamais par le statut de la voiture.
+  const rear = createTestTile(24, 6), middle = createTestTile(24, 6), lead = createTestTile(24, 6);
+  const progressionState = createTileProgressionState(rear, middle, lead);
+  const car = createCar("Mayrik", CAR_SIZE.LARGE, 5, 2);
+  const opponent = createCar("IA-Adverse", CAR_SIZE.SMALL, 0, 0);
+  const allCars = [car, opponent];
+  const allChoppers = [];
+  const board = buildBoardFromProgressionState(progressionState);
+  const frontArc = engine.getFrontArc(car);
+  const frontCell = frontArc.find((a) => a.name === "front");
+  opponent.col = frontCell.col; opponent.row = frontCell.row;
+  const options = human.getMovementStepOptions(board, car, 4, allCars);
+  const slamOption = options.find((o) => o.outcome === "slam");
+  const result = executeMoveStep(progressionState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], car, 4, slamOption.direction, { forcedDice: { slam: "top", direction: "front" } });
+  assert(result.moveResult.remaining === 0, "executeMoveStep : plus aucun point de mouvement restant après un Slam");
+  const lost = human.computePointsLost(4, slamOption, result.moveResult.remaining);
+  assert(lost === 4 - slamOption.cost, "computePointsLost : détecte correctement les points perdus à cause du Slam (coût de la case payé, le reste forcé à 0)");
+}
+{
+  // computePointsLost : devenir inopérable NE compte PAS comme une
+  // perte si le mouvement a normalement continué (aucune règle ne dit
+  // que les dégâts arrêtent le mouvement) — seul un écart RÉEL entre
+  // le coût normal et le remaining obtenu doit compter.
+  const optionNormal = { outcome: "normal", cost: 1 };
+  assert(human.computePointsLost(3, optionNormal, 2) === 0, "computePointsLost : pas de perte si le remaining correspond exactement au coût normal, quel que soit le statut de la voiture par ailleurs");
+}
+{
+  // Sortie latérale : toute la réserve restante est perdue.
+  const optionEdge = { outcome: "eliminated-edge", cost: null };
+  assert(human.computePointsLost(3, optionEdge, 0) === 3, "computePointsLost : sortie latérale/arrière -> tout le reste est perdu");
+}
+{
+  // Sortie par l'avant : jamais une perte (décalage de tuile transparent).
+  const optionFront = { outcome: "exits-front", cost: null };
+  assert(human.computePointsLost(3, optionFront, 3) === 0, "computePointsLost : sortie par l'avant -> jamais une perte");
+}
+{
+  // Tir : cible choisie -> résolu ; cible null -> aucun tir ; round 1
+  // -> toujours refusé, même avec une cible valide.
+  const { progressionState, allCars, allChoppers } = freshProgressionSetup(["Mayrik", "IA-Adverse"], { Mayrik: [4, 2, 6, 1], "IA-Adverse": [1, 1, 1, 1] });
+  const car = allCars.find((c) => c.owner === "Mayrik" && c.size === CAR_SIZE.MEDIUM);
+  car.col = 5; car.row = 2;
+  const opponent = allCars.find((c) => c.owner === "IA-Adverse" && c.size === CAR_SIZE.SMALL);
+  const frontArc = engine.getFrontArc(car);
+  opponent.col = frontArc[1].col; opponent.row = frontArc[1].row;
+
+  const noShot = executeShoot(progressionState, allCars, allChoppers, car, null, 2);
+  assert(noShot.shootResult === null, "executeShoot : cible null -> aucun tir résolu (le joueur choisit de ne pas tirer)");
+
+  const round1Shot = executeShoot(progressionState, allCars, allChoppers, car, opponent, 1);
+  assert(round1Shot.shootResult === null, "executeShoot : tir toujours refusé au round 1, même avec une cible valide");
+
+  const realShot = executeShoot(progressionState, allCars, allChoppers, car, opponent, 2, { forcedDice: { shootingDie: "any" } });
+  assert(realShot.shootResult.hit === true, "executeShoot : cible choisie librement par le joueur, tir résolu normalement");
+}
+{
+  // Fin de tour : marque la voiture comme activée, avance le tour.
+  const { progressionState, allCars, allChoppers, roundState } = freshProgressionSetup(["Mayrik", "IA-Adverse"], { Mayrik: [4, 2, 6, 1], "IA-Adverse": [1, 1, 1, 1] });
+  const car = allCars.find((c) => c.owner === "Mayrik" && c.size === CAR_SIZE.MEDIUM);
+  car.col = 5; car.row = 2;
+  const before = roundState.currentPlayerIndex;
+  const result = executeEndOfTurn(progressionState, roundState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], car);
+  assert(car.movedThisRound === true, "executeEndOfTurn : la voiture est bien marquée comme activée ce round");
+  assert(result.gameOver === false, "executeEndOfTurn : pas de fin de partie dans ce scénario simple");
 }
 
 console.log(`\n${passed} test(s) passé(s), ${failed} échec(s).`);

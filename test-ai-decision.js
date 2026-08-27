@@ -1470,5 +1470,32 @@ function mkCandidate(col, row, opts = {}) {
   assert(viaDispatcher.destination.col === direct.destination.col && viaDispatcher.destination.row === direct.destination.row, "decideAssignAndCommand : round 1 route bien vers decideFirstRound (même destination)");
 }
 
+// ===================================================================
+// SECTION — decideSlamRerollDefault (politique de relance de Slam,
+// p.9, confirmée par Mayrik : relance systématique si c'est SA PROPRE
+// voiture plus grande qui bougerait, jamais dans le cas inverse).
+// ===================================================================
+{
+  const large = createCar("IA", CAR_SIZE.LARGE, 3, 3);
+  const small = createCar("Mayrik", CAR_SIZE.SMALL, 3, 3);
+  const ctxOwnCarMoves = { largerCar: large, smallerCar: small, movingCar: large, slamRoll: "top", directionRoll: "front" };
+  assert(ai.decideSlamRerollDefault(ctxOwnCarMoves) === true, "decideSlamRerollDefault : relance si la voiture plus grande (celle qui décide) est celle qui bougerait");
+
+  const ctxOtherCarMoves = { largerCar: large, smallerCar: small, movingCar: small, slamRoll: "bottom", directionRoll: "front" };
+  assert(ai.decideSlamRerollDefault(ctxOtherCarMoves) === false, "decideSlamRerollDefault : jamais de relance si c'est la voiture ADVERSE (plus petite) qui bougerait — issue déjà favorable");
+
+  const ctxSameSize = { largerCar: null, smallerCar: null, movingCar: large, slamRoll: "top", directionRoll: "front" };
+  assert(ai.decideSlamRerollDefault(ctxSameSize) === false, "decideSlamRerollDefault : jamais de relance si les tailles sont égales (largerCar null -> pas éligible)");
+
+  // Formulation symétrique : fonctionne identiquement quel que soit le
+  // PROPRIÉTAIRE réel de la voiture plus grande (jamais un nom de
+  // joueur en dur) -- ici la voiture plus grande appartient à Mayrik,
+  // pas à l'IA, et la politique doit s'appliquer pareil.
+  const largeHuman = createCar("Mayrik", CAR_SIZE.LARGE, 3, 3);
+  const smallAi = createCar("IA", CAR_SIZE.SMALL, 3, 3);
+  const ctxHumanOwnsLarger = { largerCar: largeHuman, smallerCar: smallAi, movingCar: largeHuman, slamRoll: "top", directionRoll: "front" };
+  assert(ai.decideSlamRerollDefault(ctxHumanOwnsLarger) === true, "decideSlamRerollDefault : formulation symétrique -- s'applique pareil quand c'est le joueur humain qui possède la voiture plus grande");
+}
+
 console.log(`\n${passed} test(s) passé(s), ${failed} échec(s).`);
 if (failed > 0) process.exit(1);

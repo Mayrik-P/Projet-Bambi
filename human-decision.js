@@ -33,7 +33,7 @@
 const engine = require("./engine.js");
 const ai = require("./ai-decision.js");
 
-const { CAR_STATUS, TERRAIN, getSpace, getCarAt } = engine;
+const { CAR_STATUS, TERRAIN, MOVE_COST, getSpace, getCarAt, getFrontArc, rollSlamDice } = engine;
 const { computeReachableDestinations, computeReachableEntryDestinations } = ai;
 
 // ===================================================================
@@ -144,6 +144,179 @@ function getRoadBonusOptions(board, car, destination, roadDieValue, allCars, all
   const extCar = { ...car, col: destination.col, row: destination.row };
   return computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable)
     .filter((e) => (e.terminalReason === "normal" || e.terminalReason === "exits-front") && e.dangerousCellsCrossed === 0);
+}
+
+// ===================================================================
+// SECTION 2ter — MOUVEMENT CASE PAR CASE (retour d'usage de Mayrik,
+// Point 3 : remplace complètement getReachableOptions/Section 2 pour
+// le mouvement d'un joueur humain — la destination n'est plus choisie
+// d'un coup, le joueur avance une case à la fois dans l'arc avant
+// COURANT de sa voiture, les effets (hazard, slam, sortie de tuile)
+// s'appliquant réellement avant qu'on lui propose la case suivante).
+// Le même principe s'applique désormais au Bonus Road (Section 2bis) :
+// à l'appelant de reboucler sur cette fonction avec `remaining` =
+// roadDieValue au départ de l'extension, exactement comme pour le
+// mouvement principal.
+// ===================================================================
+/**
+ * Liste les cases de l'arc avant COURANT que le joueur peut
+ * légitimement choisir MAINTENANT comme prochaine case, compte tenu
+ * des points de mouvement `remaining` qu'il lui reste. Reproduit
+ * EXACTEMENT les mêmes conditions que la boucle interne de
+ * engine.moveCar (jamais dupliquées avec une logique différente) :
+ *   - jamais une case Impassable : "aucune entrée volontaire sur une
+ *     case impassable" (voir engine.js, moveCar) — exclue de la liste,
+ *     jamais juste déconseillée.
+ *   - jamais si le coût de terrain dépasse `remaining`, SAUF
+ *     l'exception Boue à 1 point restant (p.7).
+ * Les sorties de plateau restent des choix LÉGAUX (le joueur reste
+ * libre, même si l'issue est lourde) : sortie latérale/arrière →
+ * élimination (p.6), sortie avant → changement de tuile (géré
+ * automatiquement par engine.moveCarWithProgression). `outcome` sur
+ * chaque option permet à l'interface d'avertir le joueur AVANT qu'il
+ * ne clique, jamais de lui cacher un choix légal.
+ * Ne cache jamais un Slam à venir non plus (`outcome: "slam"`) — la
+ * case occupée reste un choix légal (p.9), avec ou sans Drift.
+ */
+function getMovementStepOptions(board, car, remaining, allCars) {
+  const arc = getFrontArc(car);
+  const options = [];
+
+  for (const step of arc) {
+    const space = getSpace(board, step.col, step.row);
+
+    if (space === null || (space === undefined && step.col < 0)) {
+      // Bord latéral ou arrière : élimination (p.6) — choix légal,
+      // jamais filtré.
+      options.push({ direction: step.name, col: step.col, row: step.row, terrain: null, cost: null, outcome: "eliminated-edge" });
+      continue;
+    }
+
+    if (space === undefined) {
+      // Bord AVANT : sortie de la tuile de tête — pas une élimination,
+      // gérée automatiquement par moveCarWithProgression.
+      options.push({ direction: step.name, col: step.col, row: step.row, terrain: null, cost: null, outcome: "exits-front" });
+      continue;
+    }
+
+    if (space.terrain === TERRAIN.IMPASSABLE) {
+      continue; // jamais une entrée volontaire (voir engine.moveCar)
+    }
+
+    const cost = MOVE_COST[space.terrain];
+    const mudExceptionApplies = space.terrain === TERRAIN.MUD && remaining === 1;
+    if (cost > remaining && !mudExceptionApplies) {
+      continue; // pas assez de déplacement restant pour cette case
+    }
+
+    const occupant = getCarAt(allCars, step.col, step.row, car);
+    options.push({
+      direction: step.name,
+      col: step.col,
+      row: step.row,
+      terrain: space.terrain,
+      cost: mudExceptionApplies ? remaining : cost,
+      outcome: occupant ? "slam" : "normal"
+    });
+  }
+
+  return options;
+}
+
+/**
+ * Symétrique de getMovementStepOptions pour le tout premier pas d'une
+ * voiture pas encore entrée en jeu (car.col === null) : le "hors
+ * plateau" est relié à TOUTE la colonne 0 (p.9), pas à un arc avant à
+ * 3 cases — mêmes conditions de légalité sinon (jamais Impassable en
+ * entrée volontaire, coût de terrain ≤ dé assigné sauf exception
+ * Boue). Une fois cette case d'entrée choisie et jouée (voir
+ * turn-executor.executeEntryStep), la suite du trajet redevient un
+ * arc avant classique piloté par getMovementStepOptions.
+ */
+function getEntryRowOptions(board, dieValue, allCars) {
+  const options = [];
+  for (let row = 0; row < board.rows; row++) {
+    const space = getSpace(board, 0, row);
+    if (!space || space.terrain === TERRAIN.IMPASSABLE) continue;
+    const cost = MOVE_COST[space.terrain];
+    const mudExceptionApplies = space.terrain === TERRAIN.MUD && dieValue === 1;
+    if (cost > dieValue && !mudExceptionApplies) continue;
+    const occupant = getCarAt(allCars, 0, row);
+    options.push({
+      entryRow: row,
+      terrain: space.terrain,
+      cost: mudExceptionApplies ? dieValue : cost,
+      outcome: occupant ? "slam" : "normal"
+    });
+  }
+  return options;
+}
+
+// ===================================================================
+// SECTION 2quater — CIBLE DE TIR LIBRE (remplace le choix automatique
+// ai.chooseShootTarget pour un joueur humain — Point 3, retour de
+// Mayrik : le joueur doit pouvoir choisir sa cible lui-même, et
+// choisir de NE PAS tirer).
+// ===================================================================
+/**
+ * Liste toutes les cibles légalement atteignables par un tir (p.10) :
+ * voiture adverse, opérationnelle, dans l'arc avant du tireur — jamais
+ * un chopper ("You may not shoot choppers"). Reprend exactement le
+ * même filtre que engine.chooseAiShootTarget, sans aucune préférence
+ * stratégique : au joueur de choisir librement parmi ces options, ou
+ * de ne pas tirer du tout (liste vide = pas de cible possible ; une
+ * liste non vide n'oblige jamais à tirer).
+ */
+function getShootTargetOptions(shooter, allCars) {
+  const arc = getFrontArc(shooter);
+  return allCars.filter(
+    (c) =>
+      c.owner !== shooter.owner &&
+      c.status !== CAR_STATUS.ELIMINATED &&
+      !c.isChopper &&
+      arc.some((a) => a.col === c.col && a.row === c.row)
+  );
+}
+
+// ===================================================================
+// SECTION 2quinquies — POINTS DE MOUVEMENT PERDUS (retour de Mayrik,
+// Point 3 : "reste des mouvements perdus à cause de [raison]" avec un
+// bouton Continuer, plutôt qu'un enchaînement automatique).
+// ===================================================================
+/**
+ * Calcule les points de mouvement RÉELLEMENT perdus après un pas
+ * (executeMoveStep/executeEntryStep), en comparant `remainingAfter` à
+ * ce que le coût NORMAL de la case aurait dû laisser. Jamais déduit du
+ * seul statut de la voiture : devenir inopérable (dégâts) ne coupe PAS
+ * forcément le mouvement (aucune règle en ce sens), alors qu'un Slam,
+ * une Mine, ou une élimination mettent explicitement `remaining` à 0
+ * dans engine.js quel que soit ce qu'il restait — c'est CET écart-là
+ * qui signale une perte, jamais un statut lu après coup.
+ *   - outcome "eliminated-edge" : tout le reste est perdu par
+ *     construction (sortie du plateau, cost=null).
+ *   - outcome "exits-front" : jamais une perte, le décalage de tuile
+ *     est transparent pour le joueur (remainingAfter le reflète déjà).
+ *   - outcome "normal"/"slam" : perte = ce que le coût normal de la
+ *     case aurait dû laisser, moins ce qu'il reste réellement.
+ */
+function computePointsLost(pointsBefore, option, remainingAfter) {
+  if (option.outcome === "eliminated-edge") return pointsBefore;
+  if (option.outcome === "exits-front") return 0;
+  const expectedRemaining = pointsBefore - option.cost;
+  return Math.max(0, expectedRemaining - remainingAfter);
+}
+
+// ===================================================================
+// SECTION 2sexies — APERÇU DE SLAM (p.9, relance) — PERMET une VRAIE
+// pause interactive pour le joueur humain, chose qu'un simple
+// callback synchrone decideReroll ne peut pas faire. Fonction PURE
+// (délègue à engine.rollSlamDice, aucun effet de bord) : à l'appelant
+// de rejouer EXACTEMENT le même résultat lors de l'exécution réelle
+// du pas (voir turn-executor.executeMoveStep/executeEntryStep,
+// options.forcedDice) une fois la décision de relance connue.
+// ===================================================================
+function previewSlam(mover, occupant) {
+  return rollSlamDice(mover, occupant, {});
 }
 
 // ===================================================================
@@ -263,6 +436,11 @@ if (typeof module !== "undefined" && module.exports) {
     getReachableOptions,
     isRoadBonusEligible,
     getRoadBonusOptions,
+    getMovementStepOptions,
+    getEntryRowOptions,
+    computePointsLost,
+    getShootTargetOptions,
+    previewSlam,
     getAvailableCommands,
     isValidAirstrikePlacement,
     listValidAirstrikePlacements,

@@ -1895,30 +1895,42 @@ function forceMoveOneSpace(tile, car, allCars, directionName, options = {}, _gua
 //   simplifiée (ex. relance si le résultat lui est défavorable).
 //   Par défaut, ne relance jamais (comportement neutre tant qu'aucun
 //   joueur/IA n'est branché).
-function resolveSlam(tile, allCars, topCar, bottomCar, options = {}) {
-  const { forcedDice = {}, decideReroll = () => false } = options;
-  const log = [];
-
-  let slamRoll = rollSlamDie(forcedDice.slam);
-  let directionRoll = rollDirectionDie(forcedDice.direction);
-  log.push(`Dé de slam : ${slamRoll} | Dé de direction : ${directionRoll}`);
-
+// -----------------------------------------------------------------
+// SLAM — DÉCOMPOSITION EN DEUX ÉTAPES (rollSlamDice / finalizeSlam)
+// -----------------------------------------------------------------
+// resolveSlam() reste la fonction complète, synchrone, utilisée par
+// l'IA et le self-play (comportement et log strictement inchangés).
+// Mais un `decideReroll` synchrone ne peut pas mettre en pause
+// l'exécution pour un VRAI clic d'un joueur humain (p.9 : le joueur
+// doit voir le lancer initial avant de décider) — ces deux fonctions
+// exportées séparément permettent à l'appelant (voir human-decision.js/
+// turn-executor.js) de rejouer exactement les 2 mêmes étapes en 2
+// appels séparés, avec un rendu d'écran entre les deux.
+//
+// rollSlamDice: lance les 2 dés, détermine l'éligibilité à la relance
+// (p.9 : uniquement si les tailles diffèrent) et QUI décide (le
+// propriétaire de la voiture plus grande, "même si elle est inopérable
+// ou si les deux voitures appartiennent au même joueur" — donc jamais
+// déduit du joueur actif). Fonction PURE : aucun effet de bord, peut
+// être appelée en toute sécurité pour un simple aperçu.
+function rollSlamDice(topCar, bottomCar, forcedDice = {}) {
+  const slamRoll = rollSlamDie(forcedDice.slam);
+  const directionRoll = rollDirectionDie(forcedDice.direction);
   const topRank = SIZE_RANK[topCar.size];
   const bottomRank = SIZE_RANK[bottomCar.size];
+  const rerollEligible = topRank !== bottomRank;
+  const largerCar = rerollEligible ? (topRank > bottomRank ? topCar : bottomCar) : null;
+  const smallerCar = rerollEligible ? (topRank > bottomRank ? bottomCar : topCar) : null;
+  const movingCar = slamRoll === "top" ? topCar : bottomCar;
+  return { slamRoll, directionRoll, rerollEligible, largerCar, smallerCar, movingCar, topCar, bottomCar };
+}
 
-  if (topRank !== bottomRank) {
-    const largerCar = topRank > bottomRank ? topCar : bottomCar;
-    const smallerCar = topRank > bottomRank ? bottomCar : topCar;
-
-    const wantsReroll = decideReroll({ largerCar, smallerCar, slamRoll, directionRoll });
-    if (wantsReroll) {
-      log.push(`${largerCar.id} (voiture plus grande) demande la relance des deux dés`);
-      slamRoll = rollSlamDie(forcedDice.rerolledSlam);
-      directionRoll = rollDirectionDie(forcedDice.rerolledDirection);
-      log.push(`Relance → Dé de slam : ${slamRoll} | Dé de direction : ${directionRoll}`);
-    }
-  }
-
+// finalizeSlam: à partir d'un résultat de dés déjà DÉFINITIF (après
+// une éventuelle relance déjà décidée), déplace réellement la voiture
+// concernée et résout la chaîne de collisions éventuelle — c'est la
+// seconde moitié de l'ancien resolveSlam, avec effets de bord.
+function finalizeSlam(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options = {}) {
+  const log = [];
   const movingCar = slamRoll === "top" ? topCar : bottomCar;
   log.push(`→ ${movingCar.id} bouge en ${directionRoll}`);
 
@@ -1927,15 +1939,8 @@ function resolveSlam(tile, allCars, topCar, bottomCar, options = {}) {
 
   // p.11 : un slam (y compris en chaîne, si la voiture percutée
   // atterrit elle-même sur un 3e véhicule) peut se terminer par une
-  // sortie de plateau par l'AVANT — jamais géré jusqu'ici (bug trouvé
-  // par Mayrik en jouant : la voiture percutée restait immobile,
-  // empilée avec l'autre, ni décalage de tuile ni élimination). On
-  // remonte jusqu'à l'appelant capable de déclencher ce décalage
-  // (moveCarWithProgression) l'identité de la voiture concernée et sa
-  // direction de sortie, en descendant récursivement la chaîne
-  // jusqu'à son maillon terminal (un seul maillon peut réellement
-  // sortir par l'avant : les suivants n'existent que s'il y a eu une
-  // NOUVELLE collision, mutuellement exclusive avec une sortie).
+  // sortie de plateau par l'AVANT — voir le commentaire détaillé
+  // historique dans resolveSlam ci-dessous.
   let frontExitInfo = null;
   if (moveResult.frontExit) {
     frontExitInfo = { car: movingCar, direction: directionRoll };
@@ -1944,6 +1949,30 @@ function resolveSlam(tile, allCars, topCar, bottomCar, options = {}) {
   }
 
   return { log, movingCar, direction: directionRoll, frontExitInfo };
+}
+
+function resolveSlam(tile, allCars, topCar, bottomCar, options = {}) {
+  const { forcedDice = {}, decideReroll = () => false } = options;
+  const log = [];
+
+  let { slamRoll, directionRoll, rerollEligible, largerCar, smallerCar, movingCar } = rollSlamDice(topCar, bottomCar, forcedDice);
+  log.push(`Dé de slam : ${slamRoll} | Dé de direction : ${directionRoll}`);
+
+  if (rerollEligible) {
+    const wantsReroll = decideReroll({ largerCar, smallerCar, slamRoll, directionRoll, movingCar, topCar, bottomCar });
+    if (wantsReroll) {
+      log.push(`${largerCar.id} (voiture plus grande) demande la relance des deux dés`);
+      const rerolled = rollSlamDice(topCar, bottomCar, { slam: forcedDice.rerolledSlam, direction: forcedDice.rerolledDirection });
+      slamRoll = rerolled.slamRoll;
+      directionRoll = rerolled.directionRoll;
+      log.push(`Relance → Dé de slam : ${slamRoll} | Dé de direction : ${directionRoll}`);
+    }
+  }
+
+  const finalResult = finalizeSlam(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options);
+  log.push(...finalResult.log);
+
+  return { log, movingCar: finalResult.movingCar, direction: finalResult.direction, frontExitInfo: finalResult.frontExitInfo };
 }
 
 // -----------------------------------------------------------------
@@ -3947,6 +3976,8 @@ module.exports = {
   resolveShoot,
   forceMoveOneSpace,
   resolveSlam,
+  rollSlamDice,
+  finalizeSlam,
   drawDamageToken,
   resolveDamageToken,
   applyDamage,

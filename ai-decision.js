@@ -385,6 +385,33 @@ function evaluateSlamCandidate(candidate, assignedDieValue, myCarSize, board) {
   return { accept, dangerousAdjacentCount, tooEarly: false };
 }
 
+// -----------------------------------------------------------------
+// SLAM — POLITIQUE DE RELANCE (p.9)
+// -----------------------------------------------------------------
+// Simplification volontaire confirmée par Mayrik pour l'IA : jamais de
+// calcul de probabilité sur le résultat d'une relance — l'IA relance
+// SYSTÉMATIQUEMENT dès lors qu'elle en a le droit (elle possède la
+// voiture plus grande, seule condition d'éligibilité p.9) ET que
+// c'est SA PROPRE voiture qui bougerait suite au lancer actuel (jamais
+// dans le cas inverse : si c'est la voiture adverse qui bougerait,
+// l'issue est déjà favorable, inutile de la remettre en jeu).
+//
+// Formulée en termes RELATIFS au propriétaire de la plus grande
+// voiture (jamais un nom de joueur en dur) pour s'appliquer
+// symétriquement quel que soit celui qui la possède réellement —
+// utilisée telle quelle pour les tours IA, ET comme repli automatique
+// pour un Slam EN CHAÎNE pendant un tour humain (voir
+// human-decision.js : seul le TOUT PREMIER Slam d'un pas est proposé
+// de façon interactive au joueur ; un Slam en chaîne consécutif,
+// impliquant une toute nouvelle paire de voitures jamais
+// prévisualisée, retombe sur cette même politique par défaut — aucun
+// moyen de mettre le moteur en pause une seconde fois dans le même
+// appel).
+function decideSlamRerollDefault(context) {
+  if (!context.largerCar) return false; // tailles égales : pas de relance possible
+  return context.movingCar.owner === context.largerCar.owner;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     DANGEROUS_REVEALED_HAZARD_TYPES,
@@ -393,7 +420,8 @@ if (typeof module !== "undefined" && module.exports) {
     computeReachableEntryDestinations,
     SIZE_RANK,
     countDangerousAdjacentCells,
-    evaluateSlamCandidate
+    evaluateSlamCandidate,
+    decideSlamRerollDefault
   };
 }
 

@@ -206,6 +206,41 @@ console.log("large11 finale (attendu inchangée, col 3 row 3 - c'est 'top' qui b
 console.log("small11 finale (attendu inchangée, dé de slam relancé = 'top' donc c'est large11 qui aurait dû bouger) :", small11.col, small11.row);
 
 // -----------------------------------------------------------------
+section("Fin des tests");
+
+// -----------------------------------------------------------------
+// TEST 12bis : rollSlamDice() / finalizeSlam() — décomposition pure
+// utilisée pour permettre une VRAIE pause interactive (voir
+// human-decision.js) — doivent reproduire EXACTEMENT le même
+// comportement que l'ancien resolveSlam monolithique.
+// -----------------------------------------------------------------
+section("Test 12bis — rollSlamDice/finalizeSlam : décomposition fidèle de resolveSlam");
+{
+  const { rollSlamDice, finalizeSlam } = require("./engine.js");
+  tile = createTestTile(8, 6);
+  const large12b = createCar("Mayrik", CAR_SIZE.LARGE, 3, 3);
+  const small12b = createCar("IA", CAR_SIZE.SMALL, 3, 3);
+  const cars12b = [large12b, small12b];
+
+  const preview = rollSlamDice(large12b, small12b, { slam: "bottom", direction: "front" });
+  console.log("rerollEligible (attendu true, tailles différentes) :", preview.rerollEligible === true);
+  console.log("largerCar (attendu large12b) :", preview.largerCar === large12b);
+  console.log("smallerCar (attendu small12b) :", preview.smallerCar === small12b);
+  console.log("movingCar (attendu small12b, slamRoll='bottom') :", preview.movingCar === small12b);
+  console.log("Aucun effet de bord (positions inchangées) :", large12b.col === 3 && small12b.col === 3);
+
+  const final = finalizeSlam(tile, cars12b, preview.slamRoll, preview.directionRoll, large12b, small12b, {});
+  console.log("finalizeSlam déplace bien movingCar :", final.movingCar === small12b);
+  console.log("small12b déplacée (attendu col 4) :", small12b.col === 4);
+
+  // Même taille : rerollEligible doit être false, largerCar/smallerCar null.
+  const med12b1 = createCar("Mayrik", CAR_SIZE.MEDIUM, 3, 3);
+  const med12b2 = createCar("IA", CAR_SIZE.MEDIUM, 3, 3);
+  const previewSameSize = rollSlamDice(med12b1, med12b2, { slam: "top", direction: "front" });
+  console.log("Tailles égales -> rerollEligible false :", previewSameSize.rerollEligible === false);
+  console.log("Tailles égales -> largerCar/smallerCar null :", previewSameSize.largerCar === null && previewSameSize.smallerCar === null);
+}
+
 // TEST 12 : PAS de relance proposée si les deux voitures ont la même taille
 // (même si decideReroll dirait "oui", elle ne doit jamais être appelée)
 // -----------------------------------------------------------------
