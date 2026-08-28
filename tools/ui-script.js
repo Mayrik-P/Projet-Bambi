@@ -72,7 +72,7 @@ function newGame() {
     allCars.push(createCarOffBoard(name, CAR_SIZE.LARGE));
   }
   const roundState = createRoundState(PLAYER_NAMES);
-  G = { progressionState, allCars, allChoppers, roundState };
+  G = { progressionState, allCars, allChoppers, roundState, aiPending: null };
   sel = {};
   fullLog = [];
   gameOver = false;
@@ -106,7 +106,16 @@ function checkEnd() {
 }
 
 // ===================================================================
-// TOUR DE L'IA — automatique, un clic pour déclencher (inchangé)
+// TOUR DE L'IA — un clic pour déclencher. Depuis le chantier
+// générateurs (docs/rewrite-plan.md), le tour de l'IA n'est plus
+// forcément atomique : un Slam (direct ou révélé par un Wreck)
+// survenant PENDANT ce tour et impliquant une voiture DU JOUEUR
+// HUMAIN plus grande met désormais la résolution en pause pour lui
+// demander sa décision de relance (p.9) — exactement comme pour son
+// propre tour — au lieu de retomber silencieusement sur la politique
+// par défaut de l'IA (écart remonté par Mayrik le 25/08, cf. journal).
+// G.aiPending, quand présent, retient le générateur en pause :
+// { gen, ctx, turnLabel } — voir resumeAiSlamRerollChoice() plus bas.
 // ===================================================================
 function playAiTurn() {
   ensureRoadDieRolled(G.roundState);
@@ -118,13 +127,44 @@ function playAiTurn() {
     const log = [`${cp} : rien à jouer → passe forcée.`];
     advanceTurn(G.roundState, G.allCars).log.forEach((l) => log.push(l));
     pushLogLines(log, `Round ${G.roundState.roundNumber} — ${cp}`);
-  } else {
-    const result = executeDecision(G.progressionState, G.roundState, G.allCars, G.allChoppers, PLAYER_NAMES, cp, decision);
-    pushLogLines(result.log || [], `Round ${G.roundState.roundNumber} — ${cp}`);
+    checkEnd();
+    resetSelection();
+    render();
+    return;
   }
+  const gen = executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, PLAYER_NAMES, cp, decision, {
+    isHumanOwner: (owner) => owner === HUMAN
+  });
+  driveAiTurnGenerator(gen, `Round ${G.roundState.roundNumber} — ${cp}`);
+}
+
+// Fait avancer le générateur du tour IA en cours jusqu'à sa fin OU
+// jusqu'à sa prochaine pause. Une pause peut se reproduire plusieurs
+// fois d'affilée (ex. un Slam en chaîne qui implique une DEUXIÈME
+// voiture humaine plus grande) — chaque pause est traitée de façon
+// identique, sans code spécial, puisque le générateur reprend
+// exactement là où il s'est arrêté.
+function driveAiTurnGenerator(gen, turnLabel, answer) {
+  const outcome = driveInteractive(gen, answer);
+  if (!outcome.done) {
+    G.aiPending = { gen, ctx: outcome.pending, turnLabel };
+    render();
+    return;
+  }
+  G.aiPending = null;
+  pushLogLines(outcome.result.log || [], turnLabel);
   checkEnd();
   resetSelection();
   render();
+}
+
+// Réponse du joueur humain à la pause de relance déclenchée PENDANT
+// le tour de l'IA (voir le panneau "ai-slam-reroll-choice" dans
+// renderPanel). Reprend le même générateur là où il s'est arrêté.
+function resumeAiSlamRerollChoice(wantsReroll) {
+  if (!G.aiPending) return;
+  const { gen, turnLabel } = G.aiPending;
+  driveAiTurnGenerator(gen, turnLabel, wantsReroll);
 }
 
 // ===================================================================
@@ -384,154 +424,70 @@ function continueAfterTileAdvance() {
 }
 
 // ===================================================================
-// SLAM — APERÇU ET RELANCE (p.9, retour de Mayrik) — la relance est
+// SLAM — RELANCE INTERACTIVE (p.9, retour de Mayrik) — la relance est
 // proposée au joueur humain dès que la voiture PLUS GRANDE dans le
-// Slam est la sienne, quelle que soit l'ORIGINE du Slam :
-//   - un occupant déjà visible sur la case ciblée (option.outcome ===
-//     "slam", connu par avance par getMovementStepOptions/
-//     getEntryRowOptions) ;
-//   - un hazard Wreck ENCORE NON RÉVÉLÉ sur la case ciblée (jamais
-//     marqué "slam" par ces fonctions, puisqu'un jeton face cachée
-//     n'est pas un "occupant" à leurs yeux) — retour de Mayrik (cas 3,
-//     25/08) : ce Slam-là passait auparavant directement par la
-//     politique par défaut de l'IA, sans jamais demander au joueur,
-//     alors qu'une épave a une taille TOUJOURS connue à l'avance
-//     (Small, Inopérable) — rien d'aléatoire à attendre pour savoir
-//     qui est le plus grand, contrairement aux dés de Slam eux-mêmes.
-// Seul un Slam EN CHAÎNE (une paire de voitures différente, révélée
-// en poussant un véhicule sur une case DÉJÀ occupée par autre chose)
-// reste hors de portée de cette prévisualisation : impossible de
-// mettre le moteur en pause une seconde fois dans le même appel —
-// limitation assumée, retombe sur la politique par défaut.
-function pickEntryRow(option) {
-  if (maybeBeginSlamSequence("entry", option, 0, option.entryRow)) return;
-  executeEntryRowNow(option, sel.slamOptions);
-}
+// Slam est la sienne, quelle que soit l'ORIGINE du Slam (occupant déjà
+// visible, Wreck révélé à l'instant, OU Slam en chaîne déclenché par
+// un dégât Dazed) : `executeEntryStepGen`/`executeMoveStepGen`/
+// `executeShootGen` (turn-executor.js) mettent nativement la
+// résolution en pause via `isHumanOwner`, exactement comme pour le
+// tour de l'IA (voir driveAiTurnGenerator plus haut) — même mécanisme
+// générique des deux côtés, sans aucune prévisualisation ni rejeu de
+// dés forcés : ancien hack (buildPredictedSlamOpponent/
+// matchesPreviewedSlam, limité aux Slams directs et Wreck, jamais aux
+// chaînes) retiré au profit de ce mécanisme unique, qui couvre TOUS
+// les cas sans distinction.
+// ===================================================================
 
-function pickMoveStep(option) {
-  if (maybeBeginSlamSequence("move", option, option.col, option.row)) return;
-  executeMoveStepNow(option, sel.slamOptions);
-}
-
-// Détermine l'ADVERSAIRE prévisible d'un Slam sur (col,row), sans
-// aucun effet de bord : soit un occupant déjà réellement présent dans
-// G.allCars, soit — si la case porte un hazard Wreck encore face
-// cachée — une épave HYPOTHÉTIQUE construite avec EXACTEMENT les
-// mêmes propriétés que celle que `resolveHazard` (engine.js, cas
-// WRECK) créera réellement à l'exécution (Small, Inopérable,
-// isWreck) : seule la taille compte pour savoir qui est "plus grand"
-// (p.9), et elle est déterministe pour une épave — rien à deviner.
-function buildPredictedSlamOpponent(col, row) {
-  const occupant = getCarAt(G.allCars, col, row, sel.car);
-  if (occupant) return occupant;
-  const cell = getSpace(board(), col, row);
-  if (cell && cell.hazard === HAZARD_TYPES.WRECK) {
-    const wreck = createCar(null, CAR_SIZE.SMALL, col, row);
-    wreck.status = CAR_STATUS.INOPERABLE;
-    wreck.isWreck = true;
-    return wreck;
-  }
-  return null;
-}
-
-// Démarre la prévisualisation si un Slam est prévisible pour ce pas —
-// renvoie true si le joueur doit répondre avant toute exécution
-// réelle (l'appelant ne doit alors PAS exécuter le pas lui-même).
-function maybeBeginSlamSequence(kind, option, col, row) {
-  if (option.outcome !== "slam" && option.outcome !== "normal") return false;
-  const occupant = buildPredictedSlamOpponent(col, row);
-  if (!occupant) return false;
-  beginSlamSequence(kind, option, occupant);
-  return true;
-}
-
-// Détecte un dégât reçu par la voiture ACTIVE pendant ce pas (p.9/p.12,
-// "loses its remaining moves when it takes damage") en comparant le
-// nombre de jetons de dégât avant/après — plutôt que de faire remonter
-// une information dédiée depuis le moteur à travers plusieurs couches
-// (moveCar → resolveHazard → applyDamage) rien que pour ce besoin.
-// `sel.car` est le MÊME objet muté en place par le moteur (jamais une
-// copie), donc cette comparaison est fiable quelle que soit la source
-// du dégât (aujourd'hui, uniquement la Mine — cf. resolveHazard).
-function detectDamageTaken(car, damageCountBefore, action) {
-  const result = action();
-  if (car.damageTokens.length > damageCountBefore) sel.hadDamage = true;
-  return result;
-}
-
-function executeEntryRowNow(option, slamOptions) {
-  const remainingBefore = sel.remaining;
-  const damageBefore = sel.car.damageTokens.length;
-  const result = detectDamageTaken(sel.car, damageBefore, () =>
-    executeEntryStep(G.progressionState, G.allCars, sel.car, remainingBefore, option.entryRow, slamOptions));
-  handleStepResult(remainingBefore, option, result, true);
-}
-
-function executeMoveStepNow(option, slamOptions) {
-  const remainingBefore = sel.remaining;
-  const damageBefore = sel.car.damageTokens.length;
-  const result = detectDamageTaken(sel.car, damageBefore, () =>
-    executeMoveStep(G.progressionState, G.allCars, G.allChoppers, PLAYER_NAMES, sel.car, remainingBefore, option.direction, slamOptions));
-  handleStepResult(remainingBefore, option, result, false);
-}
-
-// Prévisualise le Slam à venir (aucun effet de bord, voir previewSlam)
-// et décide s'il faut interrompre pour demander au joueur humain, ou
-// appliquer directement la politique par défaut (tailles égales, ou
-// voiture plus grande appartenant à l'IA). `occupant` est déjà résolu
-// par l'appelant (voir buildPredictedSlamOpponent) — un occupant réel
-// OU une épave hypothétique, peu importe ici : previewSlam ne regarde
-// que les tailles.
-function beginSlamSequence(kind, option, occupant) {
-  const preview = previewSlam(sel.car, occupant);
-  sel.pendingSlamStep = { kind, option };
-  sel.slamPreview = preview;
-
-  if (preview.rerollEligible && preview.largerCar.owner === HUMAN) {
+// Fait avancer le générateur d'un pas humain (entrée, mouvement, tir)
+// jusqu'à sa fin OU sa prochaine pause — mirroir exact de
+// driveAiTurnGenerator, avec `onComplete(result)` appelé une fois le
+// pas entièrement résolu (peut lui-même avoir traversé plusieurs
+// pauses d'affilée, ex. un Slam en chaîne impliquant deux voitures
+// humaines successives — géré nativement, sans code spécial).
+function driveHumanStepGenerator(gen, onComplete, answer) {
+  const outcome = driveInteractive(gen, answer);
+  if (!outcome.done) {
+    sel.pendingHumanSlam = { gen, ctx: outcome.pending, onComplete };
     sel.step = "slam-reroll-choice";
     return;
   }
-  resolveSlamSequence(decideSlamRerollDefault(preview));
+  sel.pendingHumanSlam = null;
+  onComplete(outcome.result);
 }
 
-// Le joueur a répondu (ou aucune décision n'était nécessaire) : on
-// rejoue EXACTEMENT le même lancer initial déjà prévisualisé
-// (forcedDice), avec sa réponse pour CE Slam précis.
-// `matchesPreviewedSlam` reconnaît ce Slam précis à l'exécution réelle
-// de deux façons : (a) la MÊME paire d'objets qu'à la prévisualisation
-// (cas d'un occupant déjà réel — inchangé) ; (b) LA voiture active
-// (sel.car, objet persistant, jamais recréé) face à une épave nouvellement
-// créée par resolveHazard — objet forcément différent de l'épave
-// hypothétique prévisualisée, mais reconnaissable par construction
-// (isWreck) + par le lancer forcé identique (slamRoll/directionRoll).
-// Tout AUTRE Slam (chaîne consécutive, paire différente) retombe sur
-// la politique par défaut, jamais reposé au joueur une seconde fois.
-function matchesPreviewedSlam(ctx, preview) {
-  const sameRoll = ctx.slamRoll === preview.slamRoll && ctx.directionRoll === preview.directionRoll;
-  if (!sameRoll) return false;
-  const samePairByIdentity = ctx.topCar === preview.topCar && ctx.bottomCar === preview.bottomCar;
-  const wreckPair =
-    (ctx.topCar === sel.car && ctx.bottomCar.isWreck) ||
-    (ctx.bottomCar === sel.car && ctx.topCar.isWreck);
-  return samePairByIdentity || wreckPair;
+// Réponse du joueur à la pause de relance déclenchée pendant SON
+// PROPRE pas (entrée, mouvement, ou tir).
+function resumeHumanSlamRerollChoice(wantsReroll) {
+  if (!sel.pendingHumanSlam) return;
+  const { gen, onComplete } = sel.pendingHumanSlam;
+  driveHumanStepGenerator(gen, onComplete, wantsReroll);
 }
 
-function resolveSlamSequence(wantsReroll) {
-  const { kind, option } = sel.pendingSlamStep;
-  const preview = sel.slamPreview;
-  const slamOptions = {
+function pickEntryRow(option) {
+  const remainingBefore = sel.remaining;
+  const damageBefore = sel.car.damageTokens.length;
+  const gen = executeEntryStepGen(G.progressionState, G.allCars, sel.car, remainingBefore, option.entryRow, {
     ...sel.slamOptions,
-    forcedDice: { slam: preview.slamRoll, direction: preview.directionRoll },
-    decideReroll: (ctx) => matchesPreviewedSlam(ctx, preview) ? wantsReroll : decideSlamRerollDefault(ctx)
-  };
-  sel.pendingSlamStep = null;
-  sel.slamPreview = null;
-  if (kind === "entry") executeEntryRowNow(option, slamOptions);
-  else executeMoveStepNow(option, slamOptions);
+    isHumanOwner: (owner) => owner === HUMAN
+  });
+  driveHumanStepGenerator(gen, (result) => {
+    if (sel.car.damageTokens.length > damageBefore) sel.hadDamage = true;
+    handleStepResult(remainingBefore, option, result, true);
+  });
 }
 
-function pickSlamRerollChoice(wantsReroll) {
-  resolveSlamSequence(wantsReroll);
+function pickMoveStep(option) {
+  const remainingBefore = sel.remaining;
+  const damageBefore = sel.car.damageTokens.length;
+  const gen = executeMoveStepGen(G.progressionState, G.allCars, G.allChoppers, PLAYER_NAMES, sel.car, remainingBefore, option.direction, {
+    ...sel.slamOptions,
+    isHumanOwner: (owner) => owner === HUMAN
+  });
+  driveHumanStepGenerator(gen, (result) => {
+    if (sel.car.damageTokens.length > damageBefore) sel.hadDamage = true;
+    handleStepResult(remainingBefore, option, result, false);
+  });
 }
 
 // Le joueur a pris connaissance du message "mouvements perdus" —
@@ -600,9 +556,14 @@ function proceedToShootPhase() {
 }
 
 function pickShootTarget(target) {
-  const result = executeShoot(G.progressionState, G.allCars, G.allChoppers, sel.car, target, G.roundState.roundNumber);
-  logTurn(result.log || []);
-  finishHumanTurn();
+  const gen = executeShootGen(G.progressionState, G.allCars, G.allChoppers, sel.car, target, G.roundState.roundNumber, {
+    ...sel.slamOptions,
+    isHumanOwner: (owner) => owner === HUMAN
+  });
+  driveHumanStepGenerator(gen, (result) => {
+    logTurn(result.log || []);
+    finishHumanTurn();
+  });
 }
 
 function finishHumanTurn() {
@@ -774,6 +735,24 @@ function renderPanel() {
     const h2 = document.createElement("h2");
     h2.textContent = `Au tour de ${OPPONENT}`;
     panel.appendChild(h2);
+
+    if (G.aiPending) {
+      // Pause en cours DANS le tour de l'IA (voir driveAiTurnGenerator) :
+      // un Slam implique une voiture DU JOUEUR plus grande — c'est à
+      // lui de décider la relance (p.9), exactement comme pour son
+      // propre tour (voir "slam-reroll-choice" plus bas).
+      const ctx = G.aiPending.ctx;
+      const p = document.createElement("div");
+      p.textContent = `SLAM pendant le tour de ${OPPONENT} ! Dé de slam : ${ctx.slamRoll} | Dé de direction : ${ctx.directionRoll}. Votre voiture (${ctx.largerCar.size}) est plus grande — voulez-vous relancer les deux dés (une seule relance possible, p.9) ?`;
+      panel.appendChild(p);
+      const choices = document.createElement("div");
+      choices.className = "choices";
+      choices.appendChild(choiceButton("Oui, relancer", () => { resumeAiSlamRerollChoice(true); render(); }));
+      choices.appendChild(choiceButton("Non, garder ce résultat", () => { resumeAiSlamRerollChoice(false); render(); }));
+      panel.appendChild(choices);
+      return;
+    }
+
     const btn = document.createElement("button");
     btn.className = "primary";
     btn.textContent = "Jouer le tour de l'IA ▶";
@@ -887,11 +866,12 @@ function renderPanel() {
     btn.addEventListener("click", () => { continueAfterTileAdvance(); render(); });
     panel.appendChild(btn);
   } else if (sel.step === "slam-reroll-choice") {
+    const ctx = sel.pendingHumanSlam.ctx;
     const p = document.createElement("div");
-    p.textContent = `SLAM ! Dé de slam : ${sel.slamPreview.slamRoll} | Dé de direction : ${sel.slamPreview.directionRoll}. Votre voiture (${sel.slamPreview.largerCar.size}) est plus grande — voulez-vous relancer les deux dés (une seule relance possible, p.9) ?`;
+    p.textContent = `SLAM ! Dé de slam : ${ctx.slamRoll} | Dé de direction : ${ctx.directionRoll}. Votre voiture (${ctx.largerCar.size}) est plus grande — voulez-vous relancer les deux dés (une seule relance possible, p.9) ?`;
     panel.appendChild(p);
-    choices.appendChild(choiceButton("Oui, relancer", () => { pickSlamRerollChoice(true); render(); }));
-    choices.appendChild(choiceButton("Non, garder ce résultat", () => { pickSlamRerollChoice(false); render(); }));
+    choices.appendChild(choiceButton("Oui, relancer", () => { resumeHumanSlamRerollChoice(true); render(); }));
+    choices.appendChild(choiceButton("Non, garder ce résultat", () => { resumeHumanSlamRerollChoice(false); render(); }));
   } else if (sel.step === "movement-stopped") {
     const msg = document.createElement("div");
     msg.className = "stop-message";
