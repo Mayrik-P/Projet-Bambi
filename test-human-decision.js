@@ -188,12 +188,37 @@ function freshProgressionSetup(playerNames, dicePool) {
   // existe — n'importe laquelle, pas "celle en tête" comme l'IA.
   const inoperable1 = createCar("A", CAR_SIZE.SMALL, 3, 2);
   inoperable1.status = CAR_STATUS.INOPERABLE;
+  inoperable1.damageTokens = ["dent", "dent"]; // état réaliste : inopérable = 2 jetons (p.6)
   const inoperable2 = createCar("A", CAR_SIZE.LARGE, 15, 2); // "en tête" -> l'IA la choisirait d'office, ici les DEUX doivent être proposées
   inoperable2.status = CAR_STATUS.INOPERABLE;
+  inoperable2.damageTokens = ["dent", "dent"];
   const r = human.getAvailableCommands([6], [inoperable1, inoperable2]);
   const repairCmd = r.find((c) => c.type === "repair");
   assert(!!repairCmd, "getAvailableCommands : Repair proposé avec un 6 et au moins une voiture inopérable");
   assert(repairCmd.eligibleTargets.length === 2, "getAvailableCommands : TOUTES les voitures inopérables sont des cibles valides, pas une seule présélectionnée");
+}
+{
+  // CORRECTIF (retour de Mayrik, 28/08, cf. livret p.8 : "Remove one
+  // damage token from ANY of your cars [...] That car becomes
+  // operable if it was inoperable") — une voiture encore OPÉRABLE
+  // mais portant 1 seul jeton de dégât est une cible Repair tout
+  // aussi légale qu'une voiture inopérable : la règle ne restreint
+  // JAMAIS la cible aux seules voitures inopérables, contrairement à
+  // ce que l'ancienne implémentation supposait.
+  const lightlyDamaged = createCar("A", CAR_SIZE.MEDIUM, 5, 1);
+  lightlyDamaged.status = CAR_STATUS.OPERABLE;
+  lightlyDamaged.damageTokens = ["dent"]; // 1 seul jeton, toujours opérable
+  const r = human.getAvailableCommands([6], [lightlyDamaged]);
+  const repairCmd = r.find((c) => c.type === "repair");
+  assert(!!repairCmd, "getAvailableCommands : Repair proposé pour une voiture ENCORE OPÉRABLE avec seulement 1 dégât (pas besoin d'être inopérable)");
+  assert(repairCmd && repairCmd.eligibleTargets[0] === lightlyDamaged, "getAvailableCommands : la voiture légèrement endommagée est bien une cible valide");
+}
+{
+  // Non-régression : une voiture SANS AUCUN dégât n'est jamais une
+  // cible Repair valide (rien à retirer).
+  const undamaged = createCar("A", CAR_SIZE.SMALL, 2, 0);
+  const r = human.getAvailableCommands([6], [undamaged]);
+  assert(!r.some((c) => c.type === "repair"), "getAvailableCommands : pas de Repair pour une voiture sans aucun dégât");
 }
 {
   // Une voiture inopérable mais ÉLIMINÉE ne doit jamais être une cible.
