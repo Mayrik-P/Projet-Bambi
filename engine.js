@@ -340,7 +340,7 @@ function advanceBoardOnFrontExit(state, allCars, allChoppers, options = {}) {
 // effectivement sur cette ligne d'arrivée. Reconstruit le plateau à
 // chaque itération (nécessaire puisque le nombre de tuiles peut
 // changer en cours de route, une fois la ligne d'arrivée ajoutée).
-function moveCarWithProgression(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, slamOptions = {}) {
+function* moveCarWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, slamOptions = {}) {
   const log = [];
   let remainingPath = [...chosenPath];
   let remainingDie = dieValue;
@@ -357,7 +357,7 @@ function moveCarWithProgression(state, car, dieValue, chosenPath, allCars, allCh
 
   while (true) {
     const board = buildBoardFromProgressionState(state);
-    const moveResult = moveCar(board, car, remainingDie, remainingPath, allCars, movementOptions);
+    const moveResult = yield* moveCarGen(board, car, remainingDie, remainingPath, allCars, movementOptions);
     log.push(...moveResult.log);
 
     if (!moveResult.ok) {
@@ -405,7 +405,7 @@ function moveCarWithProgression(state, car, dieValue, chosenPath, allCars, allCh
           }
           if (exitingCar.status === CAR_STATUS.ELIMINATED) break; // éliminée en tant qu'ex-occupante de la tuile rear retirée
           const retryBoard = buildBoardFromProgressionState(state);
-          const retryResult = forceMoveOneSpace(retryBoard, exitingCar, allCars, exitDirection, movementOptions);
+          const retryResult = yield* forceMoveOneSpaceGen(retryBoard, exitingCar, allCars, exitDirection, movementOptions);
           log.push(...retryResult.log);
           retryFrontExit = !!retryResult.frontExit;
         }
@@ -440,6 +440,10 @@ function moveCarWithProgression(state, car, dieValue, chosenPath, allCars, allCh
 
     // On boucle : reprise du reste du mouvement sur le plateau à jour.
   }
+}
+
+function moveCarWithProgression(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, slamOptions = {}) {
+  return driveSync(moveCarWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, slamOptions));
 }
 
 // -----------------------------------------------------------------
@@ -642,7 +646,7 @@ function getDirectionDelta(dirName, fromCol, fromRow) {
 // insufficientMove?, slam? }. stopped=true signifie que la séquence
 // de déplacement en cours doit s'arrêter là (élimination, slam, ou
 // pas assez de déplacement pour cette case).
-function enterAdjacentSpace(tile, car, allCars, targetCol, targetRow, remaining, slamOptions = {}, suppressOccupantSlam = false) {
+function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remaining, slamOptions = {}, suppressOccupantSlam = false) {
   const log = [];
   const space = getSpace(tile, targetCol, targetRow);
 
@@ -690,7 +694,7 @@ function enterAdjacentSpace(tile, car, allCars, targetCol, targetRow, remaining,
   // Résolution d'un hazard éventuel (p.7) AVANT la vérification
   // d'occupation : un Wreck fraîchement posé devient lui-même
   // l'occupant à considérer, et résout déjà son propre slam.
-  const hazardResult = resolveHazard(tile, allCars, car, newRemaining, slamOptions);
+  const hazardResult = yield* resolveHazardGen(tile, allCars, car, newRemaining, slamOptions);
   log.push(...hazardResult.log);
   newRemaining = hazardResult.remaining;
   if (hazardResult.stopped) {
@@ -719,7 +723,7 @@ function enterAdjacentSpace(tile, car, allCars, targetCol, targetRow, remaining,
 
   if (occupant) {
     log.push(`${car.id} entre dans la case de ${occupant.id} → SLAM`);
-    const slamResult = resolveSlam(tile, allCars, car, occupant, slamOptions);
+    const slamResult = yield* resolveSlamGen(tile, allCars, car, occupant, slamOptions);
     log.push(...slamResult.log);
     return { log, remaining: 0, stopped: true, slam: slamResult };
   }
@@ -727,7 +731,11 @@ function enterAdjacentSpace(tile, car, allCars, targetCol, targetRow, remaining,
   return { log, remaining: newRemaining, stopped: false };
 }
 
-function moveCar(tile, car, dieValue, chosenPath, allCars = [], slamOptions = {}) {
+function enterAdjacentSpace(tile, car, allCars, targetCol, targetRow, remaining, slamOptions = {}, suppressOccupantSlam = false) {
+  return driveSync(enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remaining, slamOptions, suppressOccupantSlam));
+}
+
+function* moveCarGen(tile, car, dieValue, chosenPath, allCars = [], slamOptions = {}) {
   // chosenPath : liste de directions ("front-left" | "front" | "front-right"),
   // une par case franchie. Pour l'étape 1, c'est le joueur (ou plus
   // tard l'IA) qui choisit ce chemin à l'avance ; le moteur se
@@ -820,7 +828,7 @@ function moveCar(tile, car, dieValue, chosenPath, allCars = [], slamOptions = {}
 
     const driftEligible = driftAvailable && !driftUsed && !isFinalStep;
 
-    const step = enterAdjacentSpace(tile, car, allCars, target.col, target.row, remaining, slamOptions, driftEligible);
+    const step = yield* enterAdjacentSpaceGen(tile, car, allCars, target.col, target.row, remaining, slamOptions, driftEligible);
     log.push(...step.log);
 
     if (step.insufficientMove) {
@@ -852,6 +860,10 @@ function moveCar(tile, car, dieValue, chosenPath, allCars = [], slamOptions = {}
   return { ok: true, log, remaining, roadEligible };
 }
 
+function moveCar(tile, car, dieValue, chosenPath, allCars = [], slamOptions = {}) {
+  return driveSync(moveCarGen(tile, car, dieValue, chosenPath, allCars, slamOptions));
+}
+
 // p.5-6 : mouvement d'ENTRÉE en jeu — réservé au tout premier
 // mouvement d'une voiture (car.col === null, voir createCarOffBoard).
 // Contrairement au mouvement normal (limité aux 3 cases de l'arc
@@ -880,7 +892,7 @@ function moveCar(tile, car, dieValue, chosenPath, allCars = [], slamOptions = {}
 // (max 3) sur cette même voiture, on plafonne à 15 (confirmé par
 // Mayrik). Le garde-fou frontExit ci-dessous reste présent par
 // simple prudence défensive, mais ne devrait jamais se déclencher.
-function moveCarEnteringBoard(tile, car, dieValue, entryRow, chosenPath = [], allCars = [], slamOptions = {}) {
+function* moveCarEnteringBoardGen(tile, car, dieValue, entryRow, chosenPath = [], allCars = [], slamOptions = {}) {
   if (car.status !== CAR_STATUS.OPERABLE) {
     return { ok: false, reason: "La voiture n'est pas opérationnelle.", log: [] };
   }
@@ -898,7 +910,7 @@ function moveCarEnteringBoard(tile, car, dieValue, entryRow, chosenPath = [], al
   // un véhicule déjà présent — utile si toutes les rangées de la
   // colonne 0 sont occupées (repéré par Mayrik : oubli lors de
   // l'intégration initiale, ce paramètre était figé à false).
-  const entryStep = enterAdjacentSpace(tile, car, allCars, 0, entryRow, dieValue, slamOptions, !!slamOptions.driftAvailable);
+  const entryStep = yield* enterAdjacentSpaceGen(tile, car, allCars, 0, entryRow, dieValue, slamOptions, !!slamOptions.driftAvailable);
   log.push(...entryStep.log);
 
   if (entryStep.insufficientMove) {
@@ -936,12 +948,16 @@ function moveCarEnteringBoard(tile, car, dieValue, entryRow, chosenPath = [], al
   // via roadEligible) — la suite du trajet garde son propre suivi
   // normal, case par case.
   if (entryStep.remaining > 0 && chosenPath.length > 0) {
-    const restResult = moveCar(tile, car, entryStep.remaining, chosenPath, allCars, { ...slamOptions, startedInStartingArea: true });
+    const restResult = yield* moveCarGen(tile, car, entryStep.remaining, chosenPath, allCars, { ...slamOptions, startedInStartingArea: true });
     log.push(...restResult.log);
     return { ...restResult, log, roadEligible: roadEligible && restResult.roadEligible };
   }
 
   return { ok: true, log, remaining: entryStep.remaining, roadEligible };
+}
+
+function moveCarEnteringBoard(tile, car, dieValue, entryRow, chosenPath = [], allCars = [], slamOptions = {}) {
+  return driveSync(moveCarEnteringBoardGen(tile, car, dieValue, entryRow, chosenPath, allCars, slamOptions));
 }
 
 // -----------------------------------------------------------------
@@ -1789,7 +1805,47 @@ function applyRoadBonus(tile, car, moveResult, allCars, roadDieValue, bonusChose
 // voiture percutée (Slam) ou déplacée de force par un dégât pouvait
 // rester figée sur sa case d'origine, empilée avec une autre voiture,
 // sans jamais être ni repoussée ni éliminée.
-function forceMoveOneSpace(tile, car, allCars, directionName, options = {}, _guard = 0) {
+// -----------------------------------------------------------------
+// GÉNÉRATEURS — chantier "chaîne mouvement" (docs/rewrite-plan.md) :
+// chaque fonction de la chaîne de résolution (forceMoveOneSpace,
+// resolveSlam/finalizeSlam, resolveHazard, resolveOilSlickSlide,
+// enterAdjacentSpace, moveCar, moveCarWithProgression/EnteringBoard)
+// existe désormais en DEUX versions :
+//   - une version `*Gen` (function*), qui délègue avec `yield*` à la
+//     fonction Gen du niveau suivant, et qui peut `yield` UNE SEULE
+//     fois, au point exact de resolveSlamGen où `decideReroll`
+//     serait sinon appelée, mais UNIQUEMENT si `options.isHumanOwner`
+//     dit que la voiture plus grande appartient à un joueur humain.
+//   - la fonction du même nom que l'ancienne API SYNCHRONE (inchangée
+//     dans sa signature), qui se contente de "driver" la version Gen
+//     jusqu'au bout via `driveSync` ci-dessous. Tant qu'aucun appelant
+//     ne fournit `options.isHumanOwner`, cette version Gen ne `yield`
+//     jamais (le test `isHumanOwner(...)` renvoie toujours false par
+//     défaut) — donc STRICTEMENT AUCUN changement de comportement pour
+//     tout code existant (tests, self-play IA vs IA, tour humain
+//     propre déjà géré par sa propre UI pas à pas).
+// Seul un appelant qui fournit explicitement `options.isHumanOwner`
+// (voir turn-executor.js, tour de l'IA) peut effectivement recevoir
+// une pause `yield` — voir aussi le commentaire au-dessus de
+// resolveSlamGen.
+//
+// Portée actuelle (chaîne MOUVEMENT uniquement, voir rewrite-plan.md) :
+// couvre un Slam direct (occupant déjà présent) et un Slam révélé par
+// un Wreck. La chaîne TIR/DÉGÂTS (resolveShoot, resolveDamageToken,
+// applyDamage — donc une cascade Dazed déclenchée par un tir) reste
+// pour l'instant synchrone, comme avant (étape 2, à venir) : depuis
+// resolveHazardGen, le cas MINE continue d'appeler applyDamage()
+// directement, sans passer par un générateur.
+// -----------------------------------------------------------------
+function driveSync(gen) {
+  const result = gen.next();
+  if (!result.done) {
+    throw new Error("Générateur de résolution interrompu de façon inattendue en mode synchrone (isHumanOwner non fourni) — ceci ne devrait jamais arriver.");
+  }
+  return result.value;
+}
+
+function* forceMoveOneSpaceGen(tile, car, allCars, directionName, options = {}, _guard = 0) {
   const log = [];
   const delta = getDirectionDelta(directionName, car.col, car.row);
   const targetCol = car.col + delta.dCol;
@@ -1829,7 +1885,7 @@ function forceMoveOneSpace(tile, car, allCars, directionName, options = {}, _gua
         // Étaient sur la tuile rear qui vient d'être retirée.
         return { log, eliminated: true };
       }
-      const retryResult = forceMoveOneSpace(advanceResult.newBoard, car, allCars, directionName, options, _guard + 1);
+      const retryResult = yield* forceMoveOneSpaceGen(advanceResult.newBoard, car, allCars, directionName, options, _guard + 1);
       log.push(...retryResult.log);
       return { ...retryResult, log };
     }
@@ -1853,7 +1909,7 @@ function forceMoveOneSpace(tile, car, allCars, directionName, options = {}, _gua
 
   // Résolution d'un hazard éventuel (p.7) avant la vérification
   // d'occupation, même logique que dans enterAdjacentSpace.
-  const hazardResult = resolveHazard(tile, allCars, car, 0, options);
+  const hazardResult = yield* resolveHazardGen(tile, allCars, car, 0, options);
   log.push(...hazardResult.log);
   if (hazardResult.stopped) {
     // On fait remonter le slam éventuel (ex. Wreck) à l'appelant —
@@ -1873,12 +1929,16 @@ function forceMoveOneSpace(tile, car, allCars, directionName, options = {}, _gua
   const occupant = getCarAt(allCars, car.col, car.row, car);
   if (occupant) {
     log.push(`${car.id} atterrit sur ${occupant.id} → nouveau slam en chaîne`);
-    const chained = resolveSlam(tile, allCars, car, occupant, options);
+    const chained = yield* resolveSlamGen(tile, allCars, car, occupant, options);
     log.push(...chained.log);
     return { log, slam: chained };
   }
 
   return { log };
+}
+
+function forceMoveOneSpace(tile, car, allCars, directionName, options = {}, _guard = 0) {
+  return driveSync(forceMoveOneSpaceGen(tile, car, allCars, directionName, options, _guard));
 }
 
 // Résout un slam entre deux voitures empilées dans la même case (p.9-10).
@@ -1929,12 +1989,12 @@ function rollSlamDice(topCar, bottomCar, forcedDice = {}) {
 // une éventuelle relance déjà décidée), déplace réellement la voiture
 // concernée et résout la chaîne de collisions éventuelle — c'est la
 // seconde moitié de l'ancien resolveSlam, avec effets de bord.
-function finalizeSlam(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options = {}) {
+function* finalizeSlamGen(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options = {}) {
   const log = [];
   const movingCar = slamRoll === "top" ? topCar : bottomCar;
   log.push(`→ ${movingCar.id} bouge en ${directionRoll}`);
 
-  const moveResult = forceMoveOneSpace(tile, movingCar, allCars, directionRoll, options);
+  const moveResult = yield* forceMoveOneSpaceGen(tile, movingCar, allCars, directionRoll, options);
   log.push(...moveResult.log);
 
   // p.11 : un slam (y compris en chaîne, si la voiture percutée
@@ -1951,15 +2011,31 @@ function finalizeSlam(tile, allCars, slamRoll, directionRoll, topCar, bottomCar,
   return { log, movingCar, direction: directionRoll, frontExitInfo };
 }
 
-function resolveSlam(tile, allCars, topCar, bottomCar, options = {}) {
-  const { forcedDice = {}, decideReroll = () => false } = options;
+function finalizeSlam(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options = {}) {
+  return driveSync(finalizeSlamGen(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options));
+}
+
+// resolveSlamGen : seul point de toute la chaîne où un VRAI `yield`
+// (pas un `yield*` de délégation) peut avoir lieu — voir le
+// commentaire détaillé au-dessus de driveSync. `options.isHumanOwner`
+// (par défaut : personne n'est humain) reçoit le NOM du propriétaire
+// de la voiture plus grande (largerCar.owner) et doit renvoyer un
+// booléen ; ce n'est QUE dans ce cas que la fonction met en pause son
+// exécution avec `yield {type:"slam-reroll", ...}` au lieu d'appeler
+// `decideReroll` (politique IA) directement — comportement synchrone
+// inchangé dans tous les autres cas.
+function* resolveSlamGen(tile, allCars, topCar, bottomCar, options = {}) {
+  const { forcedDice = {}, decideReroll = () => false, isHumanOwner = () => false } = options;
   const log = [];
 
   let { slamRoll, directionRoll, rerollEligible, largerCar, smallerCar, movingCar } = rollSlamDice(topCar, bottomCar, forcedDice);
   log.push(`Dé de slam : ${slamRoll} | Dé de direction : ${directionRoll}`);
 
   if (rerollEligible) {
-    const wantsReroll = decideReroll({ largerCar, smallerCar, slamRoll, directionRoll, movingCar, topCar, bottomCar });
+    const ctx = { largerCar, smallerCar, slamRoll, directionRoll, movingCar, topCar, bottomCar };
+    const wantsReroll = isHumanOwner(largerCar.owner)
+      ? yield { type: "slam-reroll", ...ctx }
+      : decideReroll(ctx);
     if (wantsReroll) {
       log.push(`${largerCar.id} (voiture plus grande) demande la relance des deux dés`);
       const rerolled = rollSlamDice(topCar, bottomCar, { slam: forcedDice.rerolledSlam, direction: forcedDice.rerolledDirection });
@@ -1969,10 +2045,14 @@ function resolveSlam(tile, allCars, topCar, bottomCar, options = {}) {
     }
   }
 
-  const finalResult = finalizeSlam(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options);
+  const finalResult = yield* finalizeSlamGen(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options);
   log.push(...finalResult.log);
 
   return { log, movingCar: finalResult.movingCar, direction: finalResult.direction, frontExitInfo: finalResult.frontExitInfo };
+}
+
+function resolveSlam(tile, allCars, topCar, bottomCar, options = {}) {
+  return driveSync(resolveSlamGen(tile, allCars, topCar, bottomCar, options));
 }
 
 // -----------------------------------------------------------------
@@ -2255,10 +2335,10 @@ function setupTileProgressionFromRawData(rawTileDataList, options = {}) {
 // l'effet se limite entièrement au changement de terrain permanent,
 // Oil Slick a une action supplémentaire — la glissade elle-même —
 // qui doit se redéclencher à chaque fois, indéfiniment).
-function resolveOilSlickSlide(tile, allCars, car, remaining, options, log) {
+function* resolveOilSlickSlideGen(tile, allCars, car, remaining, options, log) {
   const direction = rollDirectionDie(options.forcedDice?.oilSlickDirection);
   log.push(`Glissade Oil Slick en ${direction} (ne coûte aucun déplacement)`);
-  const slideResult = forceMoveOneSpace(tile, car, allCars, direction, options);
+  const slideResult = yield* forceMoveOneSpaceGen(tile, car, allCars, direction, options);
   log.push(...slideResult.log);
 
   if (car.status === CAR_STATUS.ELIMINATED) {
@@ -2297,6 +2377,10 @@ function resolveOilSlickSlide(tile, allCars, car, remaining, options, log) {
   return { log, remaining, stopped: false };
 }
 
+function resolveOilSlickSlide(tile, allCars, car, remaining, options, log) {
+  return driveSync(resolveOilSlickSlideGen(tile, allCars, car, remaining, options, log));
+}
+
 // Résout le hazard présent sur la case ACTUELLE de la voiture (déjà
 // entrée dessus). remaining = déplacement qu'il lui restait avant
 // résolution — utile pour Mine (qui le met à 0) et Oil Slick (qui ne
@@ -2305,7 +2389,7 @@ function resolveOilSlickSlide(tile, allCars, car, remaining, options, log) {
 // Retourne { log, remaining, stopped, slam? }. stopped=true signifie
 // que la séquence de mouvement en cours doit s'arrêter (Mine, Wreck,
 // ou élimination survenue pendant la résolution).
-function resolveHazard(tile, allCars, car, remaining, options = {}) {
+function* resolveHazardGen(tile, allCars, car, remaining, options = {}) {
   const log = [];
   const cell = getSpace(tile, car.col, car.row);
 
@@ -2323,7 +2407,7 @@ function resolveHazard(tile, allCars, car, remaining, options = {}) {
   // "déclenche un hazard").
   if (!cell.hazard && cell.revealedHazard === HAZARD_TYPES.OIL_SLICK) {
     log.push(`${car.id} roule à nouveau sur une case Oil Slick déjà révélée`);
-    return resolveOilSlickSlide(tile, allCars, car, remaining, options, log);
+    return yield* resolveOilSlickSlideGen(tile, allCars, car, remaining, options, log);
   }
 
   if (!cell.hazard) {
@@ -2355,13 +2439,13 @@ function resolveHazard(tile, allCars, car, remaining, options = {}) {
       cell.hazard = null;
       cell.revealedHazard = HAZARD_TYPES.OIL_SLICK;
       log.push("Case transformée en ROUTE (jeton Oil Slick retourné, reste en place et se redéclenchera à chaque passage futur)");
-      return resolveOilSlickSlide(tile, allCars, car, remaining, options, log);
+      return yield* resolveOilSlickSlideGen(tile, allCars, car, remaining, options, log);
     }
 
     case HAZARD_TYPES.MINE: {
       cell.hazard = null;
       log.push("Jeton Mine défaussé");
-      const dmgResult = applyDamage(car, { ...options, tile, allCars });
+      const dmgResult = yield* applyDamageGen(car, { ...options, tile, allCars });
       log.push(...dmgResult.log);
       log.push(`${car.id} perd tout son déplacement restant (Mine)`);
       return { log, remaining: 0, stopped: true };
@@ -2377,7 +2461,7 @@ function resolveHazard(tile, allCars, car, remaining, options = {}) {
       wreckCar.isWreck = true;
       allCars.push(wreckCar);
       log.push(`Épave créée : ${wreckCar.id}`);
-      const slamResult = resolveSlam(tile, allCars, car, wreckCar, options);
+      const slamResult = yield* resolveSlamGen(tile, allCars, car, wreckCar, options);
       log.push(...slamResult.log);
       return { log, remaining: 0, stopped: true, slam: slamResult };
     }
@@ -2385,6 +2469,10 @@ function resolveHazard(tile, allCars, car, remaining, options = {}) {
     default:
       return { log, remaining, stopped: false };
   }
+}
+
+function resolveHazard(tile, allCars, car, remaining, options = {}) {
+  return driveSync(resolveHazardGen(tile, allCars, car, remaining, options));
 }
 
 
@@ -2443,7 +2531,7 @@ function drawDamageToken(injectedValue = null) {
 // options : { forcedDice, skidDirection, decideReroll } — forcedDice
 // peut contenir shrapnelDirection / dazedStunt / dazedDirections
 // (tableau, une direction par case) / blastOffDirection / blastOffStunt.
-function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
+function* resolveDamageTokenGen(tile, allCars, car, tokenType, options = {}) {
   const forcedDice = options.forcedDice || {};
   const log = [];
 
@@ -2484,12 +2572,13 @@ function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
 
       if (hit) {
         log.push(`Shrapnel touche ${hit.id} (même si c'est une des vôtres)`);
-        const hitResult = applyDamage(hit, {
+        const hitResult = yield* applyDamageGen(hit, {
           tokenType: TOKEN_TYPES.DENT, // simplification : pas de pioche en cascade pour la voiture touchée
           tile,
           allCars,
           forcedDice,
-          decideReroll: options.decideReroll
+          decideReroll: options.decideReroll,
+          isHumanOwner: options.isHumanOwner
         });
         log.push(...hitResult.log);
       } else {
@@ -2509,7 +2598,7 @@ function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
       log.push(`${car.id} — jeton SKID : direction fixe ${direction}`);
       // Même comportement que le slam : coût de terrain ignoré,
       // élimination si bord/impassable, slam en chaîne si occupé.
-      const moveResult = forceMoveOneSpace(tile, car, allCars, direction, options);
+      const moveResult = yield* forceMoveOneSpaceGen(tile, car, allCars, direction, options);
       log.push(...moveResult.log);
       break;
     }
@@ -2530,7 +2619,7 @@ function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
         const targetRow = car.row + delta.dRow;
         log.push(`  Étape ${step + 1} — direction ${direction}`);
 
-        const stepResult = enterAdjacentSpace(tile, car, allCars, targetCol, targetRow, remaining, options);
+        const stepResult = yield* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remaining, options);
         log.push(...stepResult.log);
         remaining = stepResult.remaining;
         step++;
@@ -2636,13 +2725,13 @@ function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
           log.push(`${car.id} atterrit sur une case impassable → ÉLIMINÉE`);
           break;
         }
-        const hazardResult2 = resolveHazard(currentBoard, allCars, car, 0, options);
+        const hazardResult2 = yield* resolveHazardGen(currentBoard, allCars, car, 0, options);
         log.push(...hazardResult2.log);
         if (hazardResult2.stopped) break;
         const occupant2 = getCarAt(allCars, car.col, car.row, car);
         if (occupant2) {
           log.push(`${car.id} atterrit sur ${occupant2.id} → SLAM`);
-          const slamResult2 = resolveSlam(currentBoard, allCars, car, occupant2, options);
+          const slamResult2 = yield* resolveSlamGen(currentBoard, allCars, car, occupant2, options);
           log.push(...slamResult2.log);
 
           // Même correctif que dans moveCarWithProgression (voir le
@@ -2665,7 +2754,7 @@ function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
                 currentBoard = advanceResult2.newBoard;
               }
               if (exitingCar2.status === CAR_STATUS.ELIMINATED) break;
-              const retryResult2 = forceMoveOneSpace(currentBoard, exitingCar2, allCars, slamExit2.direction, options);
+              const retryResult2 = yield* forceMoveOneSpaceGen(currentBoard, exitingCar2, allCars, slamExit2.direction, options);
               log.push(...retryResult2.log);
               retryFrontExit2 = !!retryResult2.frontExit;
             }
@@ -2707,14 +2796,14 @@ function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
       // p.12 : "You are still affected by the space you move into" —
       // un hazard sur la case d'ARRIVÉE s'applique normalement (mais
       // pas sur les cases ignorées entre les deux).
-      const hazardResult = resolveHazard(tile, allCars, car, 0, options);
+      const hazardResult = yield* resolveHazardGen(tile, allCars, car, 0, options);
       log.push(...hazardResult.log);
       if (hazardResult.stopped) break;
 
       const occupant = getCarAt(allCars, car.col, car.row, car);
       if (occupant) {
         log.push(`${car.id} atterrit sur ${occupant.id} → SLAM`);
-        const slamResult = resolveSlam(tile, allCars, car, occupant, options);
+        const slamResult = yield* resolveSlamGen(tile, allCars, car, occupant, options);
         log.push(...slamResult.log);
       }
       break;
@@ -2722,6 +2811,10 @@ function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
   }
 
   return { log };
+}
+
+function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
+  return driveSync(resolveDamageTokenGen(tile, allCars, car, tokenType, options));
 }
 
 // -----------------------------------------------------------------
@@ -2745,7 +2838,7 @@ function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
 // dégât (ex. hazard Mine pendant un mouvement), elle perd tout
 // déplacement restant — déjà géré à l'appel, voir le cas MINE dans
 // resolveHazard() plus haut (remaining mis à 0 après applyDamage).
-function applyDamage(car, options = {}) {
+function* applyDamageGen(car, options = {}) {
   const log = [];
 
   if (car.status === CAR_STATUS.ELIMINATED) {
@@ -2790,11 +2883,15 @@ function applyDamage(car, options = {}) {
   }
 
   if (options.tile && options.allCars) {
-    const effectResult = resolveDamageToken(options.tile, options.allCars, car, tokenType, { ...options, skidDirection });
+    const effectResult = yield* resolveDamageTokenGen(options.tile, options.allCars, car, tokenType, { ...options, skidDirection });
     log.push(...effectResult.log);
   }
 
   return { log, applied: true };
+}
+
+function applyDamage(car, options = {}) {
+  return driveSync(applyDamageGen(car, options));
 }
 
 // -----------------------------------------------------------------
@@ -2815,7 +2912,7 @@ function applyDamage(car, options = {}) {
 // règle spéciale des épaves dans applyDamage).
 //
 // options.forcedDice.shootingDie force le résultat du dé pour les tests.
-function resolveShoot(tile, allCars, shooter, target, options = {}) {
+function* resolveShootGen(tile, allCars, shooter, target, options = {}) {
   const log = [];
   const forcedDice = options.forcedDice || {};
 
@@ -2851,10 +2948,14 @@ function resolveShoot(tile, allCars, shooter, target, options = {}) {
   }
 
   log.push(`Touché !`);
-  const dmgResult = applyDamage(target, { ...options, tile, allCars });
+  const dmgResult = yield* applyDamageGen(target, { ...options, tile, allCars });
   log.push(...dmgResult.log);
 
   return { log, hit: true, damageResult: dmgResult };
+}
+
+function resolveShoot(tile, allCars, shooter, target, options = {}) {
+  return driveSync(resolveShootGen(tile, allCars, shooter, target, options));
 }
 
 // Commande Repair (p.8, dé = 6) : retire un dégât et rend
@@ -2993,7 +3094,7 @@ function resolveRepairCommand(dieValue, car) {
 //   - la voiture n'est plus opérable (éliminée ou inopérable) après
 //     son mouvement (une voiture inopérable ne peut ni bouger ni
 //     tirer, p.6)
-function resolveShootStep(board, allCars, car, options) {
+function* resolveShootStepGen(board, allCars, car, options) {
   const log = [];
   let shootResult = null;
 
@@ -3030,11 +3131,15 @@ function resolveShootStep(board, allCars, car, options) {
   } else if (car.status !== CAR_STATUS.OPERABLE) {
     log.push(`${car.id} n'est plus opérable → tir impossible`);
   } else {
-    shootResult = resolveShoot(board, allCars, car, target, options);
+    shootResult = yield* resolveShootGen(board, allCars, car, target, options);
     log.push(...shootResult.log);
   }
 
   return { log, shootResult };
+}
+
+function resolveShootStep(board, allCars, car, options) {
+  return driveSync(resolveShootStepGen(board, allCars, car, options));
 }
 
 function playTurnAssignMove(tile, car, dieValue, chosenPath, allCars, allChoppers, options = {}) {
@@ -3084,7 +3189,7 @@ function playTurnAssignMove(tile, car, dieValue, chosenPath, allCars, allChopper
 // Séparée de playTurnAssignMove (plutôt que de la modifier) pour ne
 // prendre AUCUN risque sur les tests déjà en place, qui continuent
 // à utiliser la version simple pour tester chaque brique isolément.
-function playTurnAssignMoveWithProgression(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+function* playTurnAssignMoveWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options = {}) {
   const log = [];
 
   // --- ASSIGN ---
@@ -3097,7 +3202,7 @@ function playTurnAssignMoveWithProgression(state, car, dieValue, chosenPath, all
   log.push(`ASSIGN : dé ${dieValue} assigné à ${car.id}`);
 
   // --- MOVE (avec progression des tuiles) ---
-  const moveResult = moveCarWithProgression(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options);
+  const moveResult = yield* moveCarWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options);
   log.push(...moveResult.log);
 
   if (!moveResult.ok) {
@@ -3130,7 +3235,7 @@ function playTurnAssignMoveWithProgression(state, car, dieValue, chosenPath, all
   // même sur ce bonus.
   if (car.status === CAR_STATUS.OPERABLE && moveResult.roadEligible && options.roadDieValue && options.roadBonusPath) {
     log.push(`BONUS ROAD disponible (dé ${options.roadDieValue}) — ${car.id} est restée sur route.`);
-    const bonusResult = moveCarWithProgression(state, car, options.roadDieValue, options.roadBonusPath, allCars, allChoppers, playerNames, options);
+    const bonusResult = yield* moveCarWithProgressionGen(state, car, options.roadDieValue, options.roadBonusPath, allCars, allChoppers, playerNames, options);
     log.push(...bonusResult.log);
     if (!bonusResult.ok) {
       log.push(`Bonus Road non appliqué (chemin fourni invalide) : ${bonusResult.reason}`);
@@ -3141,7 +3246,7 @@ function playTurnAssignMoveWithProgression(state, car, dieValue, chosenPath, all
   }
 
   // --- SHOOT (p.10) ---
-  const shootStep = resolveShootStep(buildBoardFromProgressionState(state), allCars, car, { ...options, progressionState: state, allChoppers });
+  const shootStep = yield* resolveShootStepGen(buildBoardFromProgressionState(state), allCars, car, { ...options, progressionState: state, allChoppers });
   log.push(...shootStep.log);
   const shootResult = shootStep.shootResult;
 
@@ -3161,6 +3266,10 @@ function playTurnAssignMoveWithProgression(state, car, dieValue, chosenPath, all
   return { ok: true, log, moveResult, shootResult, gameOver: endCheck.gameOver, winner: endCheck.winner, reason: endCheck.reason };
 }
 
+function playTurnAssignMoveWithProgression(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+  return driveSync(playTurnAssignMoveWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options));
+}
+
 
 // p.5-6 : équivalent de playTurnAssignMoveWithProgression, pour le
 // TOUT PREMIER mouvement d'une voiture pas encore sur le plateau
@@ -3176,7 +3285,7 @@ function playTurnAssignMoveWithProgression(state, car, dieValue, chosenPath, all
 // Le bonus dé Road, lui, reste pertinent (déjà géré par
 // moveCarEnteringBoard pour l'éligibilité) et s'applique normalement
 // une fois la voiture réellement sur le plateau.
-function playTurnAssignEnterWithProgression(state, car, dieValue, entryRow, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+function* playTurnAssignEnterWithProgressionGen(state, car, dieValue, entryRow, chosenPath, allCars, allChoppers, playerNames, options = {}) {
   const log = [];
 
   if (car.status !== CAR_STATUS.OPERABLE) {
@@ -3188,7 +3297,7 @@ function playTurnAssignEnterWithProgression(state, car, dieValue, entryRow, chos
   log.push(`ASSIGN (entrée en jeu) : dé ${dieValue} assigné à ${car.id}`);
 
   const board = buildBoardFromProgressionState(state);
-  const enterResult = moveCarEnteringBoard(board, car, dieValue, entryRow, chosenPath, allCars, options);
+  const enterResult = yield* moveCarEnteringBoardGen(board, car, dieValue, entryRow, chosenPath, allCars, options);
   log.push(...enterResult.log);
 
   if (!enterResult.ok) {
@@ -3198,7 +3307,7 @@ function playTurnAssignEnterWithProgression(state, car, dieValue, entryRow, chos
   // --- BONUS ROAD (p.9) --- mêmes conventions que la fonction normale.
   if (car.status === CAR_STATUS.OPERABLE && enterResult.roadEligible && options.roadDieValue && options.roadBonusPath) {
     log.push(`BONUS ROAD disponible (dé ${options.roadDieValue}) — ${car.id} est restée sur route depuis son entrée.`);
-    const bonusResult = moveCarWithProgression(state, car, options.roadDieValue, options.roadBonusPath, allCars, allChoppers, playerNames, options);
+    const bonusResult = yield* moveCarWithProgressionGen(state, car, options.roadDieValue, options.roadBonusPath, allCars, allChoppers, playerNames, options);
     log.push(...bonusResult.log);
     if (!bonusResult.ok) {
       log.push(`Bonus Road non appliqué (chemin fourni invalide) : ${bonusResult.reason}`);
@@ -3220,6 +3329,10 @@ function playTurnAssignEnterWithProgression(state, car, dieValue, entryRow, chos
   log.push(...endCheck.log);
 
   return { ok: true, log, moveResult: enterResult, gameOver: endCheck.gameOver, winner: endCheck.winner, reason: endCheck.reason };
+}
+
+function playTurnAssignEnterWithProgression(state, car, dieValue, entryRow, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+  return driveSync(playTurnAssignEnterWithProgressionGen(state, car, dieValue, entryRow, chosenPath, allCars, allChoppers, playerNames, options));
 }
 
 // -----------------------------------------------------------------
@@ -3317,7 +3430,7 @@ function playTurnCoast(tile, car, chosenPath, allCars, allChoppers, options = {}
 // vérifications de playTurnCoast restent identiques, seul le MOVE
 // passe par moveCarWithProgression, et un checkGameEndConditions()
 // final ferme le tour.
-function playTurnCoastWithProgression(state, car, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+function* playTurnCoastWithProgressionGen(state, car, chosenPath, allCars, allChoppers, playerNames, options = {}) {
   const log = [];
 
   const eligibility = validateCoastEligibility(car, allCars, options);
@@ -3330,7 +3443,7 @@ function playTurnCoastWithProgression(state, car, chosenPath, allCars, allChoppe
 
   // --- MOVE (avec progression des tuiles, toujours avec une valeur
   // de 1 quelle que soit la valeur réelle du dé assigné) ---
-  const moveResult = moveCarWithProgression(state, car, 1, chosenPath, allCars, allChoppers, playerNames, options);
+  const moveResult = yield* moveCarWithProgressionGen(state, car, 1, chosenPath, allCars, allChoppers, playerNames, options);
   log.push(...moveResult.log);
 
   if (!moveResult.ok) {
@@ -3343,7 +3456,7 @@ function playTurnCoastWithProgression(state, car, chosenPath, allCars, allChoppe
   }
 
   // --- SHOOT ---
-  const shootStep = resolveShootStep(buildBoardFromProgressionState(state), allCars, car, { ...options, progressionState: state, allChoppers });
+  const shootStep = yield* resolveShootStepGen(buildBoardFromProgressionState(state), allCars, car, { ...options, progressionState: state, allChoppers });
   log.push(...shootStep.log);
   const shootResult = shootStep.shootResult;
 
@@ -3358,6 +3471,10 @@ function playTurnCoastWithProgression(state, car, chosenPath, allCars, allChoppe
   log.push(...endCheck.log);
 
   return { ok: true, log, moveResult, shootResult, gameOver: endCheck.gameOver, winner: endCheck.winner, reason: endCheck.reason };
+}
+
+function playTurnCoastWithProgression(state, car, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+  return driveSync(playTurnCoastWithProgressionGen(state, car, chosenPath, allCars, allChoppers, playerNames, options));
 }
 
 
@@ -3978,6 +4095,25 @@ module.exports = {
   resolveSlam,
   rollSlamDice,
   finalizeSlam,
+  // Versions génératrices (chantier "chaîne mouvement", voir
+  // docs/rewrite-plan.md) — permettent à un appelant (turn-executor.js)
+  // de mettre en pause la résolution exactement au point de relance
+  // d'un Slam, quand la voiture plus grande appartient à un joueur
+  // humain (options.isHumanOwner). Les fonctions synchrones ci-dessus
+  // restent le point d'entrée normal pour tout le reste (tests,
+  // self-play, tour humain propre) — comportement strictement inchangé.
+  moveCarWithProgressionGen,
+  moveCarEnteringBoardGen,
+  moveCarGen,
+  enterAdjacentSpaceGen,
+  resolveSlamGen,
+  resolveShootGen,
+  resolveShootStepGen,
+  applyDamageGen,
+  resolveDamageTokenGen,
+  playTurnAssignMoveWithProgressionGen,
+  playTurnAssignEnterWithProgressionGen,
+  playTurnCoastWithProgressionGen,
   drawDamageToken,
   resolveDamageToken,
   applyDamage,

@@ -33,7 +33,7 @@
 const engine = require("./engine.js");
 const ai = require("./ai-decision.js");
 
-const { CAR_STATUS, TERRAIN, MOVE_COST, getSpace, getCarAt, getFrontArc, rollSlamDice } = engine;
+const { CAR_STATUS, TERRAIN, MOVE_COST, getSpace, getCarAt, getFrontArc } = engine;
 const { computeReachableDestinations, computeReachableEntryDestinations } = ai;
 
 // ===================================================================
@@ -307,19 +307,6 @@ function computePointsLost(pointsBefore, option, remainingAfter) {
 }
 
 // ===================================================================
-// SECTION 2sexies — APERÇU DE SLAM (p.9, relance) — PERMET une VRAIE
-// pause interactive pour le joueur humain, chose qu'un simple
-// callback synchrone decideReroll ne peut pas faire. Fonction PURE
-// (délègue à engine.rollSlamDice, aucun effet de bord) : à l'appelant
-// de rejouer EXACTEMENT le même résultat lors de l'exécution réelle
-// du pas (voir turn-executor.executeMoveStep/executeEntryStep,
-// options.forcedDice) une fois la décision de relance connue.
-// ===================================================================
-function previewSlam(mover, occupant) {
-  return rollSlamDice(mover, occupant, {});
-}
-
-// ===================================================================
 // SECTION 3 — COMMANDS DISPONIBLES (règles du livret UNIQUEMENT, p.8)
 // ===================================================================
 /**
@@ -440,7 +427,6 @@ if (typeof module !== "undefined" && module.exports) {
     getEntryRowOptions,
     computePointsLost,
     getShootTargetOptions,
-    previewSlam,
     getAvailableCommands,
     isValidAirstrikePlacement,
     listValidAirstrikePlacements,
