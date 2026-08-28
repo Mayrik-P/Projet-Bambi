@@ -7748,25 +7748,41 @@ function pickDie(dieValue) {
 
 function pickCar(car) {
   sel.car = car;
-  sel.step = (sel.mode === "assign" && sel.commandAvailable) ? "command" : "commit";
+  sel.step = (sel.mode === "assign" && sel.commandAvailable) ? "command-die" : "commit";
 }
 
-function pickCommandChoice(type) {
-  if (type === "none") {
+// ===================================================================
+// COMMAND — choix RÉORGANISÉ (retour de Mayrik, 28/08) : on choisit
+// d'abord le DÉ à consacrer à une Command (ou aucun), PUIS seulement
+// le TYPE de Command, restreint à celles compatibles avec ce dé —
+// inverse de l'ordre précédent (type d'abord, dé ensuite), qui
+// obligeait à voir tous les types possibles avant de savoir avec
+// quel dé les payer.
+// ===================================================================
+
+// Étape 1 : dé consacré à une Command (ou aucun).
+function pickCommandDieChoice(dieValue) {
+  if (dieValue === null) {
     sel.command = null;
     sel.step = "commit";
     return;
   }
-  sel.commandType = type;
-  sel.step = type === "repair" ? "repair-target" : "command-die";
+  sel.commandDieValue = dieValue;
+  sel.step = "command";
 }
 
-function pickCommandDie(dieValue) {
-  sel.commandDieValue = dieValue;
-  if (sel.commandType === "airstrike") {
+// Étape 2 : type de Command, restreint aux seules compatibles avec le
+// dé déjà choisi (voir getAvailableCommands([sel.commandDieValue], ...)
+// dans renderPanel — un seul dé dans le tableau retourne naturellement
+// que les types qui l'acceptent, sans logique dupliquée ici).
+function pickCommandChoice(type) {
+  sel.commandType = type;
+  if (type === "repair") {
+    sel.step = "repair-target";
+  } else if (type === "airstrike") {
     sel.step = "airstrike-placement"; // plus d'étape de "cible visée" séparée (retour de Mayrik) — la cible se choisit directement en désignant une case de l'arc avant du chopper, une fois posé
   } else {
-    sel.command = { type: sel.commandType, dieValue };
+    sel.command = { type, dieValue: sel.commandDieValue };
     sel.step = "commit";
   }
 }
@@ -8357,26 +8373,24 @@ function renderPanel() {
     list.forEach((car) => {
       choices.appendChild(choiceButton(`${car.size} (${car.col === null ? "hors plateau" : "col " + car.col + ",row " + car.row})`, () => { pickCar(car); render(); }));
     });
-  } else if (sel.step === "command") {
-    const p = document.createElement("div");
-    p.textContent = "Voulez-vous jouer une Command avec un des dés restants ?";
-    panel.appendChild(p);
-    const remaining = ctx.pool.filter((v, i) => i !== ctx.pool.indexOf(sel.dieValue));
-    const myRepairable = G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0);
-    const commands = getAvailableCommands(remaining, myRepairable);
-    choices.appendChild(choiceButton("Aucune Command", () => { pickCommandChoice("none"); render(); }));
-    commands.forEach((c) => {
-      choices.appendChild(choiceButton(c.type + " (dés : " + c.eligibleDice.join(",") + ")", () => { pickCommandChoice(c.type); render(); }));
-    });
   } else if (sel.step === "command-die") {
     const p = document.createElement("div");
-    p.textContent = `Command ${sel.commandType} — choisissez le dé à y consacrer :`;
+    p.textContent = "Voulez-vous consacrer un des dés restants à une Command ?";
     panel.appendChild(p);
     const remaining = ctx.pool.filter((v, i) => i !== ctx.pool.indexOf(sel.dieValue));
+    choices.appendChild(choiceButton("Aucune Command", () => { pickCommandDieChoice(null); render(); }));
+    remaining.forEach((d) => {
+      choices.appendChild(choiceButton(String(d), () => { pickCommandDieChoice(d); render(); }));
+    });
+  } else if (sel.step === "command") {
+    const p = document.createElement("div");
+    p.textContent = `Dé ${sel.commandDieValue} consacré à une Command — laquelle ?`;
+    panel.appendChild(p);
     const myRepairable = G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0);
-    const commands = getAvailableCommands(remaining, myRepairable);
-    const cmd = commands.find((c) => c.type === sel.commandType);
-    cmd.eligibleDice.forEach((d) => choices.appendChild(choiceButton(String(d), () => { pickCommandDie(d); render(); })));
+    const commands = getAvailableCommands([sel.commandDieValue], myRepairable);
+    commands.forEach((c) => {
+      choices.appendChild(choiceButton(c.type, () => { pickCommandChoice(c.type); render(); }));
+    });
   } else if (sel.step === "repair-target") {
     const p = document.createElement("div");
     p.textContent = "Repair — choisissez la voiture à réparer :";
