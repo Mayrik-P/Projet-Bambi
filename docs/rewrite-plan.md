@@ -853,3 +853,290 @@ Retour de Mayrik : le flux Airstrike demandait d'abord une "cible visée" dans u
 Techniquement : `getShootTargetOptions`/`getFrontArc` (déjà génériques, ne lisent que `owner`/`col`/`row`) sont réutilisés tels quels sur un chopper HYPOTHÉTIQUE (copie, jamais muté) placé à la case choisie, pour calculer par avance qui serait dans son arc — le vrai placement n'a lieu qu'à l'exécution réelle (`commitAssignAndCommand`).
 
 **Validation** : 212/212 tests moteur, 203/203 tests IA, 99/99 tests couche humaine inchangés (aucun des trois fichiers touché). 4 tests dédiés via jsdom sur le vrai bundle navigateur : placement puis visée d'une case occupée de l'arc (cible correctement identifiée) ; case vide de l'arc cliquée (décline) ; bouton "Ne pas tirer" toujours disponible malgré une cible existante ; aucune étape intermédiaire quand l'arc avant est entièrement vide dès le placement.
+
+## 3. Chantier générateurs JS — Étape 1 (chaîne MOUVEMENT) : relance de Slam pendant le tour de l'IA impliquant une voiture du joueur
+
+Reprise du chantier reporté en fin de section précédente (écart signalé
+par Mayrik le 25/08 : un Slam déclenché PENDANT le tour de l'IA — ex.
+tir → dégât → cascade Dazed qui pousse une voiture du joueur sur une
+AUTRE voiture du joueur, plus grosse — ne proposait jamais la relance
+au joueur, retombant silencieusement sur la politique par défaut de
+l'IA). Solution retenue : convertir la chaîne de résolution du moteur
+en générateurs JS (`function*`/`yield*`), avec un `yield` UNIQUEMENT
+au point de `decideReroll` dans `resolveSlamGen`, et seulement si la
+voiture plus grande appartient à un joueur marqué "humain"
+(`options.isHumanOwner`).
+
+**Séquencement confirmé par Mayrik** : chaîne mouvement d'abord (couvre
+Slam direct + Wreck), chaîne tir/dégâts ensuite (cascade Dazed —
+`resolveShoot`/`resolveDamageToken`/`applyDamage`, toujours
+synchrones pour l'instant). Le nettoyage du hack Wreck de
+prévisualisation (2quinquies, `buildPredictedSlamOpponent`/
+`matchesPreviewedSlam`) est reporté à une 3e étape séparée, une fois
+les deux chaînes de générateurs en place — décision de Mayrik : ne
+pas mélanger les chantiers.
+
+**Fonctions converties en générateurs** (`engine.js`) : `forceMoveOneSpaceGen`,
+`resolveSlamGen`/`finalizeSlamGen`, `resolveHazardGen`,
+`resolveOilSlickSlideGen`, `enterAdjacentSpaceGen`, `moveCarGen`,
+`moveCarWithProgressionGen`, `moveCarEnteringBoardGen`,
+`playTurnCoastWithProgressionGen`, `playTurnAssignMoveWithProgressionGen`,
+`playTurnAssignEnterWithProgressionGen`. Chaque niveau délègue avec
+`yield*` au niveau suivant (indispensable en JS : un `yield` ne
+traverse pas un appel de fonction normale). Les anciennes fonctions
+synchrones du même nom sont conservées à l'identique dans leur
+signature et deviennent de simples pilotes (`driveSync`) qui font
+tourner le générateur jusqu'au bout — tant qu'aucun appelant ne
+fournit `options.isHumanOwner`, le `yield` unique de `resolveSlamGen`
+ne peut jamais se produire, donc **aucun changement de comportement**
+pour tout code existant (tests, self-play IA vs IA, tour humain propre
+déjà géré par sa propre UI pas à pas via le mécanisme de
+prévisualisation 2quinquies, inchangé).
+
+Portée assumée pour cette étape : `resolveHazard`, cas MINE, continue
+d'appeler `applyDamage()` de façon synchrone (pas de générateur) — la
+chaîne tir/dégâts reste pour l'étape 2.
+
+**`turn-executor.js`** : nouvelle fonction `executeDecisionGen`
+(mirroir générateur d'`executeDecision`, comportement identique sauf
+la capacité de pause — y compris un gap pré-existant repéré au passage
+et volontairement PAS corrigé pour rester bit-à-bit fidèle à l'existant :
+le tour Coast ne transmettait déjà pas `decideReroll`/`isHumanOwner`
+avant ce chantier) + `driveInteractive(gen, sentValue)` (pilote
+générique pause/reprise, réutilisable pour une pause en chaîne
+ultérieure sans code spécial).
+
+**`tools/ui-script.js`** : `playAiTurn()` utilise désormais
+`executeDecisionGen`/`driveInteractive` avec
+`isHumanOwner: (owner) => owner === HUMAN`. Nouvel état `G.aiPending`
+(généreur en pause + contexte) et fonction `resumeAiSlamRerollChoice()`.
+`renderPanel()` affiche, à la place du bouton "Jouer le tour de l'IA",
+le même prompt de relance que pour le tour humain propre
+(step "slam-reroll-choice") dès qu'une pause est en cours.
+
+**Validation** :
+- 212/212 tests moteur, 203/203 tests IA, 99/99 tests couche humaine :
+  comparaison AVANT/APRÈS avec RNG rendu déterministe (LCG seedé) →
+  **0 différence de sortie**, confirmant l'absence de tout changement
+  de comportement synchrone.
+- Self-play IA vs IA à grande échelle (2100 parties cumulées sur deux
+  runs) : 0 crash, 0 décision illégale ; 1 état incohérent détecté sur
+  1500 parties, signature identique à l'artefact déjà documenté et
+  connu (jets Blast Off atterrissant sur la Finish Line, taux
+  ~1/750-900) — confirmé non lié à ce chantier.
+- `test-slam-reroll-generators.js` (nouveau, niveau moteur pur, sans
+  navigateur) : 6 scénarios — Slam direct contre une voiture humaine
+  plus grande → pause obtenue avec le bon contexte ; réponse "relancer"
+  correctement appliquée (log + nouveau lancer forcé) ; Slam direct
+  contre une voiture plus grande APPARTENANT À L'IA → aucune pause,
+  politique IA appelée directement (non-régression) ; Slam révélé par
+  un Wreck contre une voiture humaine plus grande → pause, avec la
+  bonne voiture désignée comme "plus grande" (jamais l'épave) ;
+  version synchrone (`moveCar`, sans `isHumanOwner`) → aucune exception,
+  jamais de pause, quel que soit le propriétaire ; bout en bout via
+  `executeDecisionGen`/`driveInteractive` sur un vrai plateau (tuiles
+  réelles).
+- `test-ui-ai-slam-reroll.js` (nouveau, jsdom sur le vrai bundle
+  navigateur régénéré, VRAIS clics simulés, jamais une relecture du
+  JS) : 3 scénarios — clic "Jouer le tour de l'IA" sur un Slam direct
+  contre une voiture humaine plus grande → le panneau affiche bien le
+  prompt SLAM avec les deux boutons de choix (pas de fin de tour
+  silencieuse) ; clic "Non, garder ce résultat" → pause nettoyée, tour
+  journalisé normalement, panneau revenu à l'état normal ; clic "Oui,
+  relancer" → log confirmant la demande de relance ; scénario symétrique
+  (voiture plus grande appartenant à l'IA) → aucune pause, tour terminé
+  directement sur un seul clic (non-régression). Tuiles réelles utilisées
+  (comme le prototype en jeu) : hazards face cachée neutralisés
+  explicitement sur la case cible ET ses 6 voisines pour rendre le
+  scénario déterministe (sinon un Slam en chaîne aléatoire — cas
+  générique désormais géré nativement par le même mécanisme, sans code
+  spécial — aurait pu redemander une seconde pause).
+
+**État courant** : chaîne mouvement (Slam direct + Wreck) opérationnelle
+côté tour de l'IA. Prochaine étape : chaîne tir/dégâts (cascade Dazed),
+puis nettoyage du hack Wreck de prévisualisation en 3e étape séparée.
+
+## 3bis. Correctif — le tour Coast ne transmettait pas la politique de relance de Slam
+
+Repéré au passage pendant le chantier générateurs (section 3),
+volontairement laissé de côté pour ne pas mélanger les chantiers.
+Confirmé par Mayrik le 28/08 : ce N'ÉTAIT PAS un choix voulu — à
+corriger, avec la même politique que pour un mouvement normal (l'IA
+relance TOUJOURS quand sa propre voiture est celle qui bougerait
+suite au Slam, jamais de calcul de probabilité, voir
+`ai.decideSlamRerollDefault`).
+
+**Cause** : `turn-executor.js`, la branche Coast d'`executeDecision`
+(et donc aussi de la nouvelle `executeDecisionGen`) ne transmettait
+AUCUNE option de Slam (`decideReroll`/`isHumanOwner`) à
+`playTurnCoastWithProgression`, contrairement à la branche mouvement
+normal juste à côté — un simple oubli de duplication du bloc
+`slamOptions`, sans lien avec les règles elles-mêmes.
+
+**Correctif** : les deux branches Coast (`executeDecision` et
+`executeDecisionGen`) passent désormais `...slamOptions` comme la
+branche mouvement normal — la politique IA est appliquée, et côté
+`executeDecisionGen`, un Slam impliquant une voiture humaine plus
+grande pendant un Coast met désormais aussi en pause pour demander
+sa décision, exactement comme pour un mouvement normal ou une entrée
+en jeu.
+
+**Validation** : 212/203/99 tests inchangés (aucun n'exerce un tour
+Coast via `executeDecision`, donc 0 différence attendue et confirmée).
+1000 parties de self-play supplémentaires : 0 crash, 0 décision
+illégale, 1 état incohérent — même artefact déjà documenté (Blast Off
+sur Finish Line). Nouveau fichier `test-coast-slam-policy.js` (3
+scénarios, avec un espion sur `ai.decideSlamRerollDefault` plutôt que
+de dépendre du dé de Slam aléatoire) : la politique IA est bien
+consultée pour un Slam pendant un Coast (elle ne l'était pas avant) ;
+elle reçoit le bon contexte (les bonnes voitures) ; `executeDecisionGen`
+met bien en pause pour une voiture humaine plus grande pendant un
+Coast, comme pour un mouvement normal.
+
+## 4. Chantier générateurs JS — Étape 2 (chaîne TIR/DÉGÂTS) : cascade Dazed
+
+Suite directe de l'étape 1 (section 3) — couvre enfin le cas exact
+signalé par Mayrik en tout début de chantier : l'IA tire sur une
+voiture → dégât → jeton Dazed → la cascade pousse cette voiture sur
+UNE AUTRE voiture, plus grosse, appartenant au joueur humain.
+
+**Fonctions converties en générateurs** (`engine.js`) : `resolveDamageTokenGen`
+(les 4 branches DENT/SHRAPNEL/SKID/DAZED/BLAST_OFF — SHRAPNEL délègue
+à `applyDamageGen` pour la voiture touchée, SKID à `forceMoveOneSpaceGen`,
+DAZED boucle sur `enterAdjacentSpaceGen`, BLAST_OFF délègue à
+`resolveHazardGen`/`resolveSlamGen`/`forceMoveOneSpaceGen` dans ses
+deux branches — avec ou sans `progressionState`), `applyDamageGen`
+(délègue à `resolveDamageTokenGen`), `resolveShootGen` (délègue à
+`applyDamageGen`), `resolveShootStepGen` (délègue à `resolveShootGen`).
+Le cas MINE de `resolveHazardGen` (laissé synchrone à l'étape 1) utilise
+désormais aussi `yield* applyDamageGen(...)`. Les deux points d'appel de
+`resolveShootStep` dans `playTurnAssignMoveWithProgressionGen` et
+`playTurnCoastWithProgressionGen` délèguent maintenant avec `yield*`.
+Comme à l'étape 1, toutes les anciennes fonctions synchrones du même nom
+sont conservées à l'identique et pilotent leur générateur via `driveSync`
+— aucun changement de comportement sans `isHumanOwner`.
+
+**Point notable** : le point de pause reste UNIQUEMENT celui de
+`resolveSlamGen` (inchangé depuis l'étape 1) — aucune nouvelle logique
+de pause n'a été nécessaire. La cascade Dazed, comme un Slam direct ou
+un Wreck, finit toujours par un appel à `resolveSlamGen` dès qu'elle
+percute une voiture ; le mécanisme de pause est donc resté générique,
+agnostique de la CAUSE du Slam. Conséquence pratique : **aucun
+changement dans `tools/ui-script.js`** n'a été nécessaire pour cette
+étape — `driveAiTurnGenerator`/`G.aiPending`/le panneau de relance déjà
+en place depuis l'étape 1 gèrent nativement une pause venue de la
+chaîne tir/dégâts, vérifié explicitement par un test dédié (voir
+ci-dessous).
+
+**Validation** :
+- 212/212 tests moteur, 203/203 tests IA, 99/99 tests couche humaine :
+  comparaison AVANT/APRÈS avec RNG déterministe → **0 différence**.
+- Self-play IA vs IA : 2000 parties cumulées sur deux runs après cette
+  étape, 0 crash, 0 décision illégale ; 1 état incohérent détecté sur
+  1000 parties (même artefact déjà documenté, Blast Off/Finish Line),
+  et 0 sur le run de validation finale (1000 parties) — taux cohérent
+  avec l'historique.
+- `test-slam-reroll-generators.js`, tests 7 à 10 (nouveaux) : tir →
+  Dazed → cascade → Slam contre une voiture humaine plus grande → pause
+  obtenue, bon contexte, reprise correcte, tir bien marqué "touché" ;
+  même scénario contre une voiture IA plus grande → aucune pause,
+  politique IA appelée directement (non-régression) ; cascade Dazed sur
+  2 étapes avec la pause survenant à la 2e étape seulement (pas la
+  1ère) → fonctionne aussi ; version synchrone (`resolveShoot`, sans
+  `isHumanOwner`) → aucune exception, jamais de pause.
+- `test-ui-ai-slam-reroll.js`, test 5 (nouveau) : le même scénario tir
+  → Dazed → cascade, piloté via `driveAiTurnGenerator` sur le vrai
+  bundle navigateur (vrai clic simulé) → le panneau affiche bien le
+  prompt SLAM, sans aucune modification de `tools/ui-script.js` au-delà
+  de ce qui existait déjà depuis l'étape 1 — confirme que le mécanisme
+  générique fonctionne de bout en bout, quelle que soit la couche
+  d'origine du Slam.
+
+**État courant** : les deux chaînes (mouvement et tir/dégâts) sont
+désormais entièrement couvertes par le mécanisme de pause interactive
+côté tour de l'IA. Seule étape restante du chantier générateurs :
+nettoyage du hack de prévisualisation Wreck (2quinquies,
+`buildPredictedSlamOpponent`/`matchesPreviewedSlam`, tour humain
+propre) — devenu redondant maintenant que les deux chaînes sont
+converties, mais laissé en l'état pour l'instant (décision de Mayrik :
+étape 3 séparée, à traiter à part).
+
+## 5. Chantier générateurs JS — Étape 3 : nettoyage du hack de prévisualisation Wreck
+
+Dernière étape du chantier générateurs (voir sections 3 et 4) :
+remplacement complet de l'ancien mécanisme de prévisualisation du
+Slam côté PROPRE tour du joueur humain — devenu redondant maintenant
+que les deux chaînes (mouvement, tir/dégâts) supportent nativement la
+pause interactive — par le même mécanisme générique que côté tour de
+l'IA.
+
+**Retiré** (`tools/ui-script.js`) : `buildPredictedSlamOpponent`,
+`maybeBeginSlamSequence`, `beginSlamSequence`, `matchesPreviewedSlam`,
+`resolveSlamSequence`, `pickSlamRerollChoice`, `detectDamageTaken`,
+`executeEntryRowNow`, `executeMoveStepNow`. Retiré aussi (devenu
+inutile) : `previewSlam` (`human-decision.js`, y compris son export)
+et l'import `rollSlamDice` associé, désormais sans usage dans ce
+fichier.
+
+**Ajouté** :
+- `turn-executor.js` : `executeEntryStepGen`, `executeMoveStepGen`,
+  `executeShootGen` — mirroirs génénérateurs des trois fonctions
+  synchrones existantes (`executeEntryStep`/`executeMoveStep`/
+  `executeShoot`, elles-mêmes inchangées et toujours utilisées telles
+  quelles par `test-human-decision.js`, sans `isHumanOwner`).
+- `tools/ui-script.js` : `driveHumanStepGenerator`/
+  `resumeHumanSlamRerollChoice` — mirroir exact de
+  `driveAiTurnGenerator`/`resumeAiSlamRerollChoice` (section 3), côté
+  tour humain. `pickEntryRow`/`pickMoveStep`/`pickShootTarget`
+  construisent directement le générateur avec
+  `isHumanOwner: (owner) => owner === HUMAN` et le pilotent via cette
+  fonction — plus aucun rejeu de dés forcés, plus aucune distinction
+  entre Slam direct/Wreck/chaîne : un seul chemin de code pour tous
+  les cas, exactement comme pour l'IA.
+- `renderPanel()` : le panneau "slam-reroll-choice" lit désormais le
+  contexte depuis `sel.pendingHumanSlam.ctx` (fourni par la pause du
+  générateur) au lieu de `sel.slamPreview` (résultat de la
+  prévisualisation retirée).
+
+**Correctif inclus au passage** : le tir de fin de mouvement du joueur
+(`pickShootTarget`) ne transmettait jusqu'ici AUCUNE option de Slam
+(ni `decideReroll` ni `isHumanOwner`) à `executeShoot` — même
+catégorie de gap que le correctif Coast (section 3bis), pour la même
+raison (un simple oubli de branchement). Corrigé en même temps que ce
+nettoyage : un Slam en chaîne déclenché par le PROPRE tir du joueur
+applique désormais la bonne politique, et peut mettre en pause si la
+voiture plus grande est humaine.
+
+**Bénéfice concret** : le Slam en chaîne (une paire de voitures
+DIFFÉRENTE de la première, déclenchée en poussant un véhicule sur une
+case déjà occupée par autre chose), explicitement documenté comme hors
+de portée de l'ancien hack ("impossible de mettre le moteur en pause
+une seconde fois dans le même appel"), fonctionne désormais aussi
+pour le PROPRE tour du joueur — plus symétrique avec le tour de l'IA
+(déjà couvert nativement depuis l'étape 1, section 3).
+
+**Validation** :
+- 212/212 tests moteur, 203/203 tests IA, 99/99 tests couche humaine :
+  RNG déterministe → **0 différence**. `test-human-decision.js` exerce
+  directement `executeEntryStep`/`executeMoveStep`/`executeShoot`
+  (sync, sans `isHumanOwner`) donc aucun impact attendu ni constaté.
+- 1000 parties de self-play supplémentaires : 0 crash, 0 décision
+  illégale, 0 état incohérent.
+- `test-ui-human-slam-reroll.js` (nouveau, jsdom sur le vrai bundle
+  régénéré, vrais clics) : Slam direct pendant le PROPRE mouvement du
+  joueur contre une voiture IA, voiture du joueur plus grande → pause
+  obtenue, panneau correct, clic "Non, garder ce résultat" → tour
+  résolu jusqu'au bout (mouvement → pas de bonus Road après un Slam →
+  phase de tir/fin de tour) ; même scénario avec la voiture IA plus
+  grande → aucune pause (non-régression) ; Slam révélé par un Wreck
+  pendant le PROPRE mouvement, voiture du joueur plus grande → pause
+  obtenue, épave bien créée après résolution — sans AUCUN code dédié
+  au cas Wreck (contrairement à l'ancien hack). Stable sur 8 runs
+  répétés (le dé de direction du Slam n'étant pas forcé dans ce test).
+
+**État final du chantier générateurs** : les trois étapes prévues
+(mouvement, tir/dégâts, nettoyage de l'ancien hack) sont terminées. Un
+seul et même mécanisme de pause interactive (`resolveSlamGen` +
+`isHumanOwner`) couvre désormais tous les cas de Slam — direct, Wreck,
+chaîne — pour le tour de l'IA ET pour le propre tour du joueur, sans
+aucune duplication de logique entre les deux.
