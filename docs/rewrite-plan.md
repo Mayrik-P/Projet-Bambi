@@ -1285,3 +1285,48 @@ self-play, 0 changement de comportement).
   vrais clics case par case reproduisant fidèlement le tour humain
   réel) : traverse bien le 1er véhicule sans Slam, puis Slam bien
   déclenché sur la case finale malgré Drift toujours actif.
+
+## 8. Demande UX — réordonnancement du choix de Command
+
+Demande de Mayrik (28/08) : inverser l'ordre du choix de Command côté
+tour humain. Avant : dé mouvement → voiture → **type** de Command (ou
+"Aucune") → **dé** à y consacrer (parmi ceux compatibles avec ce
+type). Demandé : dé mouvement → voiture → **dé** à consacrer à une
+Command (ou "Aucune") → **type**, restreint aux seules Commands
+compatibles avec CE dé précis.
+
+**Implémenté** (`tools/ui-script.js` uniquement — aucun changement
+moteur ni IA, l'IA ne passe jamais par cette interface) :
+- Nouvelles fonctions `pickCommandDieChoice(dieValue)` (étape 1 : dé
+  ou `null` pour "Aucune Command") et `pickCommandChoice(type)`
+  (étape 2, redéfinie : type uniquement, le dé est déjà connu).
+  Retiré : `pickCommandDie` (obsolète, fusionné dans les deux
+  fonctions ci-dessus).
+- `renderPanel()` : l'étape `"command-die"` (désormais EN PREMIER)
+  liste les dés restants + "Aucune Command" ; l'étape `"command"`
+  (désormais EN SECOND) liste les types en appelant
+  `getAvailableCommands([sel.commandDieValue], myRepairable)` — passer
+  un tableau d'UN SEUL dé à cette fonction déjà existante suffit à ne
+  récupérer que les types compatibles avec cette valeur précise,
+  aucune logique de filtrage dupliquée n'a été nécessaire.
+- Noms d'étapes (`"command"`, `"command-die"`) volontairement
+  conservés tels quels (déjà présents dans `PRE_COMMIT_STEPS`) —
+  seule leur ORDRE et leur CONTENU changent, pas leur identifiant.
+
+**Validation** :
+- `test-ui-command-die-order.js` (nouveau, jsdom, vrais clics) : 5
+  scénarios — après le choix de la voiture, l'étape suivante est bien
+  le choix du dé (pas encore de nom de Command visible) ; dé 6 choisi
+  → seuls Repair et Airstrike proposés (jamais Nitro/Drift) ; dé 1
+  choisi → seul Nitro (+ Airstrike) proposé ; "Aucune Command" dès le
+  choix du dé → saute directement à `commit` ; bout en bout par vrais
+  clics (dé → voiture → dé 6 → clic "repair" → clic cible → commande
+  finale correctement enregistrée).
+- `test-ui-repair-command.js` mis à jour pour le nouvel ordre (fixe
+  désormais aussi `sel.commandDieValue` avant de vérifier l'étape
+  `"command"`) — toujours 100% passant.
+- Non-régression : les 5 autres suites UI dédiées (Slam IA/humain,
+  Coast/bonus Road, Drift) inchangées et toujours 100% passantes ;
+  212/203 (moteur/IA) réellement identiques au commit d'avant tout le
+  chantier (l'IA ne passe jamais par `tools/ui-script.js`) ; 800
+  parties de self-play sans régression.
