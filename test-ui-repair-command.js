@@ -35,6 +35,7 @@ sel.mode = "assign";
 sel.commandAvailable = true;
 sel.car = myCar;
 sel.dieValue = 4;
+sel.commandDieValue = 6; // nouvel ordre (28/08) : le dé de Command est choisi AVANT le type
 sel.step = "command";
 win.render();
 
@@ -76,6 +77,7 @@ sel.mode = "assign";
 sel.commandAvailable = true;
 sel.car = cleanCar;
 sel.dieValue = 4;
+sel.commandDieValue = 6;
 sel.step = "command";
 win.render();
 console.log("Repair absent (attendu true) :", !panelText(dom).includes("repair"));
