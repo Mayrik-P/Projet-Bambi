@@ -1140,3 +1140,148 @@ seul et même mécanisme de pause interactive (`resolveSlamGen` +
 `isHumanOwner`) couvre désormais tous les cas de Slam — direct, Wreck,
 chaîne — pour le tour de l'IA ET pour le propre tour du joueur, sans
 aucune duplication de logique entre les deux.
+
+## 6. Correctifs — Repair trop restrictif (humain) et bonus Road pendant un Coast
+
+Deux erreurs d'interprétation des règles repérées par Mayrik le 28/08,
+indépendantes du chantier générateurs.
+
+### 6a. Repair proposé uniquement pour une voiture déjà inopérable (humain)
+
+Règle réelle (p.8, capture du livret fournie par Mayrik) : "Remove one
+damage token from ANY of your cars [...] That car becomes operable if
+it was inoperable" — la cible n'a PAS besoin d'être inopérable, une
+voiture à 1 seul dégât est une cible tout aussi légale.
+
+**Corrigé** : `getAvailableCommands` (`human-decision.js`) et les 3
+filtres correspondants (`tools/ui-script.js`) acceptent désormais toute
+voiture vivante avec `damageTokens.length > 0`, plus seulement
+`status === "inoperable"`.
+
+**Non touché, volontairement** : `ai-decision.js`
+(`reserveRepairSix`) a le même biais, mais c'est un choix
+d'équilibrage volontaire de l'arbre de décision de Mayrik (pas une
+erreur de code) — gardé en réserve comme levier à ajuster plus tard,
+une fois du recul acquis sur des parties humain/IA réelles.
+
+**Validation** : `test-human-decision.js` passe de 99 à 102 tests (3
+nouveaux : Repair proposé pour une voiture opérable à 1 dégât, cible
+bien retournée, non-régression pour une voiture sans aucun dégât).
+`test-ui-repair-command.js` (nouveau, jsdom, vrais clics) : Repair
+apparaît et est sélectionnable pour une voiture à 1 seul dégât, la
+cible est bien enregistrée, non-régression si aucun dégât. 800 parties
+de self-play sans régression. Suites moteur/IA (212/203) réellement
+revérifiées identiques au commit d'avant tout le chantier (voir note
+méthodologique ci-dessous).
+
+**Note méthodologique importante** : en creusant ce correctif, un bug
+a été trouvé dans le script de comparaison utilisé pour valider tout
+le chantier générateurs (sections 3 à 5) — `require(cheminRelatif)`
+se résout par rapport à l'emplacement du SCRIPT, pas au dossier
+courant, ce qui invalidait silencieusement toutes les comparaisons
+"avant/après" avec RNG déterministe pour `test-engine.js`/
+`test-ai-decision.js`/`test-human-decision.js` (elles comparaient deux
+messages d'erreur identiques, jamais les vrais résultats). Corrigé
+(chemins absolus) et RE-vérifié proprement contre le commit d'avant le
+chantier (`53b34b1`) : `engine.js` et `ai-decision.js` sont bien
+restés bit-à-bit identiques tout du long — aucune régression réelle
+introduite, la découverte n'a eu aucune conséquence sur la validité
+des chantiers précédents, seulement sur la confiance qu'on peut
+accorder à la méthode de vérification (corrigée pour la suite).
+
+### 6b. Bonus Road proposé à tort pendant un tour Coast
+
+Règle réelle (p.11, capture du livret fournie par Mayrik) : "If your
+move is a coast [...] You MAY NOT use the road die." Or
+`proceedAfterMovement()` (`tools/ui-script.js`) ne vérifiait jamais
+`sel.mode !== "coast"` avant de proposer le bonus Road — une voiture
+en Coast restée entièrement sur route se voyait donc proposer un bonus
+de mouvement supplémentaire pourtant explicitement interdit par la
+règle.
+
+**Corrigé** : ajout de la condition `sel.mode !== "coast"` au seul
+point d'entrée du bonus Road (`proceedAfterMovement`) — un Coast ne
+peut désormais plus jamais atteindre l'étape `road-bonus-choice`.
+
+**Non touché** : `ai-decision.js`, côté IA — vérifié : aucune des deux
+branches Coast de l'arbre (`decideNoFinishLine`, avec et sans Finish
+Line) n'attribue jamais de `roadBonusPath`, le bug n'existait donc que
+côté UI humaine. `engine.js` (`playTurnCoastWithProgressionGen`) était
+déjà correct de son côté (n'a jamais tenté d'appliquer de bonus pour
+un Coast).
+
+Mayrik a mis à jour en parallèle `docs/Automa ThundeRoadVendetta -
+arbre de décision...` (version du 20260828) pour refléter l'ordre de
+résolution corrigé du mouvement.
+
+**Validation** : `test-ui-coast-no-road-bonus.js` (nouveau, jsdom,
+vrais clics) : un Coast resté 100% sur route ne propose jamais le
+bonus Road (la voiture avance d'exactement 1 case, jamais plus) ;
+non-régression confirmée — un mouvement NORMAL 100% route continue de
+proposer le bonus normalement. 800 parties de self-play sans
+régression (l'IA n'étant de toute façon jamais concernée par ce bug).
+
+## 7. Correctif — Drift ne protégeait jamais le tour humain (bug d'`isFinalStep`)
+
+Erreur repérée par Mayrik le 28/08 : en jouant un tour humain avec la
+Command Drift, le Slam se déclenchait quand même sur la première case
+occupée, alors que la règle (p.8, capture confirmée) dit : "This turn,
+your car may pass through the FIRST space it enters that contains
+another road vehicle, without slamming it. If you end your turn in a
+space with a road vehicle, you still slam it, even if it is your
+first slam."
+
+**Cause racine** (`engine.js`, `moveCarGen` ET `moveCarEnteringBoardGen`) :
+le calcul d'`isFinalStep` ("cette case est-elle celle où le mouvement
+se termine ?") se basait en partie sur `hasMoreSteps = i <
+chosenPath.length - 1` — la position DANS le `chosenPath` reçu par CET
+appel précis. Cette notion n'a de sens que si tout le chemin est fourni
+d'un coup (le cas de l'IA, `moveCar(tile, car, dé, cheminComplet,
+...)`). Le tour HUMAIN, lui, joue chaque case via un appel séparé avec
+un `chosenPath` d'UNE SEULE direction (`tools/ui-script.js`,
+`pickMoveStep` → `executeMoveStepGen`) — dans ce cas,
+`chosenPath.length` vaut toujours 1, donc `hasMoreSteps` vaut TOUJOURS
+faux, forçant `isFinalStep` à toujours vrai et empêchant Drift de
+jamais s'appliquer côté humain, quelle que soit la suite réelle du
+mouvement. Exactement l'intuition de Mayrik : un mécanisme dépendant
+d'une notion de "chemin complet" qui ne vaut que pour l'IA.
+
+**Corrigé** : `isFinalStep` se base désormais uniquement sur
+`predictedRemaining > 0` (reste-t-il des points de déplacement après
+cette case ?) — la règle du jeu imposant d'utiliser tout son
+déplacement, "il reste des points" équivaut toujours à "le mouvement
+va continuer", que l'appelant soit l'IA (chemin complet déjà connu) ou
+un humain (case par case). Un bug symétrique, moins visible, existait
+aussi à l'entrée en jeu (`moveCarEnteringBoardGen`) : Drift y
+supprimait le Slam INCONDITIONNELLEMENT dès qu'actif, même si le dé de
+mouvement s'épuisait pile sur la case d'entrée (auquel cas le Slam
+doit s'appliquer normalement) — corrigé avec le même calcul de
+`predictedRemaining`.
+
+**Non touché** : `ai-decision.js` — l'IA construit toujours son chemin
+complet d'un coup, donc jamais affectée par ce bug (confirmé par
+self-play, 0 changement de comportement).
+
+**Validation** :
+- `engine.js` réellement identique au commit d'avant tout le chantier
+  (212/212, comparaison RNG déterministe avec la méthode corrigée —
+  voir section 6a). Confirme que le fix ne change RIEN pour les appels
+  "chemin complet" (IA, et les 2 tests Drift déjà existants dans
+  `test-engine.js`, #65 et #194, qui utilisent tous deux un chemin
+  complet ou un scénario où `predictedRemaining` et `hasMoreSteps`
+  étaient déjà d'accord).
+- 1200 parties de self-play : 0 crash, 0 décision illégale, 1 état
+  incohérent (même artefact déjà documenté, taux cohérent).
+- `test-drift-final-step.js` (nouveau, niveau moteur) : 5 scénarios —
+  chemin complet façon IA (non-régression, protège le 1er véhicule,
+  slamme le 2e) ; **même scénario rejoué case par case façon humain**
+  (c'est le test qui aurait échoué avant le correctif — la 1ère
+  assertion aurait été `false`) ; sans Drift, slam normal dès le 1er
+  véhicule (non-régression) ; entrée en jeu avec un dé de 1 (le
+  mouvement s'épuise pile à l'entrée) → Slam malgré Drift ; entrée en
+  jeu avec un dé de 4 (le mouvement continue) → Drift protège bien
+  (non-régression du test #194 de `test-engine.js`).
+- `test-ui-drift-first-slam.js` (nouveau, jsdom sur le vrai bundle,
+  vrais clics case par case reproduisant fidèlement le tour humain
+  réel) : traverse bien le 1er véhicule sans Slam, puis Slam bien
+  déclenché sur la case finale malgré Drift toujours actif.
