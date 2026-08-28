@@ -6722,7 +6722,7 @@ function computePointsLost(pointsBefore, option, remainingAfter) {
  * p.8) — à l'appelant de ne pas invoquer cette fonction dans ces cas
  * (voir commandAvailable dans getTurnContext).
  */
-function getAvailableCommands(availableDice, myInoperableCars) {
+function getAvailableCommands(availableDice, myRepairableCars) {
   const commands = [];
 
   const nitroDice = availableDice.filter((v) => v >= 1 && v <= 3);
@@ -6735,9 +6735,17 @@ function getAvailableCommands(availableDice, myInoperableCars) {
     commands.push({ type: "drift", eligibleDice: driftDice });
   }
 
-  const aliveInoperable = myInoperableCars.filter((c) => c.status !== CAR_STATUS.ELIMINATED);
-  if (availableDice.includes(6) && aliveInoperable.length > 0) {
-    commands.push({ type: "repair", eligibleDice: [6], eligibleTargets: aliveInoperable });
+  // p.8 : "Remove one damage token from ANY of your cars [...] That
+  // car becomes operable if it was inoperable" — la cible n'a PAS
+  // besoin d'être inopérable, seulement d'avoir au moins un jeton de
+  // dégât à retirer (une voiture à 1 dégât, encore opérable, est une
+  // cible tout aussi légale — corrigé le 28/08, retour de Mayrik :
+  // l'ancienne condition ne proposait Repair que pour une voiture déjà
+  // inopérable, alors que la règle autorise n'importe quelle voiture
+  // endommagée).
+  const repairable = myRepairableCars.filter((c) => c.status !== CAR_STATUS.ELIMINATED && c.damageTokens.length > 0);
+  if (availableDice.includes(6) && repairable.length > 0) {
+    commands.push({ type: "repair", eligibleDice: [6], eligibleTargets: repairable });
   }
 
   if (availableDice.length > 0) {
@@ -8303,8 +8311,8 @@ function renderPanel() {
     p.textContent = "Voulez-vous jouer une Command avec un des dés restants ?";
     panel.appendChild(p);
     const remaining = ctx.pool.filter((v, i) => i !== ctx.pool.indexOf(sel.dieValue));
-    const myInoperable = G.allCars.filter((c) => c.owner === HUMAN && c.status === "inoperable");
-    const commands = getAvailableCommands(remaining, myInoperable);
+    const myRepairable = G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0);
+    const commands = getAvailableCommands(remaining, myRepairable);
     choices.appendChild(choiceButton("Aucune Command", () => { pickCommandChoice("none"); render(); }));
     commands.forEach((c) => {
       choices.appendChild(choiceButton(c.type + " (dés : " + c.eligibleDice.join(",") + ")", () => { pickCommandChoice(c.type); render(); }));
@@ -8314,16 +8322,16 @@ function renderPanel() {
     p.textContent = `Command ${sel.commandType} — choisissez le dé à y consacrer :`;
     panel.appendChild(p);
     const remaining = ctx.pool.filter((v, i) => i !== ctx.pool.indexOf(sel.dieValue));
-    const myInoperable = G.allCars.filter((c) => c.owner === HUMAN && c.status === "inoperable");
-    const commands = getAvailableCommands(remaining, myInoperable);
+    const myRepairable = G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0);
+    const commands = getAvailableCommands(remaining, myRepairable);
     const cmd = commands.find((c) => c.type === sel.commandType);
     cmd.eligibleDice.forEach((d) => choices.appendChild(choiceButton(String(d), () => { pickCommandDie(d); render(); })));
   } else if (sel.step === "repair-target") {
     const p = document.createElement("div");
     p.textContent = "Repair — choisissez la voiture à réparer :";
     panel.appendChild(p);
-    const myInoperable = G.allCars.filter((c) => c.owner === HUMAN && c.status === "inoperable");
-    myInoperable.forEach((c) => choices.appendChild(choiceButton(`${c.size} (col ${c.col},row ${c.row})`, () => { pickRepairTarget(c); render(); })));
+    const myRepairable = G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0);
+    myRepairable.forEach((c) => choices.appendChild(choiceButton(`${c.size} (col ${c.col},row ${c.row})${c.status === "inoperable" ? " [INOPÉRABLE]" : ""}`, () => { pickRepairTarget(c); render(); })));
   } else if (sel.step === "airstrike-placement") {
     const p = document.createElement("div");
     p.textContent = "Cliquez une case surlignée pour placer le chopper (Airstrike).";

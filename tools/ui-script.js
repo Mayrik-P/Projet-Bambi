@@ -798,8 +798,8 @@ function renderPanel() {
     p.textContent = "Voulez-vous jouer une Command avec un des dés restants ?";
     panel.appendChild(p);
     const remaining = ctx.pool.filter((v, i) => i !== ctx.pool.indexOf(sel.dieValue));
-    const myInoperable = G.allCars.filter((c) => c.owner === HUMAN && c.status === "inoperable");
-    const commands = getAvailableCommands(remaining, myInoperable);
+    const myRepairable = G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0);
+    const commands = getAvailableCommands(remaining, myRepairable);
     choices.appendChild(choiceButton("Aucune Command", () => { pickCommandChoice("none"); render(); }));
     commands.forEach((c) => {
       choices.appendChild(choiceButton(c.type + " (dés : " + c.eligibleDice.join(",") + ")", () => { pickCommandChoice(c.type); render(); }));
@@ -809,16 +809,16 @@ function renderPanel() {
     p.textContent = `Command ${sel.commandType} — choisissez le dé à y consacrer :`;
     panel.appendChild(p);
     const remaining = ctx.pool.filter((v, i) => i !== ctx.pool.indexOf(sel.dieValue));
-    const myInoperable = G.allCars.filter((c) => c.owner === HUMAN && c.status === "inoperable");
-    const commands = getAvailableCommands(remaining, myInoperable);
+    const myRepairable = G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0);
+    const commands = getAvailableCommands(remaining, myRepairable);
     const cmd = commands.find((c) => c.type === sel.commandType);
     cmd.eligibleDice.forEach((d) => choices.appendChild(choiceButton(String(d), () => { pickCommandDie(d); render(); })));
   } else if (sel.step === "repair-target") {
     const p = document.createElement("div");
     p.textContent = "Repair — choisissez la voiture à réparer :";
     panel.appendChild(p);
-    const myInoperable = G.allCars.filter((c) => c.owner === HUMAN && c.status === "inoperable");
-    myInoperable.forEach((c) => choices.appendChild(choiceButton(`${c.size} (col ${c.col},row ${c.row})`, () => { pickRepairTarget(c); render(); })));
+    const myRepairable = G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0);
+    myRepairable.forEach((c) => choices.appendChild(choiceButton(`${c.size} (col ${c.col},row ${c.row})${c.status === "inoperable" ? " [INOPÉRABLE]" : ""}`, () => { pickRepairTarget(c); render(); })));
   } else if (sel.step === "airstrike-placement") {
     const p = document.createElement("div");
     p.textContent = "Cliquez une case surlignée pour placer le chopper (Airstrike).";

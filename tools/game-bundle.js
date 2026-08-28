@@ -6668,7 +6668,7 @@ function computePointsLost(pointsBefore, option, remainingAfter) {
  * p.8) — à l'appelant de ne pas invoquer cette fonction dans ces cas
  * (voir commandAvailable dans getTurnContext).
  */
-function getAvailableCommands(availableDice, myInoperableCars) {
+function getAvailableCommands(availableDice, myRepairableCars) {
   const commands = [];
 
   const nitroDice = availableDice.filter((v) => v >= 1 && v <= 3);
@@ -6681,9 +6681,17 @@ function getAvailableCommands(availableDice, myInoperableCars) {
     commands.push({ type: "drift", eligibleDice: driftDice });
   }
 
-  const aliveInoperable = myInoperableCars.filter((c) => c.status !== CAR_STATUS.ELIMINATED);
-  if (availableDice.includes(6) && aliveInoperable.length > 0) {
-    commands.push({ type: "repair", eligibleDice: [6], eligibleTargets: aliveInoperable });
+  // p.8 : "Remove one damage token from ANY of your cars [...] That
+  // car becomes operable if it was inoperable" — la cible n'a PAS
+  // besoin d'être inopérable, seulement d'avoir au moins un jeton de
+  // dégât à retirer (une voiture à 1 dégât, encore opérable, est une
+  // cible tout aussi légale — corrigé le 28/08, retour de Mayrik :
+  // l'ancienne condition ne proposait Repair que pour une voiture déjà
+  // inopérable, alors que la règle autorise n'importe quelle voiture
+  // endommagée).
+  const repairable = myRepairableCars.filter((c) => c.status !== CAR_STATUS.ELIMINATED && c.damageTokens.length > 0);
+  if (availableDice.includes(6) && repairable.length > 0) {
+    commands.push({ type: "repair", eligibleDice: [6], eligibleTargets: repairable });
   }
 
   if (availableDice.length > 0) {
