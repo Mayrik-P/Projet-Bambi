@@ -872,16 +872,35 @@ function* moveCarGen(tile, car, dieValue, chosenPath, allCars = [], slamOptions 
     }
 
     // Anticipation : cette case sera-t-elle celle où le mouvement se
-    // termine (dernière du chemin choisi, OU plus de déplacement
-    // ensuite) ? Nécessaire pour savoir si Drift peut s'appliquer ICI.
+    // termine (plus de déplacement ensuite) ? Nécessaire pour savoir
+    // si Drift peut s'appliquer ICI (p.8, confirmé par Mayrik via
+    // capture des règles : "This turn, your car may pass through the
+    // FIRST space it enters that contains another road vehicle,
+    // without slamming it. If you end your turn in a space with a
+    // road vehicle, you still slam it, even if it is your first
+    // slam.") — CORRECTIF (28/08, retour de Mayrik) : cette
+    // anticipation se basait à tort aussi sur `hasMoreSteps` (position
+    // dans CE `chosenPath` précis), une notion sans rapport avec la
+    // règle elle-même et qui ne vaut QUE pour un chemin complet
+    // calculé d'un coup (le cas de l'IA). Pour le tour HUMAIN, chaque
+    // case est jouée par un appel séparé avec un `chosenPath` d'UNE
+    // seule direction (voir tools/ui-script.js, pickMoveStep) — dans
+    // ce cas, `i < chosenPath.length - 1` valait TOUJOURS faux
+    // (chosenPath.length === 1), forçant `isFinalStep` à toujours
+    // vrai et empêchant Drift de jamais s'appliquer, quelle que soit
+    // la suite du mouvement. Seul `predictedRemaining` (des points
+    // de déplacement restent-ils après cette case ?) détermine
+    // réellement si le mouvement continue — la règle impose d'utiliser
+    // tout son déplacement, donc "il reste des points" équivaut
+    // toujours à "le mouvement va continuer", que ce soit l'IA (chemin
+    // complet déjà connu) ou un humain (case par case).
     let isFinalStep = true;
     const lookSpace = nextTarget; // déjà récupérée ci-dessus (et déjà vérifiée non-Impassable à ce stade)
     if (lookSpace) {
       const lookCost = MOVE_COST[lookSpace.terrain];
       const lookMudException = lookSpace.terrain === TERRAIN.MUD && remaining === 1;
       const predictedRemaining = lookMudException ? 0 : remaining - lookCost;
-      const hasMoreSteps = i < chosenPath.length - 1;
-      isFinalStep = !(predictedRemaining > 0 && hasMoreSteps);
+      isFinalStep = !(predictedRemaining > 0);
     }
 
     const driftEligible = driftAvailable && !driftUsed && !isFinalStep;
@@ -968,7 +987,25 @@ function* moveCarEnteringBoardGen(tile, car, dieValue, entryRow, chosenPath = []
   // un véhicule déjà présent — utile si toutes les rangées de la
   // colonne 0 sont occupées (repéré par Mayrik : oubli lors de
   // l'intégration initiale, ce paramètre était figé à false).
-  const entryStep = yield* enterAdjacentSpaceGen(tile, car, allCars, 0, entryRow, dieValue, slamOptions, !!slamOptions.driftAvailable);
+  // CORRECTIF (28/08, même bug que dans moveCarGen — voir son
+  // commentaire détaillé) : Drift ne protège QUE si le mouvement
+  // continue après cette case (p.8 : "If you end your turn in a
+  // space with a road vehicle, you still slam it, even if it is your
+  // first slam.") — l'ancien code supprimait le Slam d'entrée
+  // INCONDITIONNELLEMENT dès que Drift était actif, même si le dé de
+  // mouvement s'épuisait pile sur cette case d'entrée (auquel cas le
+  // Slam doit s'appliquer normalement, comme n'importe quelle autre
+  // case où le mouvement se termine).
+  let entryIsFinalStep = true;
+  const entrySpace = getSpace(tile, 0, entryRow);
+  if (entrySpace && entrySpace.terrain !== TERRAIN.IMPASSABLE) {
+    const entryCost = MOVE_COST[entrySpace.terrain];
+    const entryMudException = entrySpace.terrain === TERRAIN.MUD && dieValue === 1;
+    const predictedRemainingAfterEntry = entryMudException ? 0 : dieValue - entryCost;
+    entryIsFinalStep = !(predictedRemainingAfterEntry > 0);
+  }
+  const entryDriftEligible = !!slamOptions.driftAvailable && !entryIsFinalStep;
+  const entryStep = yield* enterAdjacentSpaceGen(tile, car, allCars, 0, entryRow, dieValue, slamOptions, entryDriftEligible);
   log.push(...entryStep.log);
 
   if (entryStep.insufficientMove) {
@@ -8020,7 +8057,12 @@ function continueAfterStop() {
 // ===================================================================
 function proceedAfterMovement() {
   const car = sel.car;
-  if (!sel.roadBonusOffered && !sel.inRoadBonus && !sel.hadSlam && !sel.hadDamage && car.status === CAR_STATUS.OPERABLE && sel.roadEligible && G.roundState.roadDie) {
+  // p.11 : "You MAY NOT use the road die" pendant un Coast — le bonus
+  // Road ne doit JAMAIS être proposé pour ce type de tour, même si la
+  // voiture est restée entièrement sur route (correctif du 28/08,
+  // retour de Mayrik + capture des règles p.11 : ordre de résolution
+  // du mouvement mis à jour dans l'arbre de décision en conséquence).
+  if (!sel.roadBonusOffered && !sel.inRoadBonus && !sel.hadSlam && !sel.hadDamage && sel.mode !== "coast" && car.status === CAR_STATUS.OPERABLE && sel.roadEligible && G.roundState.roadDie) {
     sel.roadBonusOffered = true;
     sel.step = "road-bonus-choice";
     return;
@@ -8184,9 +8226,18 @@ function renderBoard() {
         const { cx, cy } = cellCenter(col, row);
         svg.insertAdjacentHTML("beforeend", `<line x1="${cx - 10}" y1="${cy - 10}" x2="${cx + 10}" y2="${cy + 10}" stroke="#ff6666" stroke-width="1.5"/><line x1="${cx - 10}" y1="${cy + 10}" x2="${cx + 10}" y2="${cy - 10}" stroke="#ff6666" stroke-width="1.5"/>`);
       }
-      if (cell.hazard === "hidden") {
+      if (cell.hazard) {
+        // Marqueur de TEST/DEBUG uniquement — affiche le VRAI type du
+        // jeton face cachée (jamais visible pour un vrai joueur en
+        // partie normale) : demandé par Mayrik pour vérifier ses
+        // scénarios de test sans avoir à révéler les hazards en
+        // jouant. L'ancien code ici (`cell.hazard === "hidden"`) ne se
+        // déclenchait jamais : `cell.hazard` contient directement le
+        // type réel (voir HAZARD_TYPES, engine.js) dès la mise en
+        // place du plateau, pas un texte générique "hidden".
         const { cx, cy } = cellCenter(col, row);
-        svg.insertAdjacentHTML("beforeend", `<polygon points="${cx},${cy - 6} ${cx - 6},${cy + 5} ${cx + 6},${cy + 5}" fill="#222" stroke="#888" stroke-width="0.7"/>`);
+        const hazardLabel = { blank: "B", oil_slick: "O", dirt: "D", mine: "M", wreck: "W" }[cell.hazard] || "?";
+        svg.insertAdjacentHTML("beforeend", `<g><polygon points="${cx},${cy - 7} ${cx - 7},${cy + 6} ${cx + 7},${cy + 6}" fill="#222" stroke="#ffd166" stroke-width="1"/><text x="${cx}" y="${cy + 4.5}" font-size="7" fill="#ffd166" text-anchor="middle" font-weight="bold">${hazardLabel}</text></g>`);
       }
     }
   }

@@ -818,16 +818,35 @@ function* moveCarGen(tile, car, dieValue, chosenPath, allCars = [], slamOptions 
     }
 
     // Anticipation : cette case sera-t-elle celle où le mouvement se
-    // termine (dernière du chemin choisi, OU plus de déplacement
-    // ensuite) ? Nécessaire pour savoir si Drift peut s'appliquer ICI.
+    // termine (plus de déplacement ensuite) ? Nécessaire pour savoir
+    // si Drift peut s'appliquer ICI (p.8, confirmé par Mayrik via
+    // capture des règles : "This turn, your car may pass through the
+    // FIRST space it enters that contains another road vehicle,
+    // without slamming it. If you end your turn in a space with a
+    // road vehicle, you still slam it, even if it is your first
+    // slam.") — CORRECTIF (28/08, retour de Mayrik) : cette
+    // anticipation se basait à tort aussi sur `hasMoreSteps` (position
+    // dans CE `chosenPath` précis), une notion sans rapport avec la
+    // règle elle-même et qui ne vaut QUE pour un chemin complet
+    // calculé d'un coup (le cas de l'IA). Pour le tour HUMAIN, chaque
+    // case est jouée par un appel séparé avec un `chosenPath` d'UNE
+    // seule direction (voir tools/ui-script.js, pickMoveStep) — dans
+    // ce cas, `i < chosenPath.length - 1` valait TOUJOURS faux
+    // (chosenPath.length === 1), forçant `isFinalStep` à toujours
+    // vrai et empêchant Drift de jamais s'appliquer, quelle que soit
+    // la suite du mouvement. Seul `predictedRemaining` (des points
+    // de déplacement restent-ils après cette case ?) détermine
+    // réellement si le mouvement continue — la règle impose d'utiliser
+    // tout son déplacement, donc "il reste des points" équivaut
+    // toujours à "le mouvement va continuer", que ce soit l'IA (chemin
+    // complet déjà connu) ou un humain (case par case).
     let isFinalStep = true;
     const lookSpace = nextTarget; // déjà récupérée ci-dessus (et déjà vérifiée non-Impassable à ce stade)
     if (lookSpace) {
       const lookCost = MOVE_COST[lookSpace.terrain];
       const lookMudException = lookSpace.terrain === TERRAIN.MUD && remaining === 1;
       const predictedRemaining = lookMudException ? 0 : remaining - lookCost;
-      const hasMoreSteps = i < chosenPath.length - 1;
-      isFinalStep = !(predictedRemaining > 0 && hasMoreSteps);
+      isFinalStep = !(predictedRemaining > 0);
     }
 
     const driftEligible = driftAvailable && !driftUsed && !isFinalStep;
@@ -914,7 +933,25 @@ function* moveCarEnteringBoardGen(tile, car, dieValue, entryRow, chosenPath = []
   // un véhicule déjà présent — utile si toutes les rangées de la
   // colonne 0 sont occupées (repéré par Mayrik : oubli lors de
   // l'intégration initiale, ce paramètre était figé à false).
-  const entryStep = yield* enterAdjacentSpaceGen(tile, car, allCars, 0, entryRow, dieValue, slamOptions, !!slamOptions.driftAvailable);
+  // CORRECTIF (28/08, même bug que dans moveCarGen — voir son
+  // commentaire détaillé) : Drift ne protège QUE si le mouvement
+  // continue après cette case (p.8 : "If you end your turn in a
+  // space with a road vehicle, you still slam it, even if it is your
+  // first slam.") — l'ancien code supprimait le Slam d'entrée
+  // INCONDITIONNELLEMENT dès que Drift était actif, même si le dé de
+  // mouvement s'épuisait pile sur cette case d'entrée (auquel cas le
+  // Slam doit s'appliquer normalement, comme n'importe quelle autre
+  // case où le mouvement se termine).
+  let entryIsFinalStep = true;
+  const entrySpace = getSpace(tile, 0, entryRow);
+  if (entrySpace && entrySpace.terrain !== TERRAIN.IMPASSABLE) {
+    const entryCost = MOVE_COST[entrySpace.terrain];
+    const entryMudException = entrySpace.terrain === TERRAIN.MUD && dieValue === 1;
+    const predictedRemainingAfterEntry = entryMudException ? 0 : dieValue - entryCost;
+    entryIsFinalStep = !(predictedRemainingAfterEntry > 0);
+  }
+  const entryDriftEligible = !!slamOptions.driftAvailable && !entryIsFinalStep;
+  const entryStep = yield* enterAdjacentSpaceGen(tile, car, allCars, 0, entryRow, dieValue, slamOptions, entryDriftEligible);
   log.push(...entryStep.log);
 
   if (entryStep.insufficientMove) {

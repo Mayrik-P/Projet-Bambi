@@ -507,7 +507,12 @@ function continueAfterStop() {
 // ===================================================================
 function proceedAfterMovement() {
   const car = sel.car;
-  if (!sel.roadBonusOffered && !sel.inRoadBonus && !sel.hadSlam && !sel.hadDamage && car.status === CAR_STATUS.OPERABLE && sel.roadEligible && G.roundState.roadDie) {
+  // p.11 : "You MAY NOT use the road die" pendant un Coast — le bonus
+  // Road ne doit JAMAIS être proposé pour ce type de tour, même si la
+  // voiture est restée entièrement sur route (correctif du 28/08,
+  // retour de Mayrik + capture des règles p.11 : ordre de résolution
+  // du mouvement mis à jour dans l'arbre de décision en conséquence).
+  if (!sel.roadBonusOffered && !sel.inRoadBonus && !sel.hadSlam && !sel.hadDamage && sel.mode !== "coast" && car.status === CAR_STATUS.OPERABLE && sel.roadEligible && G.roundState.roadDie) {
     sel.roadBonusOffered = true;
     sel.step = "road-bonus-choice";
     return;
@@ -671,9 +676,18 @@ function renderBoard() {
         const { cx, cy } = cellCenter(col, row);
         svg.insertAdjacentHTML("beforeend", `<line x1="${cx - 10}" y1="${cy - 10}" x2="${cx + 10}" y2="${cy + 10}" stroke="#ff6666" stroke-width="1.5"/><line x1="${cx - 10}" y1="${cy + 10}" x2="${cx + 10}" y2="${cy - 10}" stroke="#ff6666" stroke-width="1.5"/>`);
       }
-      if (cell.hazard === "hidden") {
+      if (cell.hazard) {
+        // Marqueur de TEST/DEBUG uniquement — affiche le VRAI type du
+        // jeton face cachée (jamais visible pour un vrai joueur en
+        // partie normale) : demandé par Mayrik pour vérifier ses
+        // scénarios de test sans avoir à révéler les hazards en
+        // jouant. L'ancien code ici (`cell.hazard === "hidden"`) ne se
+        // déclenchait jamais : `cell.hazard` contient directement le
+        // type réel (voir HAZARD_TYPES, engine.js) dès la mise en
+        // place du plateau, pas un texte générique "hidden".
         const { cx, cy } = cellCenter(col, row);
-        svg.insertAdjacentHTML("beforeend", `<polygon points="${cx},${cy - 6} ${cx - 6},${cy + 5} ${cx + 6},${cy + 5}" fill="#222" stroke="#888" stroke-width="0.7"/>`);
+        const hazardLabel = { blank: "B", oil_slick: "O", dirt: "D", mine: "M", wreck: "W" }[cell.hazard] || "?";
+        svg.insertAdjacentHTML("beforeend", `<g><polygon points="${cx},${cy - 7} ${cx - 7},${cy + 6} ${cx + 7},${cy + 6}" fill="#222" stroke="#ffd166" stroke-width="1"/><text x="${cx}" y="${cy + 4.5}" font-size="7" fill="#ffd166" text-anchor="middle" font-weight="bold">${hazardLabel}</text></g>`);
       }
     }
   }
