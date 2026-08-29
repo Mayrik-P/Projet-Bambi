@@ -695,6 +695,19 @@ function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remain
   let newRemaining = mudExceptionApplies ? 0 : remaining - cost;
   log.push(`${car.id} avance vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
 
+  // Pause purement VISUELLE (aucun effet sur les règles ni sur l'issue
+  // de la partie) — demandée par Mayrik le 28/08 pour voir le
+  // mouvement de l'IA case par case au lieu d'un saut direct vers la
+  // case finale + un pavé de log. N'a lieu QUE si l'appelant le
+  // demande explicitement via `slamOptions.emitSteps` (voir
+  // tools/ui-script.js, driveAiTurnGenerator) — absent par défaut,
+  // donc AUCUN changement de comportement pour tout code existant
+  // (tests, self-play, tour humain click par click qui voit déjà
+  // chaque case au fil de ses propres clics).
+  if (slamOptions.emitSteps) {
+    yield { type: "step", car, col: car.col, row: car.row };
+  }
+
   // Résolution d'un hazard éventuel (p.7) AVANT la vérification
   // d'occupation : un Wreck fraîchement posé devient lui-même
   // l'occupant à considérer, et résout déjà son propre slam.
@@ -1947,6 +1960,15 @@ function* forceMoveOneSpaceGen(tile, car, allCars, directionName, options = {}, 
   car.col = targetCol;
   car.row = targetRow;
   log.push(`${car.id} est projetée en ${directionName} vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
+
+  // Pause purement VISUELLE — voir le commentaire détaillé dans
+  // enterAdjacentSpaceGen. Couvre ici les projections forcées (Slam,
+  // Skid, glissade Oil Slick, cascade Dazed via enterAdjacentSpaceGen
+  // plus haut) : n'importe quelle case franchie mérite une frame,
+  // pas seulement l'avancée normale.
+  if (options.emitSteps) {
+    yield { type: "step", car, col: car.col, row: car.row };
+  }
 
   // Résolution d'un hazard éventuel (p.7) avant la vérification
   // d'occupation, même logique que dans enterAdjacentSpace.
@@ -7018,7 +7040,7 @@ function* executeDecisionGen(progressionState, roundState, allCars, allChoppers,
   const shootTargetFn = (currentCar, cars) => chooseShootTarget(currentCar.col, currentCar.row, currentCar.owner, cars);
 
   let effectiveDieValue = decision.dieValue;
-  const slamOptions = { decideReroll: decideSlamRerollDefault, isHumanOwner: options.isHumanOwner };
+  const slamOptions = { decideReroll: decideSlamRerollDefault, isHumanOwner: options.isHumanOwner, emitSteps: options.emitSteps };
 
   if (command && !isCoastTurn) {
     drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);

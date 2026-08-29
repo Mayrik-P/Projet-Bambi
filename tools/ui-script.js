@@ -72,7 +72,7 @@ function newGame() {
     allCars.push(createCarOffBoard(name, CAR_SIZE.LARGE));
   }
   const roundState = createRoundState(PLAYER_NAMES);
-  G = { progressionState, allCars, allChoppers, roundState, aiPending: null };
+  G = { progressionState, allCars, allChoppers, roundState, aiPending: null, aiAnimating: false };
   sel = {};
   fullLog = [];
   gameOver = false;
@@ -132,26 +132,65 @@ function playAiTurn() {
     render();
     return;
   }
+  // Verrou anti double-clic PENDANT l'animation case par case : les
+  // pauses {type:"step"} passent par setTimeout (voir
+  // driveAiTurnGenerator, qui pose G.aiAnimating dès son premier
+  // appel), donc playAiTurn() rend la main au navigateur entre deux
+  // cases — sans ce verrou, un second clic sur "Jouer le tour de
+  // l'IA" pendant ce délai lancerait UNE SECONDE décision en parallèle
+  // sur le même état de jeu.
   const gen = executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, PLAYER_NAMES, cp, decision, {
-    isHumanOwner: (owner) => owner === HUMAN
+    isHumanOwner: (owner) => owner === HUMAN,
+    emitSteps: true // pause visuelle case par case (voir driveAiTurnGenerator) — jamais activé côté self-play/tests
   });
   driveAiTurnGenerator(gen, `Round ${G.roundState.roundNumber} — ${cp}`);
 }
 
+// Délai (ms) entre deux cases affichées pendant le mouvement de l'IA —
+// PUREMENT VISUEL, aucun effet sur les règles ni sur l'issue de la
+// partie (voir engine.js, `options.emitSteps`). Demandé par Mayrik le
+// 28/08 : lire le log à chaque tour pour repérer un mouvement suspect
+// est trop lent sur un grand nombre de parties ; un petit temps de
+// pause à chaque case permet de le voir directement au coup d'œil.
+// 0 = pas de pause du tout (utile pour l'automatisation/les tests —
+// voir test-ui-ai-step-pause.js). Pensé pour devenir un réglage de
+// vitesse choisi par le joueur dans le jeu définitif (Mayrik).
+let AI_STEP_DELAY_MS = 500;
+
 // Fait avancer le générateur du tour IA en cours jusqu'à sa fin OU
-// jusqu'à sa prochaine pause. Une pause peut se reproduire plusieurs
-// fois d'affilée (ex. un Slam en chaîne qui implique une DEUXIÈME
-// voiture humaine plus grande) — chaque pause est traitée de façon
-// identique, sans code spécial, puisque le générateur reprend
+// jusqu'à sa prochaine pause. DEUX types de pause bien distincts :
+//   - {type:"step", ...} : purement informative, aucune décision à
+//     prendre — on affiche juste la nouvelle position, on attend
+//     AI_STEP_DELAY_MS, puis on reprend automatiquement tout seul
+//     (gen.next() sans réponse : la valeur reprise n'est jamais lue,
+//     voir engine.js).
+//   - {type:"slam-reroll", ...} : demande une VRAIE décision du joueur
+//     (inchangé depuis le chantier générateurs) — stocke le
+//     générateur dans G.aiPending et attend un clic.
+// Une pause peut se reproduire plusieurs fois d'affilée peu importe le
+// type (ex. plusieurs cases d'affilée, ou un Slam en chaîne qui
+// implique une DEUXIÈME voiture humaine) — chaque pause est traitée de
+// façon identique, sans code spécial, puisque le générateur reprend
 // exactement là où il s'est arrêté.
 function driveAiTurnGenerator(gen, turnLabel, answer) {
+  G.aiAnimating = true;
   const outcome = driveInteractive(gen, answer);
   if (!outcome.done) {
+    if (outcome.pending.type === "step") {
+      render(); // affiche IMMÉDIATEMENT la case qui vient d'être atteinte
+      if (AI_STEP_DELAY_MS > 0) {
+        setTimeout(() => driveAiTurnGenerator(gen, turnLabel), AI_STEP_DELAY_MS);
+      } else {
+        driveAiTurnGenerator(gen, turnLabel);
+      }
+      return;
+    }
     G.aiPending = { gen, ctx: outcome.pending, turnLabel };
     render();
     return;
   }
   G.aiPending = null;
+  G.aiAnimating = false;
   pushLogLines(outcome.result.log || [], turnLabel);
   checkEnd();
   resetSelection();
@@ -787,6 +826,16 @@ function renderPanel() {
     btn.className = "primary";
     btn.textContent = "Jouer le tour de l'IA ▶";
     btn.addEventListener("click", playAiTurn);
+    if (G.aiAnimating) {
+      // Anti double-clic (voir playAiTurn) : le tour est en cours
+      // d'animation case par case (setTimeout), pas de nouvelle
+      // décision à lancer par-dessus tant que celle-ci n'est pas
+      // terminée.
+      btn.disabled = true;
+      btn.textContent = "L'IA joue... ▶";
+      panel.appendChild(btn);
+      return;
+    }
     panel.appendChild(btn);
     return;
   }
