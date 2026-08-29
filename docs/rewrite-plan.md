@@ -1330,3 +1330,71 @@ moteur ni IA, l'IA ne passe jamais par cette interface) :
   212/203 (moteur/IA) réellement identiques au commit d'avant tout le
   chantier (l'IA ne passe jamais par `tools/ui-script.js`) ; 800
   parties de self-play sans régression.
+
+## 9. Demande UX — pause visuelle case par case pendant le tour de l'IA
+
+Demande de Mayrik (28/08) : en multipliant les parties, lire le log à
+chaque tour pour repérer un mouvement suspect est trop lent. Avec un
+minimum d'animation (une pause à chaque case franchie), un coup d'œil
+suffit. Départ suggéré : 0,5s par case, appelé à devenir un réglage de
+vitesse pour le joueur dans le jeu définitif.
+
+**Implémenté** en réutilisant directement l'architecture générateurs
+du chantier précédent (sections 3-5) — un `yield` de plus dans la même
+chaîne, aucune réécriture :
+
+- `engine.js` : nouveau type de pause `{type: "step", car, col, row}`,
+  émis à CHAQUE mise à jour réelle de position (`enterAdjacentSpaceGen`
+  — mouvement normal, drift, cascade Dazed ; `forceMoveOneSpaceGen` —
+  poussée forcée par Slam/Skid/glissade Oil Slick), uniquement si
+  `options.emitSteps` est explicitement fourni (absent par défaut —
+  donc AUCUN changement de comportement pour tout code existant :
+  tests, self-play, tour humain qui voit déjà chaque case au fil de
+  ses clics). Contrairement à la pause `slam-reroll`, celle-ci ne
+  porte aucune décision : `gen.next()` peut la reprendre sans aucune
+  valeur.
+- `turn-executor.js` : `emitSteps` ajouté à `slamOptions` dans
+  `executeDecisionGen`, aux côtés d'`isHumanOwner` (même mécanisme de
+  propagation déjà en place).
+- `tools/ui-script.js` : `playAiTurn()` active `emitSteps: true`.
+  `driveAiTurnGenerator()` distingue maintenant deux natures de pause
+  bien différentes — `"step"` (informative : affiche la nouvelle
+  position, attend `AI_STEP_DELAY_MS` via `setTimeout`, reprend seule,
+  sans intervention) et `"slam-reroll"` (inchangé : attend un clic).
+  Nouveau réglage `AI_STEP_DELAY_MS` (variable de haut niveau, 500 par
+  défaut, 0 = désactivé) — pensé pour devenir le futur réglage de
+  vitesse du joueur. Nouveau verrou `G.aiAnimating` (posé par
+  `driveAiTurnGenerator` dès son premier appel, retiré à la toute fin) :
+  empêche un second clic sur "Jouer le tour de l'IA" pendant qu'une
+  animation est en cours (le bouton devient "L'IA joue... ▶", désactivé)
+  — sans ce verrou, un double-clic pendant le délai aurait lancé une
+  seconde décision en parallèle sur le même état de jeu.
+
+**Bénéfice inattendu, découvert en testant** : le même mécanisme
+couvre aussi une voiture poussée par la résolution d'un Slam en cours
+de route (via `forceMoveOneSpaceGen`) — pas seulement le mouvement
+principal de la voiture activée. Un Slam en chaîne s'anime donc lui
+aussi case par case, sans code spécial.
+
+**Validation** :
+- `engine.js`/`ai-decision.js` réellement identiques au commit d'avant
+  tout le chantier (212/212, 203/203) — confirme qu'`emitSteps` absent
+  ne change strictement rien. `human-decision.js` inchangé (102/102).
+- `test-ai-step-pause.js` (nouveau, niveau moteur/exécuteur) : 3
+  scénarios — `emitSteps:true` sur un trajet de 3 cases → exactement 3
+  pauses `"step"`, position déjà à jour à chaque pause, arrivée finale
+  correcte ; sans `emitSteps` → 0 pause `"step"`, comportement
+  identique à avant ; `emitSteps` + Slam contre une voiture humaine
+  plus grande en cours de route → les deux types de pause cohabitent
+  dans le bon ordre, y compris la pause supplémentaire pour la voiture
+  poussée après résolution du Slam.
+- `test-ui-ai-step-animation.js` (nouveau, jsdom sur le vrai bundle,
+  VRAIS délais `setTimeout`, pas un raccourci synchrone) : le bouton se
+  désactive immédiatement au clic ("L'IA joue... ▶"), la voiture
+  n'atteint sa position finale qu'après l'écoulement complet des
+  pauses, le bouton redevient cliquable une fois terminé ; non-
+  régression confirmée pour un tour IA sans `emitSteps` (résolution
+  immédiate, `G.aiAnimating` jamais activé).
+- Non-régression : les 6 autres suites UI dédiées toujours 100%
+  passantes ; 800 parties de self-play sans régression (`emitSteps`
+  jamais activé côté self-play, comme prévu).
