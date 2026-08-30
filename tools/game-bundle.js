@@ -4512,11 +4512,11 @@ function createReachabilityExplorer(board, allCars, allChoppers, driftAvailable)
  *
  * Chaque candidat porte un champ `entryRow` supplémentaire (la
  * rangée de colonne 0 par laquelle on est réellement entré) —
- * nécessaire pour recalculer le danger du chemin de continuation
- * plus tard (voir pathHazardDanger), puisque `path` ne liste QUE les
- * pas de continuation après l'entrée, jamais l'entrée elle-même
- * (moveCarEnteringBoard prend la rangée d'entrée séparément du
- * chemin de continuation — voir engine.js).
+ * nécessaire pour le bonus Road d'une entrée en jeu (voir
+ * findBestTrajectory/chooseBestTrajectory), puisque `path` ne liste
+ * QUE les pas de continuation après l'entrée, jamais l'entrée
+ * elle-même (moveCarEnteringBoard prend la rangée d'entrée séparément
+ * du chemin de continuation — voir engine.js).
  */
 function computeReachableEntryDestinations(board, dieValue, allCars, allChoppers, driftAvailable = false) {
   const explorer = createReachabilityExplorer(board, allCars, allChoppers, driftAvailable);
@@ -4785,229 +4785,49 @@ function arrivalDanger(board, col, row, allCars) {
 // rangée d'entrée (colonne 0) pour un trajet d'entrée en jeu (voir
 // chooseEntryTrajectory, où `path` ne liste que la CONTINUATION
 // après l'entrée, jamais l'entrée elle-même).
-function pathHazardDanger(board, startCol, startRow, path, allCars) {
-  let col = startCol, row = startRow, sum = 0;
-  for (const stepName of path) {
-    const step = getFrontArc({ col, row }).find((a) => a.name === stepName);
-    if (!step) break;
-    col = step.col; row = step.row;
-    const space = getSpace(board, col, row);
-    if (space === null || space === undefined || space.terrain === TERRAIN.IMPASSABLE) continue;
-    sum += hazardValueOfCell(board, col, row, allCars);
-  }
-  return sum;
-}
-
-const TERRAIN_PREFERENCE_ORDER = [TERRAIN.ROAD, TERRAIN.OFF_ROAD, TERRAIN.MUD];
-
-// Parmi des candidats déjà "propres", préférence Route > Off-Road >
-// Mud, chaque palier ne cédant au suivant que s'il permet une
-// progression strictement meilleure (cascade de l'arbre).
-function pickByTerrainPreference(candidates, board) {
-  const byTerrain = { [TERRAIN.ROAD]: [], [TERRAIN.OFF_ROAD]: [], [TERRAIN.MUD]: [] };
-  for (const c of candidates) {
-    const space = getSpace(board, c.col, c.row);
-    const terrain = space ? space.terrain : null;
-    if (byTerrain[terrain]) byTerrain[terrain].push(c);
-  }
-  let best = null;
-  for (const terrain of TERRAIN_PREFERENCE_ORDER) {
-    const group = byTerrain[terrain];
-    if (group.length === 0) continue;
-    const bestOfGroup = group.reduce((a, b) => (b.col > a.col ? b : a));
-    if (!best || bestOfGroup.col > best.col) best = bestOfGroup;
-  }
-  return best;
-}
-
-function chooseGeneralTrajectory(board, car, dieValue, allCars, allChoppers, driftAvailable = false, roadDieValue = 0) {
-  const candidates = computeReachableDestinations(board, car, dieValue, allCars, allChoppers, driftAvailable);
-  // "exits-front" (sortie par l'avant du plateau) compte comme une
-  // progression valide au même titre que "normal" — en contexte
-  // Finish Line, c'est le franchissement de la ligne d'arrivée
-  // elle-même (l'issue la plus favorable possible) ; sinon, c'est une
-  // avancée vers une tuile future encore inconnue, déjà traitée comme
-  // un progrès valable par l'ancien système. Le bonus Road, en
-  // revanche, ne s'applique qu'à un arrêt normal SUR la tuile (une
-  // sortie de plateau termine déjà le mouvement, rien à prolonger).
-  const cleanNormal = candidates.filter((c) => c.terminalReason === "normal" && c.dangerousCellsCrossed === 0);
-  const cleanProgress = candidates.filter((c) => (c.terminalReason === "normal" || c.terminalReason === "exits-front") && c.dangerousCellsCrossed === 0);
-
-  // --- Palier 1 : bonus Road, si applicable -------------------------
-  let destination = null;
-  let roadBonusPath = null;
-  if (roadDieValue > 0) {
-    const bonusEligible = cleanNormal.filter((c) => c.allRoad);
-    const bonusCandidates = [];
-    for (const base of bonusEligible) {
-      const extCar = { ...car, col: base.col, row: base.row };
-      const ext = computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable);
-      for (const e of ext) {
-        if ((e.terminalReason !== "normal" && e.terminalReason !== "exits-front") || e.dangerousCellsCrossed > 0) continue;
-        bonusCandidates.push({ col: e.col, row: e.row, basePath: base.path, extPath: e.path });
-      }
-    }
-    const chosenBonus = pickByTerrainPreference(bonusCandidates, board);
-    if (chosenBonus) {
-      destination = { col: chosenBonus.col, row: chosenBonus.row, stepsUsed: chosenBonus.basePath.length + chosenBonus.extPath.length, terminalReason: "normal", slamTarget: null, path: chosenBonus.basePath };
-      roadBonusPath = chosenBonus.extPath;
-    }
-  }
-
-  // --- Palier 2 : sans bonus, propre, tous terrains -----------------
-  if (!destination && cleanProgress.length > 0) {
-    const bestCol = Math.max(...cleanProgress.map((c) => c.col));
-    const atBestCol = cleanProgress
-      .filter((c) => c.col === bestCol)
-      .map((c) => ({ c, danger: arrivalDanger(board, c.col, c.row, allCars) }))
-      .sort((a, b) => a.danger - b.danger);
-    destination = atBestCol[0].c;
-  }
-
-  // --- Palier 3 : chemin forcé (aucune destination propre) ----------
-  if (!destination) {
-    const anyNormalOrSlam = candidates.filter((c) => c.terminalReason === "normal" || c.terminalReason === "slam" || c.terminalReason === "exits-front");
-    if (anyNormalOrSlam.length > 0) {
-      const bestCol = Math.max(...anyNormalOrSlam.map((c) => c.col));
-      const atBestCol = anyNormalOrSlam.filter((c) => c.col === bestCol);
-      const scored = atBestCol.map((c) => ({ c, danger: pathHazardDanger(board, car.col, car.row, c.path, allCars) }));
-      const minDanger = Math.min(...scored.map((s) => s.danger));
-      const tied = scored.filter((s) => s.danger === minDanger);
-      const preferredSlam = tied.find((s) => s.c.terminalReason === "slam" && s.c.slamTarget && SIZE_RANK[s.c.slamTarget.size] < SIZE_RANK[car.size]);
-      destination = (preferredSlam || tied[0]).c;
-    }
-  }
-
-  // --- Palier 4 : dernier recours ------------------------------------
-  if (!destination) {
-    const notImpassable = candidates.filter((c) => c.terminalReason !== "eliminated-impassable");
-    destination = notImpassable.length > 0
-      ? notImpassable.reduce((a, b) => (b.col > a.col ? b : a))
-      : candidates.reduce((a, b) => (b.stepsUsed > a.stepsUsed ? b : a));
-  }
-
-  // --- Reciblage Slam sur l'arc arrière (mécanisme existant, INCHANGÉ,
-  // limité aux destinations sans bonus Road — cf. limite documentée
-  // en tête de section) ----------------------------------------------
-  let slam = destination.terminalReason === "slam";
-  if (destination.terminalReason === "normal" && !roadBonusPath) {
-    const rearArc = getRearArc({ col: destination.col, row: destination.row });
-    for (const r of rearArc) {
-      const rearCandidate = candidates.find((c) => c.col === r.col && c.row === r.row && c.terminalReason === "slam");
-      if (!rearCandidate || !rearCandidate.slamTarget) continue;
-      if (SIZE_RANK[rearCandidate.slamTarget.size] < SIZE_RANK[car.size]) {
-        const evalResult = evaluateSlamCandidate(rearCandidate, dieValue, car.size, board);
-        if (evalResult.accept) {
-          destination = rearCandidate;
-          slam = true;
-          break;
-        }
-      }
-    }
-  }
-
-  const shotTarget = (destination.terminalReason !== "eliminated-impassable" && destination.terminalReason !== "eliminated-edge" && destination.terminalReason !== "eliminated-chopper")
-    ? chooseShootTarget(destination.col, destination.row, car.owner, allCars)
-    : null;
-
-  return { destination, shotTarget, slam, roadBonusPath };
-}
-
-/**
- * Symétrique de chooseGeneralTrajectory pour une voiture qui entre en
- * jeu (car.col === null) — MÊME cascade en 4 paliers (bonus Road >
- * destination propre la plus proche > chemin forcé le moins dangereux
- * > dernier recours), appliquée aux candidats de
- * computeReachableEntryDestinations plutôt qu'à ceux d'une voiture
- * déjà en mouvement. Voir le commentaire de
- * computeReachableEntryDestinations pour le détail de la règle p.9.
- *
- * Ne calcule jamais de shotTarget : le tir n'existe pas sur un tour
- * d'entrée (voir playTurnAssignEnterWithProgression, qui ne résout
- * aucun tir — confirmé par Mayrik, "pas de tir possible au round 1").
- */
-function chooseEntryTrajectory(board, car, dieValue, allCars, allChoppers, driftAvailable = false, roadDieValue = 0) {
-  const candidates = computeReachableEntryDestinations(board, dieValue, allCars, allChoppers, driftAvailable);
-  const cleanNormal = candidates.filter((c) => c.terminalReason === "normal" && c.dangerousCellsCrossed === 0);
-  const cleanProgress = candidates.filter((c) => (c.terminalReason === "normal" || c.terminalReason === "exits-front") && c.dangerousCellsCrossed === 0);
-
-  // --- Palier 1 : bonus Road, si applicable -------------------------
-  let destination = null;
-  let roadBonusPath = null;
-  if (roadDieValue > 0) {
-    const bonusEligible = cleanNormal.filter((c) => c.allRoad);
-    const bonusCandidates = [];
-    for (const base of bonusEligible) {
-      const extCar = { ...car, col: base.col, row: base.row };
-      const ext = computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable);
-      for (const e of ext) {
-        if ((e.terminalReason !== "normal" && e.terminalReason !== "exits-front") || e.dangerousCellsCrossed > 0) continue;
-        bonusCandidates.push({ col: e.col, row: e.row, basePath: base.path, extPath: e.path, entryRow: base.entryRow });
-      }
-    }
-    const chosenBonus = pickByTerrainPreference(bonusCandidates, board);
-    if (chosenBonus) {
-      destination = { col: chosenBonus.col, row: chosenBonus.row, stepsUsed: chosenBonus.basePath.length + chosenBonus.extPath.length + 1, terminalReason: "normal", slamTarget: null, path: chosenBonus.basePath, entryRow: chosenBonus.entryRow };
-      roadBonusPath = chosenBonus.extPath;
-    }
-  }
-
-  // --- Palier 2 : sans bonus, propre, tous terrains -----------------
-  if (!destination && cleanProgress.length > 0) {
-    const bestCol = Math.max(...cleanProgress.map((c) => c.col));
-    const atBestCol = cleanProgress
-      .filter((c) => c.col === bestCol)
-      .map((c) => ({ c, danger: arrivalDanger(board, c.col, c.row, allCars) }))
-      .sort((a, b) => a.danger - b.danger);
-    destination = atBestCol[0].c;
-  }
-
-  // --- Palier 3 : chemin forcé (aucune destination propre) ----------
-  if (!destination) {
-    const anyNormalOrSlam = candidates.filter((c) => c.terminalReason === "normal" || c.terminalReason === "slam" || c.terminalReason === "exits-front");
-    if (anyNormalOrSlam.length > 0) {
-      const bestCol = Math.max(...anyNormalOrSlam.map((c) => c.col));
-      const atBestCol = anyNormalOrSlam.filter((c) => c.col === bestCol);
-      const scored = atBestCol.map((c) => ({ c, danger: pathHazardDanger(board, 0, c.entryRow, c.path, allCars) }));
-      const minDanger = Math.min(...scored.map((s) => s.danger));
-      const tied = scored.filter((s) => s.danger === minDanger);
-      const preferredSlam = tied.find((s) => s.c.terminalReason === "slam" && s.c.slamTarget && SIZE_RANK[s.c.slamTarget.size] < SIZE_RANK[car.size]);
-      destination = (preferredSlam || tied[0]).c;
-    }
-  }
-
-  // --- Palier 4 : dernier recours ------------------------------------
-  if (!destination) {
-    const notImpassable = candidates.filter((c) => c.terminalReason !== "eliminated-impassable");
-    destination = notImpassable.length > 0
-      ? notImpassable.reduce((a, b) => (b.col > a.col ? b : a))
-      : candidates.reduce((a, b) => (b.stepsUsed > a.stepsUsed ? b : a));
-  }
-
-  // --- Reciblage Slam sur l'arc arrière (mécanisme existant, INCHANGÉ,
-  // limité aux destinations sans bonus Road) --------------------------
-  let slam = destination.terminalReason === "slam";
-  if (destination.terminalReason === "normal" && !roadBonusPath) {
-    const rearArc = getRearArc({ col: destination.col, row: destination.row });
-    for (const r of rearArc) {
-      const rearCandidate = candidates.find((c) => c.col === r.col && c.row === r.row && c.terminalReason === "slam");
-      if (!rearCandidate || !rearCandidate.slamTarget) continue;
-      if (SIZE_RANK[rearCandidate.slamTarget.size] < SIZE_RANK[car.size]) {
-        const evalResult = evaluateSlamCandidate(rearCandidate, dieValue, car.size, board);
-        if (evalResult.accept) {
-          destination = rearCandidate;
-          slam = true;
-          break;
-        }
-      }
-    }
-  }
-
-  return { destination, shotTarget: null, slam, roadBonusPath };
+// ===================================================================
+// SECTION 3B (SUITE) — FONCTION UNIQUE "Recherche de la meilleure
+// trajectoire", partagée par TOUT l'arbre (retour de Mayrik, 29/08) :
+// entrée en jeu ET mouvement normal, round 1 et rounds suivants, avec
+// ou sans Nitro/Drift. La cascade des 8 paliers (chooseBestTrajectory,
+// plus bas) EST le sous-programme "Recherche de la meilleure
+// trajectoire" du document — elle ne s'est JAMAIS souciée de savoir
+// si le véhicule entre en jeu ou se déplace déjà (elle prend déjà
+// `candidates` en paramètre, peu importe leur provenance). Seule la
+// provenance des candidats diffère (computeReachableEntryDestinations
+// vs computeReachableDestinations) : c'est tout ce que fait cette
+// fonction avant de déléguer à chooseBestTrajectory.
+//
+// SIMPLIFICATION : remplace deux anciennes implémentations séparées,
+// `chooseGeneralTrajectory` et `chooseEntryTrajectory` (chacune sa
+// propre cascade approximative à 2-4 paliers, sans la gradation
+// Route > Off-road > Mud > Hazard de l'arbre) — écrites avant que la
+// cascade à 8 paliers n'existe, jamais mises à jour depuis, seule
+// source du bug "case d'arrivée exclue du calcul de chemin propre"
+// (déjà corrigé dans chooseBestTrajectory, jamais dans ces deux-là).
+// Plus aucun appelant ne doit dupliquer sa propre cascade : un seul
+// sous-programme, comme le montre l'arbre.
+//
+// `shotTarget` n'est PAS calculé ici (l'ancien retour le faisait,
+// mais aucun appelant ne l'utilisait jamais — la vraie cible de tir
+// est recalculée séparément, après coup, par
+// computeShotTargetForDecision, sur la destination RÉELLEMENT atteinte
+// une fois le mouvement résolu par le moteur — un Slam peut encore la
+// changer entre-temps).
+function findBestTrajectory(board, car, dieValue, allCars, allChoppers, driftAvailable = false, roadDieValue = 0) {
+  const candidates = car.col === null
+    ? computeReachableEntryDestinations(board, dieValue, allCars, allChoppers, driftAvailable)
+    : computeReachableDestinations(board, car, dieValue, allCars, allChoppers, driftAvailable);
+  const result = chooseBestTrajectory(board, car, candidates, roadDieValue, allCars, allChoppers, driftAvailable);
+  return {
+    destination: result.destination,
+    slam: !!result.slamTarget,
+    roadBonusPath: result.roadBonusPath
+  };
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  Object.assign(module.exports, { chooseShootTarget, chooseGeneralTrajectory, chooseEntryTrajectory, dangerValueOfCell, chooseBestTrajectory, isCleanPathToDestination, computeShotTargetForDecision });
+  Object.assign(module.exports, { chooseShootTarget, findBestTrajectory, chooseBestTrajectory, dangerValueOfCell, isTrulyCleanPath, isCleanPathExceptDestination, computeShotTargetForDecision });
 }
 
 // ===================================================================
@@ -5073,14 +4893,51 @@ if (typeof module !== "undefined" && module.exports) {
 // de "chemin propre", sinon aucune destination hazard ne passerait
 // jamais le filtre alors que l'arbre dit explicitement "évitant tous
 // les hazards dangereux SUR LE CHEMIN" (donc hors case d'arrivée).
-function isCleanPathToDestination(board, candidate) {
+// CORRECTIF (29/08, retour de Mayrik) — POINT 1 : toute la cascade
+// (Route, Off-road, Mud) était censée éviter les hazards dangereux du
+// DÉBUT À LA FIN, case d'arrivée COMPRISE ("chaque case de toute la
+// cascade... était prévue pour éviter les cases avec des hazards, du
+// début à la fin"). L'ancienne isCleanPathToDestination excluait à
+// tort la case d'arrivée de ce calcul pour TOUS les paliers qui
+// l'utilisaient — cette exclusion n'a de sens QUE pour T6
+// (hazard_dangereux_chemin_propre), dont la destination EST par
+// définition un hazard : sans exclure cette case précise de son propre
+// calcul, T6 ne pourrait jamais avoir le moindre candidat (sa
+// destination invaliderait toujours son propre chemin). Appliquée à
+// TOUS les autres paliers (Route/Off-road/Mud/catch-all), cette
+// exclusion laissait passer à tort une destination hazard tant que
+// rien d'AUTRE n'avait été traversé — exactement la cause du problème
+// observé ("des mouvements finissent sur des cases avec hazards").
+// Deux fonctions bien séparées désormais :
+//   - isTrulyCleanPath : AUCUNE case dangereuse, arrivée comprise —
+//     pour tous les paliers de terrain (T1 à T5, TB1 à TB4).
+//   - isCleanPathExceptDestination : chemin propre SAUF la case
+//     d'arrivée elle-même — réservée à T6, seul palier dont la
+//     destination est un hazard par construction.
+function isTrulyCleanPath(candidate) {
+  return candidate.dangerousCellsCrossed === 0;
+}
+
+function isCleanPathExceptDestination(board, candidate) {
   const destSpace = getSpace(board, candidate.col, candidate.row);
   const destIsDangerous = destSpace ? isDangerousCell(destSpace) : false;
   return candidate.dangerousCellsCrossed - (destIsDangerous ? 1 : 0) === 0;
 }
 
+// CORRECTIF (29/08) : "slam" doit être un arrêt VALIDE pour la
+// cascade, pas seulement "normal"/"exits-front" — sinon, dès qu'une
+// voiture est bloquée de toutes parts par des véhicules plus petits
+// (seule issue possible : les percuter), plus AUCUN candidat ne passe
+// ce filtre, tous les paliers T1-T8 restent vides, et le dernier
+// recours (qui ne considère que "eliminated-impassable") l'est aussi
+// → destination null, alors que resolveRearArcSlam (juste après dans
+// chooseBestTrajectory) est déjà prévu pour accepter un résultat de
+// cascade qui EST directement un Slam. Une destination Slam a, comme
+// n'importe quelle autre, un terrain/hazard sous-jacent bien réel
+// (l'occupant ne change rien à la case elle-même) : les paliers T1-T8
+// la classent donc normalement, sans changement nécessaire ailleurs.
 function isValidStop(c) {
-  return c.terminalReason === "normal" || c.terminalReason === "exits-front";
+  return c.terminalReason === "normal" || c.terminalReason === "exits-front" || c.terminalReason === "slam";
 }
 
 function destinationTerrain(board, c) {
@@ -5103,42 +4960,51 @@ function bestProgress(group) {
 
 // Les 8 paliers de la cascade SANS bonus, dans l'ordre exact de
 // l'arbre. `compareToNext: true` = palier "adjacent" (ne gagne que
-// s'il bat STRICTEMENT le palier suivant) ; `compareToNext: false` =
-// palier "présence seule" (gagne dès qu'il n'est pas vide).
+// s'il ÉGALE OU BAT le palier de comparaison — voir POINT 2
+// ci-dessous) ; `compareToNext: false` = palier "présence seule"
+// (gagne dès qu'il n'est pas vide).
+// EXCEPTION DE CIBLE (retour de Mayrik, 29/08, arbre "Recherche de la
+// meilleure trajectoire") : T4_mud et T5_tout_terrain_propre ne se
+// comparent PAS au palier suivant du tableau, mais tous les deux à
+// T7 (= "Hazard", n'importe quelle case avec un jeton hazard dessus,
+// chemin propre ou non) — voir `compareAgainst` dans
+// resolveAdjacentCascade.
 function buildNoBonusTiers(board) {
   return [
     {
       name: "T1_route_pure",
       compareToNext: false,
-      predicate: (c) => c.allRoad && destinationTerrain(board, c) === TERRAIN.ROAD && isCleanPathToDestination(board, c)
+      predicate: (c) => c.allRoad && destinationTerrain(board, c) === TERRAIN.ROAD && isTrulyCleanPath(c)
     },
     {
       name: "T2_route_mixte",
       compareToNext: true,
-      predicate: (c) => destinationTerrain(board, c) === TERRAIN.ROAD && isCleanPathToDestination(board, c)
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.ROAD && isTrulyCleanPath(c)
     },
     {
       name: "T3_offroad",
       compareToNext: true,
-      predicate: (c) => destinationTerrain(board, c) === TERRAIN.OFF_ROAD && isCleanPathToDestination(board, c)
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.OFF_ROAD && isTrulyCleanPath(c)
     },
     {
       name: "T4_mud",
       compareToNext: true,
-      predicate: (c) => destinationTerrain(board, c) === TERRAIN.MUD && isCleanPathToDestination(board, c)
+      compareAgainst: "T7_hazard_dangereux_meme_via_hazard",
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.MUD && isTrulyCleanPath(c)
     },
     {
       name: "T5_tout_terrain_propre",
       compareToNext: true,
+      compareAgainst: "T7_hazard_dangereux_meme_via_hazard",
       predicate: (c) =>
         destinationTerrain(board, c) !== TERRAIN.IMPASSABLE &&
         !isHazardDangereuxDestination(board, c) &&
-        isCleanPathToDestination(board, c)
+        isTrulyCleanPath(c)
     },
     {
       name: "T6_hazard_dangereux_chemin_propre",
       compareToNext: true,
-      predicate: (c) => isHazardDangereuxDestination(board, c) && isCleanPathToDestination(board, c)
+      predicate: (c) => isHazardDangereuxDestination(board, c) && isCleanPathExceptDestination(board, c)
     },
     {
       name: "T7_hazard_dangereux_meme_via_hazard",
@@ -5160,30 +5026,53 @@ function buildBonusTiers(board) {
   return [
     {
       name: "TB1_route_pure",
-      predicate: (c) => c.allRoad && destinationTerrain(board, c) === TERRAIN.ROAD && isCleanPathToDestination(board, c)
+      predicate: (c) => c.allRoad && destinationTerrain(board, c) === TERRAIN.ROAD && isTrulyCleanPath(c)
     },
     {
       name: "TB2_route_mixte",
-      predicate: (c) => destinationTerrain(board, c) === TERRAIN.ROAD && isCleanPathToDestination(board, c)
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.ROAD && isTrulyCleanPath(c)
     },
     {
       name: "TB3_offroad",
-      predicate: (c) => destinationTerrain(board, c) === TERRAIN.OFF_ROAD && isCleanPathToDestination(board, c)
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.OFF_ROAD && isTrulyCleanPath(c)
     },
     {
       name: "TB4_mud",
-      predicate: (c) => destinationTerrain(board, c) === TERRAIN.MUD && isCleanPathToDestination(board, c)
+      predicate: (c) => destinationTerrain(board, c) === TERRAIN.MUD && isTrulyCleanPath(c)
     }
   ];
 }
 
 // Applique la cascade "adjacente" (paliers sans-bonus) : renvoie le
 // groupe de candidats du palier gagnant, à leur meilleure colonne.
+// Par défaut, un palier "adjacent" (compareToNext: true) se compare
+// au palier SUIVANT dans le tableau. `compareAgainst` (nom de palier)
+// permet à un palier de se comparer à un AUTRE palier que le suivant
+// immédiat — utilisé par T4_mud et T5_tout_terrain_propre, qui se
+// comparent tous les deux à T7 (= "Hazard" au sens de l'arbre :
+// n'importe quelle case portant un jeton hazard, chemin propre ou
+// non), confirmé par Mayrik, plutôt qu'au palier qui les suit
+// directement dans le tableau.
+//
+// CORRECTIF (29/08, retour de Mayrik) — POINT 2, généralisation de
+// "à même distance" : TOUTE comparaison de la cascade (pas seulement
+// Mud face à Hazard) utilise désormais "plus loin OU À ÉGALITÉ"
+// (>=), plus jamais "strictement plus loin" (>). Descendre d'un
+// palier vers un terrain de moins bonne qualité (voire un hazard) ne
+// se justifie que si ce palier inférieur permet réellement d'aller
+// PLUS LOIN — jamais à seule fin de "faire un choix" quand les deux
+// options se valent en distance. Avant ce correctif, une égalité de
+// distance entre deux paliers adjacents faisait perdre le palier
+// supérieur (une égalité ne bat jamais STRICTEMENT), donc la cascade
+// continuait à descendre inutilement vers une case de moins bonne
+// qualité, ou pire, vers un hazard, alors qu'une case tout aussi
+// bonne (ou plus sûre) existait déjà au palier du dessus.
 function resolveAdjacentCascade(candidates, tiers) {
   const stops = candidates.filter(isValidStop);
   // Groupe de chaque palier, pré-calculé une fois.
   const groups = tiers.map((t) => stops.filter(t.predicate));
   const bests = groups.map(bestProgress);
+  const indexByName = new Map(tiers.map((t, idx) => [t.name, idx]));
 
   for (let i = 0; i < tiers.length; i++) {
     if (groups[i].length === 0) continue;
@@ -5192,11 +5081,11 @@ function resolveAdjacentCascade(candidates, tiers) {
       const best = bests[i];
       return groups[i].filter((c) => c.col === best);
     }
-    // Palier "adjacent" : ne gagne que s'il bat STRICTEMENT le
-    // suivant. Sinon on continue la boucle (on descend d'un cran).
-    if (bests[i] > bests[i + 1]) {
+    const targetIndex = tiers[i].compareAgainst ? indexByName.get(tiers[i].compareAgainst) : i + 1;
+    if (bests[i] >= bests[targetIndex]) {
       return groups[i].filter((c) => c.col === bests[i]);
     }
+    // Sinon on continue la boucle (on descend d'un cran).
   }
 
   // Dernier recours garanti par l'arbre : trajectoire la PLUS LONGUE
@@ -5647,12 +5536,8 @@ function decideNitroOrAirstrikeForLot(car, progressionState, myOperableCars, big
   const nitroDice = remainingDiceForCommand.filter((v) => v >= 1 && v <= 3);
   if (eligiblePosition && nitroDice.length > 0) {
     const nitroDie = Math.max(...nitroDice);
-    const withNitroTraj = car.col === null
-      ? chooseEntryTrajectory(board, car, movementDie + nitroDie, allCars, allChoppers, false, roadDieValue || 0)
-      : chooseGeneralTrajectory(board, car, movementDie + nitroDie, allCars, allChoppers, false, roadDieValue || 0);
-    const withoutNitroTraj = car.col === null
-      ? chooseEntryTrajectory(board, car, movementDie, allCars, allChoppers, false, roadDieValue || 0)
-      : chooseGeneralTrajectory(board, car, movementDie, allCars, allChoppers, false, roadDieValue || 0);
+    const withNitroTraj = findBestTrajectory(board, car, movementDie + nitroDie, allCars, allChoppers, false, roadDieValue || 0);
+    const withoutNitroTraj = findBestTrajectory(board, car, movementDie, allCars, allChoppers, false, roadDieValue || 0);
 
     if (withNitroTraj.destination.col > withoutNitroTraj.destination.col) {
       return { command: { type: "nitro", dieValue: nitroDie }, movementDie, deferMovementDie: movementDie, precomputedTraj: withNitroTraj };
@@ -5840,11 +5725,8 @@ function decideFirstRound(progressionState, board, allCars, allChoppers, dicePoo
       const baseMovementDie = lot[1 - nitroIndex];
       const withNitroValue = baseMovementDie + nitroDie;
 
-      const withNitroCandidates = computeReachableEntryDestinations(board, withNitroValue, allCars, allChoppers, false);
-      const withNitroTraj = chooseBestTrajectory(board, car, withNitroCandidates, roundState.roadDie || 0, allCars, allChoppers, false);
-
-      const withoutNitroCandidates = computeReachableEntryDestinations(board, baseMovementDie, allCars, allChoppers, false);
-      const withoutNitroTraj = chooseBestTrajectory(board, car, withoutNitroCandidates, roundState.roadDie || 0, allCars, allChoppers, false);
+      const withNitroTraj = findBestTrajectory(board, car, withNitroValue, allCars, allChoppers, false, roundState.roadDie || 0);
+      const withoutNitroTraj = findBestTrajectory(board, car, baseMovementDie, allCars, allChoppers, false, roundState.roadDie || 0);
 
       if (withNitroTraj.destination.col > withoutNitroTraj.destination.col) {
         movementDieValue = baseMovementDie;
@@ -5886,7 +5768,7 @@ function decideFirstRound(progressionState, board, allCars, allChoppers, dicePoo
   }
 
   const effectiveDieValue = command && command.type === "nitro" ? movementDieValue + command.dieValue : movementDieValue;
-  const traj = precomputedTraj || chooseBestTrajectory(board, car, computeReachableEntryDestinations(board, effectiveDieValue, allCars, allChoppers, false), roundState.roadDie || 0, allCars, allChoppers, false);
+  const traj = precomputedTraj || findBestTrajectory(board, car, effectiveDieValue, allCars, allChoppers, false, roundState.roadDie || 0);
 
   return {
     car,
@@ -5895,7 +5777,7 @@ function decideFirstRound(progressionState, board, allCars, allChoppers, dicePoo
     destination: traj.destination,
     isEntry: true,
     isCoast: false,
-    slam: !!traj.slamTarget,
+    slam: traj.slam,
     roadBonusPath: traj.roadBonusPath
   };
 }
@@ -5989,18 +5871,8 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
     const car = chooseCommandAlreadyUsedRecipient(notYetActivated, myOperableCars, allCars, progressionState);
     const movementDieFinal = Math.max(...myPool);
 
-    let destination, slam, roadBonusPath;
-    if (car.col === null) {
-      const traj = chooseEntryTrajectory(board, car, movementDieFinal, allCars, allChoppers, false, roundState.roadDie || 0);
-      destination = traj.destination;
-      slam = traj.slam;
-      roadBonusPath = traj.roadBonusPath;
-    } else {
-      const traj = chooseGeneralTrajectory(board, car, movementDieFinal, allCars, allChoppers, false, roundState.roadDie || 0);
-      destination = traj.destination;
-      slam = traj.slam;
-      roadBonusPath = traj.roadBonusPath;
-    }
+    const traj = findBestTrajectory(board, car, movementDieFinal, allCars, allChoppers, false, roundState.roadDie || 0);
+    const { destination, slam, roadBonusPath } = traj;
 
     return {
       car,
@@ -6111,21 +5983,13 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
     destination = precomputedNitroTraj.destination;
     slam = precomputedNitroTraj.slam;
     roadBonusPath = precomputedNitroTraj.roadBonusPath;
-  } else if (car.col === null) {
-    // Entrée en jeu (p.9) — CORRECTIF : auparavant codée en dur sur
-    // la seule case d'entrée (stepsUsed:0, sans suite de trajectoire),
-    // ce qui faisait perdre tout mouvement restant à chaque entrée.
-    // Utilise maintenant la même exploration/cascade que le mouvement
-    // normal (voir chooseEntryTrajectory), avec le dé effectif
-    // (Nitro éventuel inclus, comme pour une voiture déjà en jeu).
-    const driftActive = !!(command && command.type === "drift");
-    const traj = chooseEntryTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActive, roundState.roadDie || 0);
-    destination = traj.destination;
-    slam = traj.slam;
-    roadBonusPath = traj.roadBonusPath;
   } else {
+    // Entrée en jeu (p.9) OU mouvement normal — même sous-programme
+    // partagé (findBestTrajectory), quelle que soit la situation
+    // (voir sa documentation), avec le dé effectif (Nitro éventuel
+    // inclus, comme pour une voiture déjà en jeu).
     const driftActive = !!(command && command.type === "drift");
-    const traj = chooseGeneralTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActive, roundState.roadDie || 0);
+    const traj = findBestTrajectory(board, car, effectiveDieValue, allCars, allChoppers, driftActive, roundState.roadDie || 0);
     destination = traj.destination;
     slam = traj.slam;
     roadBonusPath = traj.roadBonusPath;
@@ -6214,13 +6078,13 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
   // rallier directement la ligne (pas de sens tant que la voiture n'a
   // pas encore mis une roue sur le plateau).
   if (car.col === null) {
-    const traj = chooseEntryTrajectory(board, car, biggestDie, allCars, allChoppers, false, roundState.roadDie || 0);
+    const traj = findBestTrajectory(board, car, biggestDie, allCars, allChoppers, false, roundState.roadDie || 0);
     return { car, dieValue: biggestDie, command: null, destination: traj.destination, isEntry: true, isCoast: false, slam: traj.slam, roadBonusPath: traj.roadBonusPath };
   }
 
   // "Recherche de la meilleure trajectoire" (dé assigné seul) ->
   // "Atteindra-t-on la ligne d'arrivée avec cette destination ?"
-  const baseTraj = chooseGeneralTrajectory(board, car, biggestDie, allCars, allChoppers, false, roundState.roadDie || 0);
+  const baseTraj = findBestTrajectory(board, car, biggestDie, allCars, allChoppers, false, roundState.roadDie || 0);
   if (baseTraj.destination.col >= finishColStart) {
     // Cas simple : on peut déjà l'atteindre avec le seul dé assigné —
     // aucune Command, aucune autre considération (arbre : ce nœud ne
@@ -6271,7 +6135,7 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
         // déjà assigné (biggestDie) ; seul le déblocage de l'arc avant
         // change via driftAvailable=true.
         const driftDie = Math.min(...remaining345);
-        const driftTraj = chooseGeneralTrajectory(board, car, biggestDie, allCars, allChoppers, true, roundState.roadDie || 0);
+        const driftTraj = findBestTrajectory(board, car, biggestDie, allCars, allChoppers, true, roundState.roadDie || 0);
         command = { type: "drift", dieValue: driftDie };
         destination = driftTraj.destination;
         slam = driftTraj.slam;
@@ -6300,7 +6164,7 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
           // possible), donc pas besoin de `remaining` pour ce choix —
           // mais on ne l'utilise QUE s'il en reste au moins un.
           const smallestDie = Math.min(...remaining);
-          const fallbackTraj = chooseGeneralTrajectory(board, car, smallestDie, allCars, allChoppers, false, roundState.roadDie || 0);
+          const fallbackTraj = findBestTrajectory(board, car, smallestDie, allCars, allChoppers, false, roundState.roadDie || 0);
           dieValueFinal = smallestDie;
           destination = fallbackTraj.destination;
           slam = fallbackTraj.slam;
@@ -6320,7 +6184,7 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
         // avec dé Assigné + dé Nitro" -> "Atteindra-t-on la ligne
         // d'arrivée avec cette destination ?" (RECHECK).
         const nitroDie = Math.max(...nitroDice);
-        const nitroTraj = chooseGeneralTrajectory(board, car, biggestDie + nitroDie, allCars, allChoppers, false, roundState.roadDie || 0);
+        const nitroTraj = findBestTrajectory(board, car, biggestDie + nitroDie, allCars, allChoppers, false, roundState.roadDie || 0);
         if (nitroTraj.destination.col >= finishColStart) {
           command = { type: "nitro", dieValue: nitroDie };
           destination = nitroTraj.destination;
