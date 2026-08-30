@@ -424,7 +424,13 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
 // SECTION 7 — decideFinishLineRush + decideAssignAndCommand (dispatch)
 // -----------------------------------------------------------------
 {
-  const board = emptyBoard();
+  // NOTE (retour de Mayrik, 29/08) : la Finish Line est physiquement
+  // une case ROUTE (createFinishLineTile, engine.js) — on utilise donc
+  // ici un plateau de test assez large pour que la colonne 24 EXISTE
+  // réellement (route partout), au lieu de forcer une sortie de
+  // plateau générique ("exits-front", sans terrain connu) qui ne
+  // reflèterait pas fidèlement une vraie Finish Line déjà posée.
+  const board = emptyBoard(30);
   const progressionStateFL = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 }, finishLineTile: {} };
   const carNearFinish = createCar("A", CAR_SIZE.SMALL, 20, 2);
   const carMid = createCar("A", CAR_SIZE.MEDIUM, 10, 2);
@@ -439,7 +445,7 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
 }
 {
   // Ligne d'arrivée atteignable seulement AVEC Nitro.
-  const board = emptyBoard();
+  const board = emptyBoard(30); // idem ci-dessus : colonne 24 doit exister réellement (route)
   const progressionStateFL = { rearTile: { cols: 8 }, middleTile: { cols: 8 }, leadTile: { cols: 8 }, finishLineTile: {} };
   const carNeedsNitro = createCar("A", CAR_SIZE.SMALL, 20, 2); // besoin de 4, dé max dispo = 3 seul
   const allCars3 = [carNeedsNitro];
@@ -692,10 +698,15 @@ function emptyBoard(cols = 24, rows = 6, terrain = TERRAIN.ROAD) {
 }
 
 // -----------------------------------------------------------------
-// SECTION 10 — chooseGeneralTrajectory : nouvelle cascade (2e arbre
-// de Mayrik, clarifiée et validée cas par cas avec un viewer visuel
-// avant implémentation — voir tools/analyze-new-trajectory.js et
-// tools/trajectory-comparison.html pour la démarche de validation)
+// SECTION 10 — findBestTrajectory (mouvement) : cascade unifiée (2e
+// arbre de Mayrik, "Recherche de la meilleure trajectoire") — un seul
+// sous-programme partagé, remplaçant les anciennes
+// chooseGeneralTrajectory/chooseEntryTrajectory séparées (retour de
+// Mayrik, 29/08 : "je veux exactement ce qui est dessiné dans mon
+// arbre"). Les tests ci-dessous appellent findBestTrajectory sur une
+// voiture déjà sur le plateau (mouvement) ; la section "ENTRÉE EN JEU"
+// plus bas l'appelle sur une voiture hors plateau (entrée) — même
+// fonction, seule la provenance des candidats diffère en interne.
 // -----------------------------------------------------------------
 function getTerrainAt(board, dest) {
   const space = engine.getSpace(board, dest.col, dest.row);
@@ -711,11 +722,11 @@ function getTerrainAt(board, dest) {
   const board = emptyBoard();
   const car = createCar("A", CAR_SIZE.MEDIUM, 0, 2);
   const allCars = [car];
-  const withoutBonus = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 0);
-  const withBonus = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 2);
-  assert(withoutBonus.destination.col === 2, "chooseGeneralTrajectory : sans dé Road fourni, pas de bonus, arrêt normal au bout du dé assigné");
-  assert(withBonus.destination.col === 4, "chooseGeneralTrajectory : bonus Road exploité quand tout le trajet (base+extension) reste sur route et propre");
-  assert(!!withBonus.roadBonusPath && withBonus.roadBonusPath.length === 2, "chooseGeneralTrajectory : le chemin d'extension du bonus est bien renvoyé séparément (nécessaire à l'exécution réelle)");
+  const withoutBonus = ai.findBestTrajectory(board, car, 2, allCars, [], false, 0);
+  const withBonus = ai.findBestTrajectory(board, car, 2, allCars, [], false, 2);
+  assert(withoutBonus.destination.col === 2, "findBestTrajectory : sans dé Road fourni, pas de bonus, arrêt normal au bout du dé assigné");
+  assert(withBonus.destination.col === 4, "findBestTrajectory : bonus Road exploité quand tout le trajet (base+extension) reste sur route et propre");
+  assert(!!withBonus.roadBonusPath && withBonus.roadBonusPath.length === 2, "findBestTrajectory : le chemin d'extension du bonus est bien renvoyé séparément (nécessaire à l'exécution réelle)");
 }
 {
   // Préférence de terrain PARMI les candidats bonus : Route > Off-Road > Mud,
@@ -728,8 +739,8 @@ function getTerrainAt(board, dest) {
   const frontCell = engine.getFrontArc({ col: 0, row: 2 }).find((a) => a.name === "front");
   board.grid[frontCell.row][frontCell.col].terrain = TERRAIN.IMPASSABLE;
   board.grid[1][3].terrain = TERRAIN.MUD; // (3,1) devient Mud ; (3,0) reste Route, même colonne
-  const result = ai.chooseGeneralTrajectory(board, car, 2, [car], [], false, 2);
-  assert(getTerrainAt(board, result.destination) === TERRAIN.ROAD, "chooseGeneralTrajectory : une case Route à distance équivalente est préférée à une case Mud parmi les candidats bonus");
+  const result = ai.findBestTrajectory(board, car, 2, [car], [], false, 2);
+  assert(getTerrainAt(board, result.destination) === TERRAIN.ROAD, "findBestTrajectory : une case Route à distance équivalente est préférée à une case Mud parmi les candidats bonus");
 }
 {
   // Palier 2 (sans bonus, départage par danger d'arrivée GRADUÉ) :
@@ -743,10 +754,10 @@ function getTerrainAt(board, dest) {
   board.grid[frontCell.row][frontCell.col].terrain = TERRAIN.IMPASSABLE;
   const enemy = createCar("B", CAR_SIZE.MEDIUM, 6, 4); // en arc arrière d'un seul des candidats à égalité
   const allCars = [car, enemy];
-  const result = ai.chooseGeneralTrajectory(board, car, 3, allCars, [], false, 0);
+  const result = ai.findBestTrajectory(board, car, 3, allCars, [], false, 0);
   const rearOfChosen = engine.getRearArc({ col: result.destination.col, row: result.destination.row });
   const enemyBehindChosen = rearOfChosen.some((r) => r.col === enemy.col && r.row === enemy.row);
-  assert(!enemyBehindChosen, "chooseGeneralTrajectory : parmi des destinations à égalité de progression, celle avec le voisinage le moins dangereux (pas d'adversaire en arc arrière) est préférée");
+  assert(!enemyBehindChosen, "findBestTrajectory : parmi des destinations à égalité de progression, celle avec le voisinage le moins dangereux (pas d'adversaire en arc arrière) est préférée");
 }
 {
   // Palier 3 (chemin forcé) : priorité à un Slam contre un adversaire
@@ -762,9 +773,9 @@ function getTerrainAt(board, dest) {
     }
   }
   const allCars = [car, smallEnemy];
-  const result = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 0);
-  assert(result.destination.terminalReason === "slam" && result.slam, "chooseGeneralTrajectory : Slam contre un adversaire plus petit choisi comme destination quand c'est la seule voie forcée disponible");
-  assert(result.destination.slamTarget.id === smallEnemy.id, "chooseGeneralTrajectory : la cible du Slam est bien le plus petit adversaire disponible");
+  const result = ai.findBestTrajectory(board, car, 2, allCars, [], false, 0);
+  assert(result.destination.terminalReason === "slam" && result.slam, "findBestTrajectory : Slam contre un adversaire plus petit choisi comme destination quand c'est la seule voie forcée disponible");
+  assert(result.destination.slamTarget.id === smallEnemy.id, "findBestTrajectory : la cible du Slam est bien le plus petit adversaire disponible");
 }
 {
   // Reciblage Slam sur l'arc arrière (mécanisme PRÉEXISTANT, non
@@ -773,8 +784,8 @@ function getTerrainAt(board, dest) {
   const car = createCar("A", CAR_SIZE.MEDIUM, 0, 2);
   const smallEnemy = createCar("B", CAR_SIZE.SMALL, 1, 3); // rear-right de la destination naturelle (2,2), plus petit
   const allCars = [car, smallEnemy];
-  const result = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 0);
-  assert(result.slam === true && result.destination.col === 1 && result.destination.row === 3, "chooseGeneralTrajectory : reciblage sur l'arc arrière toujours actif sans bonus Road (mécanisme préexistant préservé)");
+  const result = ai.findBestTrajectory(board, car, 2, allCars, [], false, 0);
+  assert(result.slam === true && result.destination.col === 1 && result.destination.row === 3, "findBestTrajectory : reciblage sur l'arc arrière toujours actif sans bonus Road (mécanisme préexistant préservé)");
 }
 {
   // LIMITE CONNUE ET DOCUMENTÉE : le reciblage sur l'arc arrière ne
@@ -785,13 +796,14 @@ function getTerrainAt(board, dest) {
   const car = createCar("A", CAR_SIZE.MEDIUM, 0, 2);
   const smallEnemy = createCar("B", CAR_SIZE.SMALL, 1, 3); // serait en arc arrière du point de base (2,2)
   const allCars = [car, smallEnemy];
-  const result = ai.chooseGeneralTrajectory(board, car, 2, allCars, [], false, 2); // bonus actif
-  assert(result.destination.terminalReason === "normal" && !result.slam, "chooseGeneralTrajectory : le reciblage arc arrière est bien ignoré (limite documentée) quand un bonus Road est utilisé");
+  const result = ai.findBestTrajectory(board, car, 2, allCars, [], false, 2); // bonus actif
+  assert(result.destination.terminalReason === "normal" && !result.slam, "findBestTrajectory : le reciblage arc arrière est bien ignoré (limite documentée) quand un bonus Road est utilisé");
 }
 
 // -----------------------------------------------------------------
 // SECTION 8 — ENTRÉE EN JEU (p.9) : computeReachableEntryDestinations
-// et chooseEntryTrajectory
+// et findBestTrajectory (même fonction que SECTION 10, appliquée ici
+// à une voiture hors plateau — voir son en-tête)
 // -----------------------------------------------------------------
 // CORRECTIF SESSION (bug signalé par Mayrik) : l'entrée était codée
 // en dur sur la seule case d'entrée (stepsUsed:0, aucune suite de
@@ -851,16 +863,21 @@ function getTerrainAt(board, dest) {
   assert(slam.stepsUsed === 1, "computeReachableEntryDestinations : le Slam à l'entrée arrête net (1 pas, pas le dé entier)");
 }
 
-// 5. chooseEntryTrajectory bout-en-bout : sur route partout, la
+// 5. findBestTrajectory bout-en-bout : sur route partout, la
 // destination finale doit refléter une vraie progression (col > 0),
 // pas un arrêt artificiel à l'entrée.
 {
   const board = emptyBoard();
   const car = createCarOffBoard("A", CAR_SIZE.LARGE);
-  const traj = ai.chooseEntryTrajectory(board, car, 4, [car], [], false, 0);
-  assert(traj.destination.col > 0, "chooseEntryTrajectory : la destination choisie progresse bien au-delà de la colonne 0");
-  assert(traj.destination.terminalReason === "normal", "chooseEntryTrajectory : arrêt normal (budget épuisé), pas un Slam ou une élimination sur ce plateau vide");
-  assert(traj.shotTarget === null, "chooseEntryTrajectory : jamais de tir sur un tour d'entrée (round 1)");
+  const traj = ai.findBestTrajectory(board, car, 4, [car], [], false, 0);
+  assert(traj.destination.col > 0, "findBestTrajectory : la destination choisie progresse bien au-delà de la colonne 0");
+  assert(traj.destination.terminalReason === "normal", "findBestTrajectory : arrêt normal (budget épuisé), pas un Slam ou une élimination sur ce plateau vide");
+  // findBestTrajectory ne calcule plus jamais shotTarget lui-même
+  // (retiré, 29/08 : mort depuis toujours — la vraie cible de tir est
+  // recalculée séparément après coup, une fois le mouvement réellement
+  // résolu, voir computeShotTargetForDecision) — rien à vérifier ici
+  // au-delà de l'absence du champ, ce test n'a donc plus lieu d'être.
+  assert(traj.shotTarget === undefined, "findBestTrajectory : ne calcule plus de shotTarget (mort de toute façon, recalculé séparément par computeShotTargetForDecision)");
 }
 
 // 6. Bonus Road à l'entrée : entrée sur route + dé Road disponible →
@@ -870,10 +887,10 @@ function getTerrainAt(board, dest) {
 {
   const board = emptyBoard(); // route partout
   const car = createCarOffBoard("A", CAR_SIZE.MEDIUM);
-  const withoutBonus = ai.chooseEntryTrajectory(board, car, 2, [car], [], false, 0);
-  const withBonus = ai.chooseEntryTrajectory(board, car, 2, [car], [], false, 5);
-  assert(withBonus.roadBonusPath !== null, "chooseEntryTrajectory : bonus Road bien détecté et appliqué à une entrée 100% route");
-  assert(withBonus.destination.col > withoutBonus.destination.col, "chooseEntryTrajectory : le bonus Road prolonge bien la progression au-delà du dé assigné seul");
+  const withoutBonus = ai.findBestTrajectory(board, car, 2, [car], [], false, 0);
+  const withBonus = ai.findBestTrajectory(board, car, 2, [car], [], false, 5);
+  assert(withBonus.roadBonusPath !== null, "findBestTrajectory : bonus Road bien détecté et appliqué à une entrée 100% route");
+  assert(withBonus.destination.col > withoutBonus.destination.col, "findBestTrajectory : le bonus Road prolonge bien la progression au-delà du dé assigné seul");
 }
 
 // 7. Intégration complète via decideNoFinishLine : une voiture pas
@@ -1007,8 +1024,11 @@ function mkCandidate(col, row, opts = {}) {
   assert(result.destination.col === 8, "chooseBestTrajectory T2 vs T3 : tombe à off-road quand il progresse plus loin");
 }
 
-// A4. Égalité stricte T2/T3 : route ne l'emporte QUE si strictement
-// meilleure — une égalité fait tomber au palier suivant (off-road).
+// A4. Égalité de progression T2/T3 (retour de Mayrik, 29/08, POINT 2 :
+// généralisation de "à même distance" à toute la cascade) : route
+// l'emporte désormais aussi à ÉGALITÉ avec off-road, pas seulement si
+// strictement meilleure — descendre à une case de moins bonne qualité
+// ne se justifie que si elle permet réellement d'aller plus loin.
 {
   const board = emptyBoard();
   board.grid[2][6].terrain = TERRAIN.ROAD;      // T2, col 6
@@ -1019,7 +1039,7 @@ function mkCandidate(col, row, opts = {}) {
     mkCandidate(6, 3, { stepsUsed: 5 })  // T3 : off-road, col 6 (égalité)
   ];
   const result = ai.chooseBestTrajectory(board, car, candidates, 0, [car], []);
-  assert(result.destination.row === 3, "chooseBestTrajectory T2 vs T3 : égalité de progression → tombe à off-road (pas 'strictement meilleur')");
+  assert(result.destination.row === 2, "chooseBestTrajectory T2 vs T3 : égalité de progression → route l'emporte (meilleure qualité à distance égale)");
 }
 
 // A5. T4 (mud) seul présent : gagne par défaut face aux paliers
