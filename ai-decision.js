@@ -567,13 +567,6 @@ function arrivalDanger(board, col, row, allCars) {
   return neighbors.reduce((sum, n) => sum + dangerValueOfCell(board, n.col, n.row, allCars), 0);
 }
 
-// Danger du CHEMIN traversé = somme des cases HAZARD uniquement
-// (terrain nu exclu, déjà capturé par le coût de déplacement).
-// `startCol`/`startRow` est le point de départ du chemin — la
-// position actuelle de la voiture pour un mouvement normal, ou la
-// rangée d'entrée (colonne 0) pour un trajet d'entrée en jeu (voir
-// chooseEntryTrajectory, où `path` ne liste que la CONTINUATION
-// après l'entrée, jamais l'entrée elle-même).
 // ===================================================================
 // SECTION 3B (SUITE) — FONCTION UNIQUE "Recherche de la meilleure
 // trajectoire", partagée par TOUT l'arbre (retour de Mayrik, 29/08) :

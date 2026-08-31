@@ -97,7 +97,7 @@ function getTurnContext(progressionState, board, allCars, allChoppers, dicePool,
  * Renvoie toutes les cases atteignables (avec leurs métadonnées :
  * terminalReason, dangerousCellsCrossed, slamTarget, path...) pour la
  * voiture et le dé choisis par le joueur — jamais UNE seule "meilleure"
- * destination comme le ferait chooseGeneralTrajectory côté IA. Au
+ * destination comme le ferait findBestTrajectory côté IA. Au
  * joueur de choisir librement parmi les options réellement légales.
  * `driftAvailable` doit être `true` seulement si le joueur a choisi de
  * jouer la Command Drift ce tour (voir Section 3).
