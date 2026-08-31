@@ -3835,20 +3835,25 @@ function isCleanPathExceptDestination(board, candidate) {
   return candidate.dangerousCellsCrossed - (destIsDangerous ? 1 : 0) === 0;
 }
 
-// CORRECTIF (29/08) : "slam" doit être un arrêt VALIDE pour la
-// cascade, pas seulement "normal"/"exits-front" — sinon, dès qu'une
-// voiture est bloquée de toutes parts par des véhicules plus petits
-// (seule issue possible : les percuter), plus AUCUN candidat ne passe
-// ce filtre, tous les paliers T1-T8 restent vides, et le dernier
-// recours (qui ne considère que "eliminated-impassable") l'est aussi
-// → destination null, alors que resolveRearArcSlam (juste après dans
-// chooseBestTrajectory) est déjà prévu pour accepter un résultat de
-// cascade qui EST directement un Slam. Une destination Slam a, comme
-// n'importe quelle autre, un terrain/hazard sous-jacent bien réel
-// (l'occupant ne change rien à la case elle-même) : les paliers T1-T8
-// la classent donc normalement, sans changement nécessaire ailleurs.
+// CORRECTIF (31/08, régression signalée par Mayrik) : "slam" avait
+// été ajouté ici pour éviter un crash (voiture totalement bloquée →
+// destination null) — mais ça laissait n'importe quel Slam concourir
+// à ÉGALITÉ avec les cases saines dans TOUTE la cascade principale
+// (T1-T8), en ne se souciant QUE du terrain, jamais de qui occupe la
+// case. Ça cassait les deux règles voulues par Mayrik : l'IA se
+// remettait à foncer dans ses PROPRES véhicules dès qu'un Slam menait
+// "plus loin" qu'une case saine, et slammait des adversaires plus
+// GROS sans aucune vérification de taille — resolveRearArcSlam (plus
+// bas), qui applique normalement ces deux règles, était purement et
+// simplement court-circuité dès que la cascade elle-même renvoyait
+// déjà un Slam (son tout premier test : "si le résultat EST déjà un
+// Slam, on l'accepte tel quel"). Un Slam ne doit JAMAIS gagner T1-T8
+// sur la seule base du terrain — seul resolveRearArcSlam (arc arrière
+// de la case saine choisie, adversaire strictement plus petit
+// uniquement) ou le tout dernier recours (voir plus bas, aucune autre
+// trajectoire nulle part) peuvent légitimement aboutir à un Slam.
 function isValidStop(c) {
-  return c.terminalReason === "normal" || c.terminalReason === "exits-front" || c.terminalReason === "slam";
+  return c.terminalReason === "normal" || c.terminalReason === "exits-front";
 }
 
 function destinationTerrain(board, c) {
@@ -3978,7 +3983,7 @@ function buildBonusTiers(board) {
 // continuait à descendre inutilement vers une case de moins bonne
 // qualité, ou pire, vers un hazard, alors qu'une case tout aussi
 // bonne (ou plus sûre) existait déjà au palier du dessus.
-function resolveAdjacentCascade(candidates, tiers) {
+function resolveAdjacentCascade(candidates, tiers, ownerName) {
   const stops = candidates.filter(isValidStop);
   // Groupe de chaque palier, pré-calculé une fois.
   const groups = tiers.map((t) => stops.filter(t.predicate));
@@ -3999,10 +4004,25 @@ function resolveAdjacentCascade(candidates, tiers) {
     // Sinon on continue la boucle (on descend d'un cran).
   }
 
-  // Dernier recours garanti par l'arbre : trajectoire la PLUS LONGUE
-  // vers une case impassable (jamais vide s'il existe le moindre
-  // candidat impassable — sinon la voiture est totalement bloquée,
-  // cas dégénéré non couvert par l'arbre, on renvoie []).
+  // Dernier recours (voiture totalement bloquée : aucune case saine
+  // T1-T8 nulle part) — dans l'ordre voulu par Mayrik :
+  // 1. S'il existe le moindre Slam possible (équipe adverse ou
+  //    propre équipe, n'importe quelle taille — à ce stade, il n'y a
+  //    RIEN d'autre, donc même slammer sa propre équipe redevient
+  //    légitime), on préfère un adversaire à un coéquipier si les
+  //    deux existent, puis la trajectoire la plus longue.
+  // 2. Sinon, la trajectoire la PLUS LONGUE vers une case impassable
+  //    (jamais vide s'il existe le moindre candidat impassable).
+  // 3. Sinon, [] (voiture totalement figée, cas dégénéré non couvert
+  //    par l'arbre).
+  const slamStops = candidates.filter((c) => c.terminalReason === "slam");
+  if (slamStops.length > 0) {
+    const enemySlams = slamStops.filter((c) => c.slamTarget && c.slamTarget.owner !== ownerName);
+    const pool = enemySlams.length > 0 ? enemySlams : slamStops;
+    const longest = Math.max(...pool.map((c) => c.col));
+    return pool.filter((c) => c.col === longest);
+  }
+
   const impassableStops = candidates.filter((c) => c.terminalReason === "eliminated-impassable");
   if (impassableStops.length === 0) return [];
   const longest = Math.max(...impassableStops.map((c) => c.stepsUsed));
@@ -4122,7 +4142,7 @@ function resolveRearArcSlam(candidatePool, resolved, car, allCars) {
  */
 function chooseBestTrajectory(board, car, candidates, roadDieValue, allCars, allChoppers, driftAvailable = false) {
   const noBonusTiers = buildNoBonusTiers(board);
-  const winningGroup = resolveAdjacentCascade(candidates, noBonusTiers);
+  const winningGroup = resolveAdjacentCascade(candidates, noBonusTiers, car.owner);
   if (winningGroup.length === 0) {
     // Aucun candidat exploitable du tout (ne devrait arriver que si
     // `candidates` est vide) — rien à faire.
