@@ -1646,3 +1646,64 @@ dédiées de cette conversation toutes 100% passantes ; 1500 parties de
 self-play supplémentaires, 0 crash, 0 décision illégale ; bundle
 regénéré sans erreur. `engine.js` : 4222 → 3140 lignes (~1080 lignes
 retirées, ~26% du fichier).
+
+## 13. Correctif — régression Slam (l'IA fonçait dans ses propres véhicules et des adversaires plus gros)
+
+Signalé par Mayrik (31/08) : en jouant de nombreuses parties, les
+véhicules IA slammaient entre eux bien plus souvent qu'avant, et
+slammaient des adversaires plus gros qu'eux alors que d'autres
+trajectoires existaient. Deux règles étaient censées empêcher ça
+depuis les chantiers précédents :
+1. Slammer ses propres véhicules : uniquement en tout dernier recours,
+   si aucune autre trajectoire n'existe nulle part.
+2. Slammer un adversaire : uniquement si ça coûte au maximum 1 case de
+   moins que la meilleure trajectoire ET si l'adversaire est
+   strictement plus petit.
+
+**Cause : une régression que j'ai moi-même introduite** à la section
+11 (correctif du crash "voiture totalement bloquée"). `isValidStop`
+avait été élargi pour inclure `"slam"` comme arrêt valide dans TOUTE
+la cascade des 8 paliers (T1-T8) — mais ces paliers ne jugent QUE le
+terrain/hazard de la case, jamais qui l'occupe. Un Slam menant plus
+loin qu'une case saine gagnait donc la cascade sur la seule base de sa
+colonne d'arrivée, sans jamais vérifier la taille de la cible ni même
+si c'était sa propre équipe. Pire : `resolveRearArcSlam` (qui
+applique normalement les deux règles ci-dessus, arc arrière de la
+case saine choisie) commence par `if (resolved.terminalReason ===
+"slam") return` — un résultat de cascade déjà-Slam le court-circuitait
+entièrement, sautant toutes ses vérifications.
+
+**Corrigé** :
+- `isValidStop` revient à `"normal" || "exits-front"` uniquement — un
+  Slam ne peut plus jamais gagner T1-T8 sur la seule base du terrain.
+- Le crash "voiture totalement bloquée" (raison d'être du correctif
+  précédent) est réglé différemment, sans rouvrir la régression :
+  le dernier recours de `resolveAdjacentCascade` (après l'échec de
+  TOUS les paliers T1-T8) considère maintenant les candidats Slam
+  AVANT de retomber sur la case impassable la plus longue — préférant
+  un adversaire à un coéquipier s'il y a le choix, sinon n'importe
+  quel Slam (légitime à ce stade précis : il n'y a plus rien d'autre).
+  `resolveAdjacentCascade` reçoit maintenant `ownerName` (le
+  propriétaire de la voiture activée) pour cette distinction.
+- `resolveRearArcSlam` (règle 2, adversaire strictement plus petit à 1
+  case) redevient effectivement le SEUL chemin normal vers un Slam
+  quand une case saine existe par ailleurs — plus jamais court-circuité.
+
+**Validation** :
+- Reproduction exacte du bug confirmée AVANT correctif (coéquipier
+  plus gros sur le chemin, slammé alors qu'une case saine existait) et
+  résolue après.
+- 5 scénarios dédiés : coéquipier plus gros jamais slammé ; adversaire
+  plus gros jamais slammé si case saine dispo ; adversaire plus petit
+  à 1 case slammé légitimement (arc arrière) ; voiture totalement
+  bloquée par ses propres véhicules plus petits → Slam en dernier
+  recours, aucun crash ; bloqué avec mélange adversaire/coéquipier →
+  préfère toujours l'adversaire même en dernier recours.
+- 203/203, 102/102, `test-engine.js` (179 sections) : tous inchangés.
+- ~18 000 parties de self-play cumulées : 0 décision illégale ; taux
+  de crash très rare (~1/18000) et d'états incohérents (~1/1000),
+  systématiquement liés au même message ("hors bornes" près de la
+  Finish Line) — cohérent avec un artefact déjà connu et documenté
+  bien avant ce chantier, sans rapport thématique avec le Slam. Signalé
+  à Mayrik pour investigation séparée si souhaité, non traité ici (hors
+  sujet de cette demande).
