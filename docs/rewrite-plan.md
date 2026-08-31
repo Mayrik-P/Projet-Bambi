@@ -1580,3 +1580,69 @@ servait qu'à l'entrée en jeu du round 1 :
 **Résultat** : un seul sous-programme "Recherche de la meilleure
 trajectoire" dans tout le code, comme dans l'arbre — plus aucune
 duplication ni dérive possible entre round 1 et le reste de la partie.
+
+## 12. Suppression du système d'IA legacy dans `engine.js`
+
+Suite à l'audit complet du dépôt (30/08) : `engine.js` contenait
+encore un système de décision IA entier (~4222 lignes de fichier au
+total), entièrement superseded par `ai-decision.js`/`turn-executor.js`
+depuis longtemps, jamais retiré. Vérifié précisément : ni le jeu réel (`tools/ui-script.js`), ni le
+harnais de self-play (`tools/run-shadow-legality.js`), ni même l'outil
+de génération de cas de revue (`tools/generate-review-cases.js`) ne
+l'appelaient — tous utilisent exclusivement `decideAssignAndCommand`.
+
+**Retiré** (~1000 lignes, 16 fonctions) : `chooseAiAssign`,
+`chooseAiCommand`, `chooseAiMoveTrajectory`, `chooseAiEntryRow`,
+`chooseAiShootTarget`, `searchAiSafeTrajectory`,
+`searchAiSlamEndingTrajectory`, `searchAiFallbackTrajectory`,
+`pickPreferredTrajectory`, `isAiPathAllRoad`, `findRearmostCar`,
+`applyRoadBonus`, `playOneAiTurn`, `simulateAiGame`,
+`simulateRandomGame`, `pickRandomForwardPath`, `playOneRandomTurn`,
+plus la constante `AI_FORWARD_DIRECTIONS`.
+
+**Conservé, vérifié fonction par fonction** (intercalées avec les
+fonctions mortes dans le fichier, donc retrait chirurgical plutôt que
+par plage de lignes) : `isAiHiddenHazard`, `isChopperOccupied`,
+`findAiAirstrikePlacement`, `findFrontmostCar`, `computeAiStepCost`,
+`rollMovementDie` (utilisée par `rollDicePool`), `rollSlamDie`,
+`rollDirectionDie`, `rollStuntDie`, `rollShootingDie`, `rollRoadDie`,
+`getForwardDelta`, `driveSync` — toutes activement utilisées par
+`ai-decision.js` et/ou le moteur actuel, repérées à temps avant
+suppression.
+
+**Deux commentaires orphelins découverts et nettoyés en chemin**
+(restes de réorganisations passées, même famille que le
+`pathHazardDanger` trouvé lors du chantier précédent) : un doublon de
+documentation de `pickPreferredTrajectory` égaré entre deux fonctions
+vivantes, et l'introduction de section "IA — COMMAND" restée collée
+devant `findAiAirstrikePlacement` après le retrait de son contenu
+réel. Commentaire partagé `findFrontmostCar`/`findRearmostCar`
+réécrit pour ne plus mentionner les fonctions mortes.
+
+**`test-engine.js`** : 60 blocs de test sur 238 référençaient une
+fonction supprimée, retirés automatiquement (script de détection par
+bloc `section(...)`). Deux incidents de collatéral trouvés et corrigés
+en revalidant scrupuleusement (le fichier place le `require()` d'un
+groupe de tests en PROLOGUE du groupe suivant, pas en fin du groupe
+courant — un bloc mort dont le prologue contenait un nom encore
+vivant emportait ce nom avec lui) :
+- Import perdu de `rollDicePool`/`drawHighestDieFromPool`/
+  `drawSpecificDieFromPool`, `createCarOffBoard`/`moveCarEnteringBoard`,
+  `playTurnAssignEnterWithProgression` — replacés à leur point d'usage.
+- Fonction utilitaire partagée `makeStandardProgState()` (utilisée par
+  des dizaines de tests) et le test complet "Test 158 —
+  findAiAirstrikePlacement()" balayés avec un bloc mort voisin —
+  tous deux restaurés intégralement.
+
+Fichier passé de 3589 à 2790 lignes (799 lignes de tests morts
+retirées au net, après restauration du test 158 et de l'utilitaire
+partagé), 238 → 179 sections de test, toutes passantes.
+
+**Validation finale** : 179 sections de `test-engine.js` (3140 lignes,
+exit 0, plus aucune référence à une fonction supprimée) ; 203/203
+(`test-ai-decision.js`) et 102/102 (`test-human-decision.js`)
+inchangés ; les 6 suites de tests IA dédiées et les 7 suites UI
+dédiées de cette conversation toutes 100% passantes ; 1500 parties de
+self-play supplémentaires, 0 crash, 0 décision illégale ; bundle
+regénéré sans erreur. `engine.js` : 4222 → 3140 lignes (~1080 lignes
+retirées, ~26% du fichier).
