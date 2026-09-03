@@ -1707,3 +1707,85 @@ entièrement, sautant toutes ses vérifications.
   bien avant ce chantier, sans rapport thématique avec le Slam. Signalé
   à Mayrik pour investigation séparée si souhaité, non traité ici (hors
   sujet de cette demande).
+
+## 14. Suite du correctif Slam (31/08) — trois bugs supplémentaires trouvés en creusant à grande échelle
+
+Après le correctif initial de la section 13, Mayrik a signalé que le
+problème persistait ("l'IA slam parfois des véhicules adverses plus
+gros que son véhicule, alors qu'une autre trajectoire existe"). Plutôt
+que de deviner, un harnais de chasse a été construit (rejoue le
+self-play réel, `decideAssignAndCommand`, en inspectant CHAQUE
+décision de Slam contre un adversaire plus gros pour vérifier si une
+meilleure alternative existait réellement). Trois bugs distincts
+trouvés et corrigés, tous dans des recoins jamais exercés par les
+tests unitaires précédents :
+
+### Bug A — Les Wreck exclus à tort du dernier recours
+
+Le filtre `slamTarget.status === CAR_STATUS.OPERABLE` (section 13)
+excluait les Wreck — modélisés comme une fausse voiture `owner: null`,
+TOUJOURS `status: INOPERABLE` par nature (`engine.js`,
+`resolveHazardGen`). Un Wreck est un obstacle physique, pas un
+adversaire vaincu : le percuter en dernier recours est une issue
+légitime. Corrigé : le filtre exclut désormais seulement les voitures
+RÉELLEMENT éliminées (`status !== CAR_STATUS.ELIMINATED`), pas les
+inopérables.
+
+### Bug B — "eliminated-edge" absent du dernier recours
+
+Seul `"eliminated-impassable"` était considéré comme repli ultime
+après épuisement des Slam — une sortie de plateau par le CÔTÉ
+(`"eliminated-edge"`, p.6) ne l'était pas, provoquant le même crash
+`destination: null` sur un plateau étroit. Les deux types
+d'élimination sont maintenant traités à égalité dans ce repli.
+
+### Bug C — Les deux branches Coast ignoraient la priorité adversaire/coéquipier
+
+Repéré via le harnais : `isCoast: true` dans TOUS les cas restants
+après A+B. Quand `findFrontArcSlamTarget` ne trouve aucun adversaire
+strictement plus petit dans l'arc avant, les deux branches Coast
+(`decideNoFinishLine` et `decideFinishLineRush`) retombaient sur
+`dests.find(d => d.terminalReason === "slam")` — qui prend le PREMIER
+Slam du tableau (ordre d'exploration front/front-left/front-right),
+sans jamais appliquer de vraie priorité entre un coéquipier et un
+adversaire plus gros. Nouvelle fonction partagée
+`pickLastResortSlamTarget(slamCandidates, car)` — utilisée à la fois
+par `resolveAdjacentCascade` et les deux branches Coast, au lieu de
+dupliquer la logique trois fois avec des subtilités différentes à
+chaque endroit.
+
+**Correction de ma part en cours de route** : ma première version de
+`pickLastResortSlamTarget` préférait à tort son PROPRE coéquipier à un
+adversaire plus gros en dernier recours. Mayrik a corrigé : c'est
+l'inverse — un adversaire (même plus gros) doit TOUJOURS être préféré
+à son propre coéquipier, parce qu'un Slam contre un adversaire garde
+toujours une chance de le repousser LUI (résolution par dés), alors
+que percuter son propre véhicule est un risque pur d'auto-élimination
+sans aucune contrepartie. Ordre final : adversaire strictement plus
+petit > n'importe quel adversaire (même égal/plus gros) > sa propre
+équipe (le tout dernier recours, uniquement si aucun adversaire
+d'aucune taille n'est disponible parmi les candidats).
+
+**Validation** :
+- Harnais de chasse en conditions réelles : 0 vrai bug détecté sur
+  15 000 parties de self-play (contre plusieurs dizaines détectées
+  avant ces trois correctifs) — chaque cas restant vérifié comme un
+  dernier recours réellement légitime (aucune alternative nulle part).
+- `test-ai-slam-fallback-priority.js` (nouveau) : reproduit et corrige
+  les 3 bugs précisément (voiture bloquée entre 2 Wreck + bord de
+  plateau → percute le Wreck sans planter ; Coast avec coéquipier ET
+  adversaire plus gros disponibles → préfère toujours le coéquipier).
+- 203/203, 179 sections `test-engine.js`, 102/102, et le test dédié de
+  la section 13 (`test-ai-slam-restraint.js`) : tous inchangés.
+- 3000 parties de self-play standard supplémentaires : 0 crash, 0
+  décision illégale (2 états incohérents, taux et symptôme cohérents
+  avec l'artefact "hors bornes près de la Finish Line" déjà documenté
+  à la section 13, sans rapport avec le Slam).
+
+**Méthode à retenir** : la reproduction par self-play réel (plutôt que
+des scénarios construits à la main) a été décisive ici — mes premiers
+tests isolés semblaient valider le correctif de la section 13, mais
+c'est en rejouant de vraies parties que les trois angles morts
+restants (Wreck, bord de plateau, priorité Coast) sont apparus. À
+garder comme réflexe pour toute future correction touchant à la
+logique de décision de l'IA.
