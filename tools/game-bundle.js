@@ -3983,7 +3983,7 @@ function buildBonusTiers(board) {
 // continuait à descendre inutilement vers une case de moins bonne
 // qualité, ou pire, vers un hazard, alors qu'une case tout aussi
 // bonne (ou plus sûre) existait déjà au palier du dessus.
-function resolveAdjacentCascade(candidates, tiers, ownerName) {
+function resolveAdjacentCascade(candidates, tiers, car) {
   const stops = candidates.filter(isValidStop);
   // Groupe de chaque palier, pré-calculé une fois.
   const groups = tiers.map((t) => stops.filter(t.predicate));
@@ -4005,28 +4005,46 @@ function resolveAdjacentCascade(candidates, tiers, ownerName) {
   }
 
   // Dernier recours (voiture totalement bloquée : aucune case saine
-  // T1-T8 nulle part) — dans l'ordre voulu par Mayrik :
-  // 1. S'il existe le moindre Slam possible (équipe adverse ou
-  //    propre équipe, n'importe quelle taille — à ce stade, il n'y a
-  //    RIEN d'autre, donc même slammer sa propre équipe redevient
-  //    légitime), on préfère un adversaire à un coéquipier si les
-  //    deux existent, puis la trajectoire la plus longue.
-  // 2. Sinon, la trajectoire la PLUS LONGUE vers une case impassable
-  //    (jamais vide s'il existe le moindre candidat impassable).
-  // 3. Sinon, [] (voiture totalement figée, cas dégénéré non couvert
+  // T1-T8 nulle part) — priorité (précisée par Mayrik le 31/08,
+  // j'avais initialement inversé les deux derniers paliers) :
+  // 1. Adversaire strictement plus petit (respecte pleinement les
+  //    deux règles à la fois — c'est en fait un Slam "normal", juste
+  //    trouvé ici faute d'alternative propre).
+  // 2. N'IMPORTE QUEL adversaire, même égal ou plus gros — reste
+  //    TOUJOURS préféré à sa propre équipe : un Slam contre un
+  //    adversaire garde une chance de le repousser LUI (résolution
+  //    par dés), alors que percuter son propre véhicule est un risque
+  //    pur d'auto-élimination, sans aucune contrepartie.
+  // 3. Sa PROPRE équipe — le tout dernier recours, seulement s'il
+  //    n'existe AUCUN adversaire d'aucune taille parmi les candidats
+  //    (voir pickLastResortSlamTarget, juste au-dessus).
+  // 4. Sinon, la trajectoire la PLUS LONGUE vers une case impassable
+  //    OU hors du plateau par le côté (les deux sont des éliminations,
+  //    p.6 — CORRECTIF : "eliminated-edge" manquait ici, alors que
+  //    "eliminated-impassable" y était déjà, provoquant le même crash
+  //    "destination null" dans un plateau étroit).
+  // 5. Sinon, [] (voiture totalement figée, cas dégénéré non couvert
   //    par l'arbre).
-  const slamStops = candidates.filter((c) => c.terminalReason === "slam");
+  //
+  // CORRECTIF SUPPLÉMENTAIRE : la condition `slamTarget.status ===
+  // OPERABLE` excluait à tort les Wreck (modélisés comme une fausse
+  // voiture `owner: null`, TOUJOURS `status: INOPERABLE` par nature,
+  // voir engine.js/resolveHazardGen) — un Wreck est un OBSTACLE
+  // physique, pas un adversaire vaincu ; le percuter en dernier
+  // recours reste une issue légitime et doit être considéré comme
+  // n'importe quel autre Slam. Seule une voiture RÉELLE (owner non
+  // null) déjà éliminée doit être écartée (rien de significatif à
+  // percuter, elle ne devrait de toute façon plus être sur le plateau).
+  const slamStops = candidates.filter((c) => c.terminalReason === "slam" && c.slamTarget && c.slamTarget.status !== CAR_STATUS.ELIMINATED);
   if (slamStops.length > 0) {
-    const enemySlams = slamStops.filter((c) => c.slamTarget && c.slamTarget.owner !== ownerName);
-    const pool = enemySlams.length > 0 ? enemySlams : slamStops;
-    const longest = Math.max(...pool.map((c) => c.col));
-    return pool.filter((c) => c.col === longest);
+    const chosen = pickLastResortSlamTarget(slamStops, car);
+    return [chosen];
   }
 
-  const impassableStops = candidates.filter((c) => c.terminalReason === "eliminated-impassable");
-  if (impassableStops.length === 0) return [];
-  const longest = Math.max(...impassableStops.map((c) => c.stepsUsed));
-  return impassableStops.filter((c) => c.stepsUsed === longest);
+  const eliminationStops = candidates.filter((c) => c.terminalReason === "eliminated-impassable" || c.terminalReason === "eliminated-edge");
+  if (eliminationStops.length === 0) return [];
+  const longest = Math.max(...eliminationStops.map((c) => c.stepsUsed));
+  return eliminationStops.filter((c) => c.stepsUsed === longest);
 }
 
 // Cascade bonus : présence seule à chaque palier, dans l'ordre.
@@ -4057,6 +4075,39 @@ function pickByLowestArrivalDanger(board, group, allCars) {
 }
 
 const CAR_SIZE_RANK = { [CAR_SIZE.SMALL]: 1, [CAR_SIZE.MEDIUM]: 2, [CAR_SIZE.LARGE]: 3 };
+
+// Choisit le meilleur Slam de dernier recours parmi une liste de
+// candidats "slam" déjà filtrée (aucune case saine disponible) —
+// PARTAGÉE entre resolveAdjacentCascade et les deux branches Coast
+// (CORRECTIF 31/08 : un simple `.find()` y prenait le premier Slam de
+// la liste sans distinguer coéquipier/adversaire ni vérifier la
+// taille, ignorant les deux règles de Mayrik dans ce cas précis).
+// Même ordre de priorité partout : adversaire strictement plus petit
+// > sa propre équipe (n'importe quelle taille, légitime seulement ici,
+// en dernier recours) > adversaire égal ou plus gros (vraiment aucune
+// autre issue).
+// Choisit le meilleur Slam de dernier recours parmi une liste de
+// candidats "slam" déjà filtrée (aucune case saine disponible) —
+// PARTAGÉE entre resolveAdjacentCascade et les deux branches Coast.
+// Ordre de priorité (CORRIGÉ le 31/08, précision de Mayrik — j'avais
+// initialement inversé les deux derniers paliers) :
+//   1. Adversaire strictement plus petit — le Slam légitime normal,
+//      juste trouvé ici faute d'alternative propre.
+//   2. N'IMPORTE QUEL adversaire, même égal ou plus gros — TOUJOURS
+//      préféré à sa propre équipe : un Slam contre un adversaire
+//      garde toujours une chance de le repousser LUI (résolution par
+//      dés), alors que percuter son propre véhicule est un risque pur
+//      (auto-élimination possible) sans aucune contrepartie.
+//   3. Sa PROPRE équipe — le tout dernier recours, seulement s'il
+//      n'existe AUCUN adversaire d'aucune taille parmi les candidats.
+function pickLastResortSlamTarget(slamCandidates, car) {
+  const myRank = CAR_SIZE_RANK[car.size];
+  const smallerEnemy = slamCandidates.filter((c) => c.slamTarget.owner !== car.owner && CAR_SIZE_RANK[c.slamTarget.size] < myRank);
+  const anyEnemy = slamCandidates.filter((c) => c.slamTarget.owner !== car.owner);
+  const pool = smallerEnemy.length > 0 ? smallerEnemy : (anyEnemy.length > 0 ? anyEnemy : slamCandidates);
+  const longest = Math.max(...pool.map((c) => c.col));
+  return pool.filter((c) => c.col === longest)[0];
+}
 
 // Slam en arc arrière, recalculé sur la DESTINATION FINALE (bonus ou
 // non). CORRECTIF (signalé par Mayrik) : une voiture ne se déplace
@@ -4142,7 +4193,7 @@ function resolveRearArcSlam(candidatePool, resolved, car, allCars) {
  */
 function chooseBestTrajectory(board, car, candidates, roadDieValue, allCars, allChoppers, driftAvailable = false) {
   const noBonusTiers = buildNoBonusTiers(board);
-  const winningGroup = resolveAdjacentCascade(candidates, noBonusTiers, car.owner);
+  const winningGroup = resolveAdjacentCascade(candidates, noBonusTiers, car);
   if (winningGroup.length === 0) {
     // Aucun candidat exploitable du tout (ne devrait arriver que si
     // `candidates` est vide) — rien à faire.
@@ -4786,7 +4837,25 @@ function decideNoFinishLine(progressionState, board, allCars, allChoppers, diceP
         || dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "exits-front")
         || dests[0];
     } else {
-      destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
+      // CORRECTIF (31/08, régression signalée par Mayrik) : ce
+      // `.find()` acceptait "slam" à ÉGALITÉ de priorité avec
+      // "normal" — sans jamais vérifier la taille de la cible, ET
+      // sans même préférer une case saine si elle existait par
+      // ailleurs (l'ordre du tableau `dests`, pas une vraie priorité,
+      // décidait). Résultat : un Coast pouvait slammer un adversaire
+      // plus gros que la voiture activée alors qu'une case saine
+      // existait juste à côté. On priorise maintenant explicitement
+      // "normal"/"exits-front", et on n'accepte "slam" qu'en tout
+      // dernier recours (rien d'autre nulle part, cf. même principe
+      // que resolveAdjacentCascade) — findFrontArcSlamTarget a déjà
+      // écarté ce candidat pour une bonne raison (cible pas
+      // strictement plus petite), donc pas question de le repêcher
+      // ici sauf absence totale d'alternative.
+      const lastResortSlams = dests.filter((d) => d.terminalReason === "slam" && d.slamTarget && d.slamTarget.status !== CAR_STATUS.ELIMINATED);
+      destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "exits-front")
+        || dests.find((d) => d.terminalReason === "eliminated-impassable")
+        || (lastResortSlams.length > 0 ? pickLastResortSlamTarget(lastResortSlams, car) : null)
+        || dests[0];
     }
     return { car, dieValue, command: null, destination, isEntry: false, isCoast: true, slam: destination.terminalReason === "slam" };
   }
@@ -4989,7 +5058,25 @@ function decideFinishLineRush(progressionState, board, allCars, allChoppers, dic
         || dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "exits-front")
         || dests[0];
     } else {
-      destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "eliminated-impassable" || d.terminalReason === "slam" || d.terminalReason === "exits-front") || dests[0];
+      // CORRECTIF (31/08, régression signalée par Mayrik) : ce
+      // `.find()` acceptait "slam" à ÉGALITÉ de priorité avec
+      // "normal" — sans jamais vérifier la taille de la cible, ET
+      // sans même préférer une case saine si elle existait par
+      // ailleurs (l'ordre du tableau `dests`, pas une vraie priorité,
+      // décidait). Résultat : un Coast pouvait slammer un adversaire
+      // plus gros que la voiture activée alors qu'une case saine
+      // existait juste à côté. On priorise maintenant explicitement
+      // "normal"/"exits-front", et on n'accepte "slam" qu'en tout
+      // dernier recours (rien d'autre nulle part, cf. même principe
+      // que resolveAdjacentCascade) — findFrontArcSlamTarget a déjà
+      // écarté ce candidat pour une bonne raison (cible pas
+      // strictement plus petite), donc pas question de le repêcher
+      // ici sauf absence totale d'alternative.
+      const lastResortSlams = dests.filter((d) => d.terminalReason === "slam" && d.slamTarget && d.slamTarget.status !== CAR_STATUS.ELIMINATED);
+      destination = dests.find((d) => d.terminalReason === "normal" || d.terminalReason === "exits-front")
+        || dests.find((d) => d.terminalReason === "eliminated-impassable")
+        || (lastResortSlams.length > 0 ? pickLastResortSlamTarget(lastResortSlams, car) : null)
+        || dests[0];
     }
     return { car, dieValue, command: null, destination, isEntry: false, isCoast: true, slam: destination.terminalReason === "slam" };
   }
