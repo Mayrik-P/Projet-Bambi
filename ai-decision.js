@@ -934,13 +934,40 @@ function resolveBonusCascade(candidates, tiers) {
 
 // Départage final entre plusieurs destinations à égalité de
 // progression : danger d'arrivée le plus faible (cf. arrivalDanger).
+// Compte le nombre de changements de ligne dans un chemin (tout pas
+// "front-left"/"front-right", jamais "front" qui reste sur la même
+// ligne) — sert de départage SECONDAIRE (voir pickByLowestArrivalDanger).
+function countRowChanges(path) {
+  if (!path) return 0;
+  return path.filter((dir) => dir !== "front").length;
+}
+
+// Choisit, parmi un groupe de candidats à égalité de palier, celui
+// qui minimise d'abord le danger d'arrivée (cases voisines), PUIS —
+// à danger égal — celui dont le CHEMIN comporte le moins de
+// changements de ligne (retour de Mayrik, 03/09) : chaque changement
+// de ligne (front-left/front-right) risque de faire perdre en
+// efficacité au(x) mouvement(s) suivant(s) selon la façon dont les
+// lignes s'articulent en quinconce — pas un motif fixe (pair/impair)
+// utilisable partout puisque la ligne d'arrivée suit elle aussi le
+// même quinconce, mais une trajectoire plus directe (moins de
+// zigzags) a globalement plus de chances de rester optimale, quel que
+// soit l'endroit du plateau. S'applique aussi bien au choix de la
+// case de base qu'à celui de l'extension du bonus Road (même fonction
+// utilisée aux deux endroits).
 function pickByLowestArrivalDanger(board, group, allCars) {
   if (group.length === 1) return group[0];
   let best = group[0];
   let bestDanger = arrivalDanger(board, best.col, best.row, allCars);
+  let bestRowChanges = countRowChanges(best.path);
   for (const c of group.slice(1)) {
     const d = arrivalDanger(board, c.col, c.row, allCars);
-    if (d < bestDanger) { best = c; bestDanger = d; }
+    if (d < bestDanger) {
+      best = c; bestDanger = d; bestRowChanges = countRowChanges(c.path);
+    } else if (d === bestDanger) {
+      const rc = countRowChanges(c.path);
+      if (rc < bestRowChanges) { best = c; bestRowChanges = rc; }
+    }
   }
   return best;
 }
