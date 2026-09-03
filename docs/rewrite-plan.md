@@ -1789,3 +1789,51 @@ c'est en rejouant de vraies parties que les trois angles morts
 restants (Wreck, bord de plateau, priorité Coast) sont apparus. À
 garder comme réflexe pour toute future correction touchant à la
 logique de décision de l'IA.
+
+## 15. Départage secondaire par changement de ligne (limite le "zigzag")
+
+Signalé par Mayrik (03/09, capture d'écran) : l'IA produisait parfois
+un zigzag visible — ex. `(3,3) → (4,4) → (4,3)` au lieu du chemin
+direct `(3,3) → (4,3) → (5,3)`. Investigation menée en trois temps :
+
+1. **Mécanisme confirmé** : `pickByLowestArrivalDanger` choisit la
+   case de BASE avant même que le bonus Road ne soit envisagé
+   (`chooseBestTrajectory`) — un départage local (danger des cases
+   voisines) peut donc mener à un point de départ moins favorable pour
+   la suite, sans jamais "voir" le bonus à venir.
+2. **Fausse piste explorée puis écartée** : Mayrik a d'abord noté que
+   les lignes impaires (1, 3, 5) sont structurellement "larges" (les 3
+   directions de l'arc avant progressent en colonne) contre les lignes
+   paires (0, 2, 4) "étroites" (seule "front" progresse) — vérifié et
+   confirmé exact par calcul direct de `getFrontArc` sur les 6 lignes.
+   Mais Mayrik a lui-même nuancé : la ligne d'arrivée suit le même
+   quinconce, donc un motif pair/impair fixe n'est pas fiable partout
+   sur le plateau — pas un bon levier à coder en dur.
+3. **Levier retenu, plus général** : à danger d'arrivée ÉGAL, préférer
+   le chemin qui comporte le MOINS de changements de ligne
+   (`front-left`/`front-right`), plutôt qu'un motif de parité. Chaque
+   changement de ligne risque de faire perdre en efficacité selon la
+   façon dont les lignes s'articulent localement — une trajectoire
+   plus directe a globalement plus de chances de rester optimale,
+   quel que soit l'endroit du plateau.
+
+**Implémenté** : nouvelle fonction `countRowChanges(path)` (compte les
+pas `front-left`/`front-right` d'un chemin). `pickByLowestArrivalDanger`
+(utilisée à la fois pour la case de base ET pour l'extension du bonus
+Road — même fonction, deux appels) applique maintenant ce critère en
+**second**, uniquement pour départager des candidats à danger
+strictement égal — le danger de hazard reste toujours prioritaire.
+
+**Validation** :
+- Reproduction du zigzag original confirmée, puis résolue sur un
+  scénario à danger réellement égal (le chemin 100% direct l'emporte
+  désormais).
+- `test-ai-row-change-tiebreak.js` (nouveau) : danger égal partout →
+  chemin direct choisi ; non-régression — un danger réel continue de
+  l'emporter sur un chemin plus direct mais dangereux ; le critère
+  s'applique bien aussi à l'extension du bonus Road, pas seulement à
+  la case de base.
+- 203/203, 179 sections `test-engine.js`, 102/102, les deux suites
+  Slam dédiées : toutes inchangées.
+- 4000 parties de self-play supplémentaires : 0 crash, 0 décision
+  illégale.
