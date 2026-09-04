@@ -30,7 +30,16 @@ const PLAYER_NAMES = [HUMAN, OPPONENT];
 const OWNER_COLOR = { [HUMAN]: "#3b82c9", [OPPONENT]: "#c93b3b" };
 
 // --- Géométrie du plateau (reprise à l'identique des viewers de debug) ---
-const CELL_W = 34, CELL_H = 40, QUIN = 6, NOTCH = 4;
+// CELL_W est un choix arbitraire d'échelle ; CELL_H en revanche DOIT
+// respecter le rapport largeur/hauteur réel des images de tuile
+// (2500x1891px pour 8 colonnes x 7 unités de hauteur — 6 lignes de
+// jeu + 1 bandeau titre, voir TILE_OVERLAP plus bas), sous peine de
+// les étirer/déformer une fois affichées (bug réel trouvé par Mayrik :
+// CELL_H=40 avait été choisi au hasard pour le prototype couleur,
+// sans lien avec les vraies proportions de l'image).
+const CELL_W = 34, QUIN = 6, NOTCH = 4;
+const TILE_NATIVE_W = 2500, TILE_NATIVE_H = 1891, TILE_NATIVE_COLS = 8, TILE_NATIVE_ROW_UNITS = 7;
+const CELL_H = CELL_W * (TILE_NATIVE_H / TILE_NATIVE_ROW_UNITS) / (TILE_NATIVE_W / TILE_NATIVE_COLS);
 // Marge du haut agrandie d'une ligne entière : laisse la place au
 // bandeau titre des vraies images de tuile, qui déborde au-dessus de
 // la grille cliquable (voir TILE_OVERLAP plus bas) sans la décaler.
@@ -87,6 +96,22 @@ function tileImagePath(tile) {
   if (tile.face) return `../tiles/images/finishline-${tile.face}.webp`;
   if (tile.id) return `../tiles/images/${tile.id}.webp`;
   return null;
+}
+
+// Largeur d'affichage RÉELLE de l'image d'une tuile, en respectant son
+// PROPRE rapport largeur/hauteur (jamais une valeur forcée qui la
+// déformerait). Les tuiles route standard (2500x1891px, 8 colonnes)
+// ont déjà exactement le bon rapport par construction de CELL_H
+// (voir plus haut) : t.cols*CELL_W est donc déjà correct pour elles.
+// La Finish Line est un visuel à part, mesuré différemment
+// (364x1891px — plus large qu'1/8 d'une tuile standard) : sa largeur
+// est calculée séparément à partir de ses vraies proportions, quitte
+// à déborder de quelques pixels de son unique colonne logique plutôt
+// que d'être étirée pour la remplir pile.
+const FINISHLINE_NATIVE_W = 364, FINISHLINE_NATIVE_H = 1891;
+function tileImageWidth(tile) {
+  if (tile.face) return (7 * CELL_H) * (FINISHLINE_NATIVE_W / FINISHLINE_NATIVE_H);
+  return tile.cols * CELL_W;
 }
 
 // ===================================================================
@@ -742,7 +767,16 @@ function highlightedCells() {
 function renderBoard() {
   const b = board();
   const svg = document.getElementById("board");
-  const w = 10 + b.cols * CELL_W + 20;
+  // Largeur réservée pour le NOMBRE MAXIMAL de colonnes visibles à la
+  // fois (3 tuiles route + Finish Line), PAS le nombre de colonnes
+  // actuel — sinon l'apparition de la Finish Line en fin de partie
+  // agrandit le viewBox et rétrécit visuellement tout le reste du
+  // plateau d'un coup (bug réel signalé par Mayrik). Le plateau garde
+  // ainsi une échelle constante du début à la fin ; la Finish Line
+  // remplit simplement l'espace vide réservé à droite quand elle
+  // apparaît, sans jamais redimensionner les tuiles déjà en place.
+  const MAX_BOARD_COLS = 3 * TILE_NATIVE_COLS + 1;
+  const w = 10 + MAX_BOARD_COLS * CELL_W + 20;
   const h = BOARD_TOP + b.rows * CELL_H + 10;
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   svg.innerHTML = "";
@@ -770,7 +804,7 @@ function renderBoard() {
       imgEl.setAttributeNS("http://www.w3.org/1999/xlink", "href", imgPath); // vieux moteurs de rendu SVG
       imgEl.setAttribute("x", imgX);
       imgEl.setAttribute("y", BOARD_TOP - CELL_H); // déborde d'une ligne au-dessus (bandeau titre)
-      imgEl.setAttribute("width", t.cols * CELL_W);
+      imgEl.setAttribute("width", tileImageWidth(t));
       imgEl.setAttribute("height", 7 * CELL_H); // 6 lignes cliquables + 1 ligne de bandeau
       imgEl.setAttribute("preserveAspectRatio", "none");
       imgEl.setAttribute("pointer-events", "none");
