@@ -49,6 +49,23 @@ function cellCenter(col, row) {
 }
 const TERRAIN_FILL = { road: "#4a4a55", off_road: "#7a5c3a", mud: "#3d2a1a", impassable: "#5c2020" };
 
+// --- Vraies images de tuiles (tiles/images/*.webp) ---
+// L'identifiant d'une tuile réelle (tile.id, ex. "vendetta-01a") est
+// posé par instantiateTile() (engine.js) et correspond EXACTEMENT au
+// nom de fichier — aucun manifeste séparé à maintenir. La Finish Line
+// n'a pas d'id (générée directement par createFinishLineTile(),
+// engine.js) mais porte sa propre face visuelle aléatoire (tile.face,
+// "a"/"b") — voir docs/rewrite-plan.md. Une tuile de test
+// (createTestTile, utilisée uniquement par les suites de tests, jamais
+// par ce prototype) n'a ni id ni face : on retombe alors sur le
+// rendu couleur existant, inchangé.
+function tileImagePath(tile) {
+  if (!tile) return null;
+  if (tile.face) return `tiles/images/finishline-${tile.face}.webp`;
+  if (tile.id) return `tiles/images/${tile.id}.webp`;
+  return null;
+}
+
 // ===================================================================
 // ÉTAT DE JEU — initialisation
 // ===================================================================
@@ -710,16 +727,50 @@ function renderBoard() {
   const highlights = highlightedCells();
   const highlightMap = new Map(highlights.map((h) => [h.col + "," + h.row, h]));
 
+  // Une image par tuile réelle (rear/middle/lead/finish), dans l'ordre
+  // où elles se suivent sur le plateau — même ordre que
+  // buildBoardFromProgressionState()/checkGameEndConditions(). Posées
+  // AVANT la boucle de cases pour rester sous les polygones/marqueurs/
+  // voitures (ordre d'insertion SVG = ordre d'empilement visuel).
+  // pointer-events désactivé : les clics continuent d'atteindre le
+  // polygone de la case, inchangé, l'image n'est qu'un habillage
+  // visuel par-dessus lequel rien ne se déclenche.
+  const orderedTiles = [G.progressionState.rearTile, G.progressionState.middleTile, G.progressionState.leadTile, G.progressionState.finishLineTile].filter(Boolean);
+  const colHasImage = [];
+  let colOffset = 0;
+  for (const t of orderedTiles) {
+    const imgPath = tileImagePath(t);
+    if (imgPath) {
+      const imgEl = document.createElementNS("http://www.w3.org/2000/svg", "image");
+      imgEl.setAttribute("href", imgPath);
+      imgEl.setAttributeNS("http://www.w3.org/1999/xlink", "href", imgPath); // vieux moteurs de rendu SVG
+      imgEl.setAttribute("x", 10 + colOffset * CELL_W);
+      imgEl.setAttribute("y", 20);
+      imgEl.setAttribute("width", t.cols * CELL_W);
+      imgEl.setAttribute("height", t.rows * CELL_H);
+      imgEl.setAttribute("preserveAspectRatio", "none");
+      imgEl.setAttribute("pointer-events", "none");
+      svg.appendChild(imgEl);
+    }
+    for (let c = colOffset; c < colOffset + t.cols; c++) colHasImage[c] = !!imgPath;
+    colOffset += t.cols;
+  }
+
   for (let row = 0; row < b.rows; row++) {
     for (let col = 0; col < b.cols; col++) {
       const cell = b.grid[row][col];
       const poly = cellPoly(col, row);
-      const fill = TERRAIN_FILL[cell.terrain] || "#444";
+      // Une vraie image de tuile couvre déjà cette case : le polygone
+      // devient transparent (garde uniquement son rôle de zone
+      // cliquable/surbrillance), au lieu du à-plat de couleur —
+      // repli inchangé si jamais aucune image n'est disponible.
+      const fill = colHasImage[col] ? "transparent" : (TERRAIN_FILL[cell.terrain] || "#444");
       const key = col + "," + row;
       const hl = highlightMap.get(key);
       const polyEl = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
       polyEl.setAttribute("points", pts2s(poly));
       polyEl.setAttribute("fill", hl ? "#ffd166" : fill);
+      if (hl) polyEl.setAttribute("fill-opacity", "0.55"); // laisse deviner l'image en dessous
       polyEl.setAttribute("stroke", "#111");
       polyEl.setAttribute("stroke-width", "0.6");
       if (hl) {
