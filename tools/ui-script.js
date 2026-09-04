@@ -31,8 +31,12 @@ const OWNER_COLOR = { [HUMAN]: "#3b82c9", [OPPONENT]: "#c93b3b" };
 
 // --- Géométrie du plateau (reprise à l'identique des viewers de debug) ---
 const CELL_W = 34, CELL_H = 40, QUIN = 6, NOTCH = 4;
+// Marge du haut agrandie d'une ligne entière : laisse la place au
+// bandeau titre des vraies images de tuile, qui déborde au-dessus de
+// la grille cliquable (voir TILE_OVERLAP plus bas) sans la décaler.
+const BOARD_TOP = 20 + CELL_H;
 function cellPoly(col, row) {
-  const rowTop = 20 + row * CELL_H;
+  const rowTop = BOARD_TOP + row * CELL_H;
   const rowBot = rowTop + CELL_H;
   const mid = (rowTop + rowBot) / 2;
   const left = (row % 2 === 0) ? 10 - QUIN : 10 + QUIN;
@@ -49,21 +53,35 @@ function cellCenter(col, row) {
 }
 const TERRAIN_FILL = { road: "#4a4a55", off_road: "#7a5c3a", mud: "#3d2a1a", impassable: "#5c2020" };
 
-// --- Vraies images de tuiles (tiles/images/*.webp) ---
+// --- Calibrage mesuré directement sur les vrais fichiers (pixels réels
+// de tiles/images/vendetta-01a/02a/04b.webp, cohérent sur les 3) ---
+// - Bandeau titre : le haut de l'image n'est PAS une case cliquable —
+//   la grille des 6 lignes ne commence qu'à 1/7 de la hauteur totale
+//   (mesuré : lignes de séparation à des intervalles de ~271px pour
+//   une image de 1891px de haut = 1891/7, très exactement). Donc une
+//   image de tuile fait la hauteur de 7 lignes, pas 6, et démarre
+//   une ligne plus haut que la grille cliquable.
+// - Chevauchement horizontal entre tuiles : les tuiles s'emboîtent en
+//   quinconce (bord gauche/droit en dents de scie, alpha mesuré :
+//   lignes paires x∈[32,2382], lignes impaires x∈[147,2498] sur une
+//   image de 2500px de large = 8 colonnes) — bord à bord SANS
+//   chevauchement laisse un trou net ; mesuré : chaque tuile doit
+//   chevaucher la précédente de ~0.48 largeur de colonne pour que le
+//   zigzag s'emboîte exactement (vérifié visuellement sur un montage
+//   de test). Approximatif de quelques pixels près, à affiner au
+//   pixel si besoin une fois vu en vrai.
+const TILE_OVERLAP = 0.48 * CELL_W;
+
 // L'identifiant d'une tuile réelle (tile.id, ex. "vendetta-01a") est
 // posé par instantiateTile() (engine.js) et correspond EXACTEMENT au
 // nom de fichier — aucun manifeste séparé à maintenir. La Finish Line
 // n'a pas d'id (générée directement par createFinishLineTile(),
 // engine.js) mais porte sa propre face visuelle aléatoire (tile.face,
-// "a"/"b") — voir docs/rewrite-plan.md. Une tuile de test
-// (createTestTile, utilisée uniquement par les suites de tests, jamais
-// par ce prototype) n'a ni id ni face : on retombe alors sur le
-// rendu couleur existant, inchangé.
-// Chemin relatif à PARTIR DE tools/ (où vit ce prototype), PAS de la
-// racine du dépôt — tiles/ est un dossier voisin de tools/, d'où le
-// "../" (repéré et corrigé avant que Mayrik ne voie des images
-// cassées : mon premier test de validation vérifiait par erreur les
-// chemins depuis la racine du dépôt, pas depuis tools/).
+// "a"/"b"). Une tuile de test (createTestTile, utilisée uniquement par
+// les suites de tests, jamais par ce prototype) n'a ni id ni face : on
+// retombe alors sur le rendu couleur existant, inchangé. Chemin
+// relatif à PARTIR DE tools/ (où vit ce prototype), PAS de la racine
+// du dépôt — tiles/ est un dossier voisin de tools/, d'où le "../".
 function tileImagePath(tile) {
   if (!tile) return null;
   if (tile.face) return `../tiles/images/finishline-${tile.face}.webp`;
@@ -725,7 +743,7 @@ function renderBoard() {
   const b = board();
   const svg = document.getElementById("board");
   const w = 10 + b.cols * CELL_W + 20;
-  const h = 20 + b.rows * CELL_H + 10;
+  const h = BOARD_TOP + b.rows * CELL_H + 10;
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   svg.innerHTML = "";
 
@@ -742,23 +760,25 @@ function renderBoard() {
   // visuel par-dessus lequel rien ne se déclenche.
   const orderedTiles = [G.progressionState.rearTile, G.progressionState.middleTile, G.progressionState.leadTile, G.progressionState.finishLineTile].filter(Boolean);
   const colHasImage = [];
-  let colOffset = 0;
+  let colOffset = 0; // grille logique (polygones cliquables) — jamais chevauchée
+  let imgX = 10; // position réelle de l'image courante — chevauche la précédente
   for (const t of orderedTiles) {
     const imgPath = tileImagePath(t);
     if (imgPath) {
       const imgEl = document.createElementNS("http://www.w3.org/2000/svg", "image");
       imgEl.setAttribute("href", imgPath);
       imgEl.setAttributeNS("http://www.w3.org/1999/xlink", "href", imgPath); // vieux moteurs de rendu SVG
-      imgEl.setAttribute("x", 10 + colOffset * CELL_W);
-      imgEl.setAttribute("y", 20);
+      imgEl.setAttribute("x", imgX);
+      imgEl.setAttribute("y", BOARD_TOP - CELL_H); // déborde d'une ligne au-dessus (bandeau titre)
       imgEl.setAttribute("width", t.cols * CELL_W);
-      imgEl.setAttribute("height", t.rows * CELL_H);
+      imgEl.setAttribute("height", 7 * CELL_H); // 6 lignes cliquables + 1 ligne de bandeau
       imgEl.setAttribute("preserveAspectRatio", "none");
       imgEl.setAttribute("pointer-events", "none");
       svg.appendChild(imgEl);
     }
     for (let c = colOffset; c < colOffset + t.cols; c++) colHasImage[c] = !!imgPath;
     colOffset += t.cols;
+    imgX += t.cols * CELL_W - TILE_OVERLAP;
   }
 
   for (let row = 0; row < b.rows; row++) {
@@ -767,8 +787,9 @@ function renderBoard() {
       const poly = cellPoly(col, row);
       // Une vraie image de tuile couvre déjà cette case : le polygone
       // devient transparent (garde uniquement son rôle de zone
-      // cliquable/surbrillance), au lieu du à-plat de couleur —
-      // repli inchangé si jamais aucune image n'est disponible.
+      // cliquable/surbrillance) et perd son contour noir de debug —
+      // le contour des cases est déjà dessiné sur le visuel de la
+      // tuile. Repli inchangé (couleur + contour) si aucune image.
       const fill = colHasImage[col] ? "transparent" : (TERRAIN_FILL[cell.terrain] || "#444");
       const key = col + "," + row;
       const hl = highlightMap.get(key);
@@ -776,7 +797,7 @@ function renderBoard() {
       polyEl.setAttribute("points", pts2s(poly));
       polyEl.setAttribute("fill", hl ? "#ffd166" : fill);
       if (hl) polyEl.setAttribute("fill-opacity", "0.55"); // laisse deviner l'image en dessous
-      polyEl.setAttribute("stroke", "#111");
+      polyEl.setAttribute("stroke", colHasImage[col] ? "none" : "#111");
       polyEl.setAttribute("stroke-width", "0.6");
       if (hl) {
         polyEl.classList.add("clickable");
