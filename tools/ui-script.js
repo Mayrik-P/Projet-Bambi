@@ -59,10 +59,15 @@ const TERRAIN_FILL = { road: "#4a4a55", off_road: "#7a5c3a", mud: "#3d2a1a", imp
 // (createTestTile, utilisée uniquement par les suites de tests, jamais
 // par ce prototype) n'a ni id ni face : on retombe alors sur le
 // rendu couleur existant, inchangé.
+// Chemin relatif à PARTIR DE tools/ (où vit ce prototype), PAS de la
+// racine du dépôt — tiles/ est un dossier voisin de tools/, d'où le
+// "../" (repéré et corrigé avant que Mayrik ne voie des images
+// cassées : mon premier test de validation vérifiait par erreur les
+// chemins depuis la racine du dépôt, pas depuis tools/).
 function tileImagePath(tile) {
   if (!tile) return null;
-  if (tile.face) return `tiles/images/finishline-${tile.face}.webp`;
-  if (tile.id) return `tiles/images/${tile.id}.webp`;
+  if (tile.face) return `../tiles/images/finishline-${tile.face}.webp`;
+  if (tile.id) return `../tiles/images/${tile.id}.webp`;
   return null;
 }
 
