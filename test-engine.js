@@ -2787,4 +2787,37 @@ section("Test 205 — forceMoveOneSpace() centralisé : un déplacement forcé P
   console.log("Stationary repositionnée après décalage de tuile (attendu col 8, row 2) :", stationary205.col, stationary205.row);
 }
 
+// -----------------------------------------------------------------
+// TEST 206 : createFinishLineTile() choisit une face visuelle (a/b)
+// aléatoire, injectable pour les tests, sans jamais changer le
+// terrain (100% Route dans tous les cas)
+// -----------------------------------------------------------------
+section("Test 206 — Finish Line : face visuelle (a/b) aléatoire mais injectable, terrain toujours 100% Route");
+
+{
+  const forcedA = createFinishLineTile(6, "a");
+  const forcedB = createFinishLineTile(6, "b");
+  console.log("Face forcée 'a' respectée (attendu 'a') :", forcedA.face);
+  console.log("Face forcée 'b' respectée (attendu 'b') :", forcedB.face);
+  console.log("Terrain 100% Route malgré la face (attendu true) :", forcedA.grid.every((row) => row[0].terrain === TERRAIN.ROAD) && forcedB.grid.every((row) => row[0].terrain === TERRAIN.ROAD));
+
+  // Sans injection : les deux faces doivent pouvoir sortir sur un
+  // grand nombre de tirages (pas de biais figé sur une seule valeur).
+  const seenFaces = new Set();
+  for (let i = 0; i < 200; i++) {
+    seenFaces.add(createFinishLineTile(6).face);
+  }
+  console.log("Les deux faces 'a' et 'b' observées sur 200 tirages non forcés (attendu true) :", seenFaces.has("a") && seenFaces.has("b"));
+
+  // checkGameEndConditions() doit relayer options.forcedFinishLineFace
+  // jusqu'à createFinishLineTile() au moment de la poser.
+  const rear206 = createTestTile(8, 6);
+  const middle206 = createTestTile(8, 6);
+  const lead206 = createTestTile(8, 6);
+  const state206 = createTileProgressionState(rear206, middle206, lead206, []);
+  state206.tilesPlacedCount = 5;
+  checkGameEndConditions(state206, [], [], ["Alice", "Bob"], { forcedFinishLineFace: "b" });
+  console.log("Face forcée relayée depuis checkGameEndConditions (attendu 'b') :", state206.finishLineTile && state206.finishLineTile.face);
+}
+
 section("Fin des tests");

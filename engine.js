@@ -162,12 +162,17 @@ function createTileProgressionState(rearTile, middleTile, leadTile, drawPile = [
 // finale réunies : une seule colonne de large, purement décorative
 // (précisé par Mayrik). Y entrer = victoire immédiate pour le
 // propriétaire du véhicule.
-function createFinishLineTile(rows) {
+// Le visuel (face "a" ou "b") est purement esthétique — aucune
+// influence sur le terrain (toujours 100% Route) — tiré au hasard à
+// la pose, comme les faces des tuiles route (voir pickRandomFace).
+// injectedFace permet de forcer une face précise pour les tests.
+function createFinishLineTile(rows, injectedFace = null) {
+  const face = injectedFace || (Math.random() < 0.5 ? "a" : "b");
   const grid = [];
   for (let r = 0; r < rows; r++) {
     grid.push([{ terrain: TERRAIN.ROAD, hazard: null, revealedHazard: null }]);
   }
-  return { cols: 1, rows, grid };
+  return { cols: 1, rows, grid, face };
 }
 
 function buildBoardFromProgressionState(state) {
@@ -192,7 +197,7 @@ function buildBoardFromProgressionState(state) {
 // une fois après le mouvement, une fois en fin de tour) ne cause
 // aucun effet de bord — une fois la Finish Line posée ou la partie
 // terminée, les vérifications suivantes ne font que le confirmer.
-function checkGameEndConditions(state, allCars, allChoppers, playerNames) {
+function checkGameEndConditions(state, allCars, allChoppers, playerNames, options = {}) {
   const log = [];
 
   // 1. Victoire par ligne d'arrivée.
@@ -232,7 +237,7 @@ function checkGameEndConditions(state, allCars, allChoppers, playerNames) {
     }
 
     if (shouldAdd) {
-      state.finishLineTile = createFinishLineTile(state.rearTile.rows);
+      state.finishLineTile = createFinishLineTile(state.rearTile.rows, options.forcedFinishLineFace);
     }
   }
 
