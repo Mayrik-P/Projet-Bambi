@@ -44,12 +44,20 @@ const CELL_H = CELL_W * (TILE_NATIVE_H / TILE_NATIVE_ROW_UNITS) / (TILE_NATIVE_W
 // bandeau titre des vraies images de tuile, qui déborde au-dessus de
 // la grille cliquable (voir TILE_OVERLAP plus bas) sans la décaler.
 const BOARD_TOP = 20 + CELL_H;
+// Position x réelle (chevauchement inclus) du bord gauche de chaque
+// colonne GLOBALE du plateau — recalculée à chaque renderBoard() par
+// la même boucle qui place les images, AVANT que cellPoly() en ait
+// besoin. Sans ça, la grille cliquable (qui ignorait le chevauchement
+// entre tuiles) dérivait de plus en plus vers la droite par rapport
+// aux vraies images au fil des tuiles — bug réel signalé par Mayrik.
+let colLeftX = [];
 function cellPoly(col, row) {
   const rowTop = BOARD_TOP + row * CELL_H;
   const rowBot = rowTop + CELL_H;
   const mid = (rowTop + rowBot) / 2;
-  const left = (row % 2 === 0) ? 10 - QUIN : 10 + QUIN;
-  const x0 = left + col * CELL_W;
+  const quinShift = (row % 2 === 0) ? -QUIN : QUIN;
+  const base = colLeftX[col] !== undefined ? colLeftX[col] : 10 + col * CELL_W;
+  const x0 = base + quinShift;
   const rx = x0 + CELL_W + NOTCH;
   return [[x0, rowTop], [x0 + CELL_W, rowTop], [rx, mid], [x0 + CELL_W, rowBot], [x0, rowBot], [x0 + NOTCH, mid]];
 }
@@ -767,16 +775,18 @@ function highlightedCells() {
 function renderBoard() {
   const b = board();
   const svg = document.getElementById("board");
-  // Largeur réservée pour le NOMBRE MAXIMAL de colonnes visibles à la
-  // fois (3 tuiles route + Finish Line), PAS le nombre de colonnes
-  // actuel — sinon l'apparition de la Finish Line en fin de partie
-  // agrandit le viewBox et rétrécit visuellement tout le reste du
-  // plateau d'un coup (bug réel signalé par Mayrik). Le plateau garde
-  // ainsi une échelle constante du début à la fin ; la Finish Line
-  // remplit simplement l'espace vide réservé à droite quand elle
-  // apparaît, sans jamais redimensionner les tuiles déjà en place.
-  const MAX_BOARD_COLS = 3 * TILE_NATIVE_COLS + 1;
-  const w = 10 + MAX_BOARD_COLS * CELL_W + 20;
+  // Largeur réservée pour le NOMBRE MAXIMAL de tuiles visibles à la
+  // fois (3 tuiles route + Finish Line), PAS le nombre actuel — sinon
+  // l'apparition de la Finish Line agrandit le viewBox et rétrécit
+  // visuellement tout le plateau d'un coup. Calculée en SIMULANT le
+  // même enchaînement que la vraie boucle de pose d'images plus bas
+  // (chevauchements inclus) : un simple "nb colonnes × CELL_W" ne
+  // suffisait pas, ça laissait un vide trop large à droite (chaque
+  // chevauchement grignote un peu de largeur totale) — bug réel
+  // signalé par Mayrik.
+  const maxSeqWidth = [{ cols: TILE_NATIVE_COLS }, { cols: TILE_NATIVE_COLS }, { cols: TILE_NATIVE_COLS }, { face: "a" }]
+    .reduce((sum, t, i) => sum + tileImageWidth(t) - (i > 0 ? TILE_OVERLAP : 0), 0);
+  const w = 10 + maxSeqWidth + 20;
   const h = BOARD_TOP + b.rows * CELL_H + 10;
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   svg.innerHTML = "";
@@ -794,7 +804,8 @@ function renderBoard() {
   // visuel par-dessus lequel rien ne se déclenche.
   const orderedTiles = [G.progressionState.rearTile, G.progressionState.middleTile, G.progressionState.leadTile, G.progressionState.finishLineTile].filter(Boolean);
   const colHasImage = [];
-  let colOffset = 0; // grille logique (polygones cliquables) — jamais chevauchée
+  colLeftX = []; // recalculée à chaque rendu, lue par cellPoly()
+  let colOffset = 0;
   let imgX = 10; // position réelle de l'image courante — chevauche la précédente
   for (const t of orderedTiles) {
     const imgPath = tileImagePath(t);
@@ -810,9 +821,12 @@ function renderBoard() {
       imgEl.setAttribute("pointer-events", "none");
       svg.appendChild(imgEl);
     }
-    for (let c = colOffset; c < colOffset + t.cols; c++) colHasImage[c] = !!imgPath;
+    for (let c = 0; c < t.cols; c++) {
+      colHasImage[colOffset + c] = !!imgPath;
+      colLeftX[colOffset + c] = imgX + c * CELL_W; // lu par cellPoly() — même repère que l'image réelle
+    }
     colOffset += t.cols;
-    imgX += t.cols * CELL_W - TILE_OVERLAP;
+    imgX += tileImageWidth(t) - TILE_OVERLAP;
   }
 
   for (let row = 0; row < b.rows; row++) {
