@@ -10,6 +10,7 @@
   .layout { display:flex; gap:20px; flex-wrap: wrap; align-items:flex-start; }
   .board-wrap { flex: 1 1 600px; min-width: 300px; background:#111; border-radius:8px; padding:10px; overflow:auto; }
   svg { width: 100%; height: auto; display:block; background:#000; }
+  #bgTiles { fill: #6a1b9a; }
   .panel { flex: 0 0 320px; background:#25252b; border-radius:8px; padding:14px; }
   .group { border:1px solid #444; border-radius:6px; padding:10px; margin-bottom:14px; }
   .group h2 { font-size:14px; margin:0 0 10px; color:#ffd166; }
@@ -38,9 +39,8 @@
       <h2>Image des plateaux (le visuel)</h2>
       <div class="row"><label>Décalage X</label><input type="range" id="imgOffsetX" min="-60" max="60" step="0.5" value="10"><span class="val" id="v_imgOffsetX"></span></div>
       <div class="row"><label>Décalage Y</label><input type="range" id="imgOffsetY" min="-60" max="60" step="0.5" value="-9.4"><span class="val" id="v_imgOffsetY"></span></div>
-      <div class="row"><label>Largeur case</label><input type="range" id="imgCellW" min="20" max="50" step="0.1" value="34"><span class="val" id="v_imgCellW"></span></div>
-      <div class="row"><label>Hauteur case</label><input type="range" id="imgCellH" min="15" max="45" step="0.1" value="29.4"><span class="val" id="v_imgCellH"></span></div>
-      <div class="hint">Position/taille de l'assemblage des 3 tuiles + Finish Line (leur calage relatif entre elles reste inchangé).</div>
+      <div class="row"><label>Agrandissement</label><input type="range" id="imgScale" min="20" max="50" step="0.1" value="34"><span class="val" id="v_imgScale"></span></div>
+      <div class="hint">Position/taille de l'assemblage des 3 tuiles + Finish Line (leur calage relatif entre elles reste inchangé). Un seul curseur de taille : la hauteur suit automatiquement la largeur pour ne jamais déformer les proportions réelles des images.</div>
     </div>
 
     <div class="group">
@@ -69,11 +69,19 @@ const QUIN_RATIO = 57.667 / NATIVE_COL_W;
 const TILE_OVERLAP_RATIO = 0.48;
 const NOTCH = 4;
 
-const ids = ["imgOffsetX","imgOffsetY","imgCellW","imgCellH","gridOffsetX","gridOffsetY","gridCellW","gridCellH"];
+const ids = ["imgOffsetX","imgOffsetY","imgScale","gridOffsetX","gridOffsetY","gridCellW","gridCellH"];
 const els = {};
 ids.forEach((id) => { els[id] = document.getElementById(id); });
 
 function val(id) { return parseFloat(els[id].value); }
+
+// La hauteur d'affichage de l'image suit TOUJOURS la largeur selon le
+// vrai rapport largeur/hauteur des tuiles (2500x1891px pour 7 unités
+// de hauteur) — un seul curseur ne peut donc jamais déformer les
+// proportions réelles.
+function imgCellHFromScale(imgScale) {
+  return imgScale * (1891 / 7) / (2500 / 8);
+}
 
 function tileImageWidth(cellW, cellH, isFinish) {
   if (isFinish) return (7 * cellH) * (FINISHLINE_NATIVE_W / FINISHLINE_NATIVE_H);
@@ -84,13 +92,31 @@ function render() {
   ids.forEach((id) => { document.getElementById("v_" + id).textContent = val(id).toFixed(1); });
 
   const imgOffsetX = val("imgOffsetX"), imgOffsetY = val("imgOffsetY");
-  const imgCellW = val("imgCellW"), imgCellH = val("imgCellH");
+  const imgCellW = val("imgScale");
+  const imgCellH = imgCellHFromScale(imgCellW);
   const gridOffsetX = val("gridOffsetX"), gridOffsetY = val("gridOffsetY");
   const gridCellW = val("gridCellW"), gridCellH = val("gridCellH");
   const overlap = TILE_OVERLAP_RATIO * imgCellW;
 
   const svg = document.getElementById("board");
   svg.innerHTML = "";
+
+  // Fond violet DERRIÈRE les tuiles seulement (pas toute la fenêtre) :
+  // aide à distinguer d'un coup d'œil le bord réel des tuiles du fond
+  // de la fenêtre d'affichage (le rectangle noir).
+  const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  const totalW = (() => {
+    let w = 0, x = imgOffsetX;
+    const tls = [{cols:8,isFinish:false},{cols:8,isFinish:false},{cols:8,isFinish:false},{isFinish:true}];
+    tls.forEach((t, i) => { const tw = tileImageWidth(imgCellW, imgCellH, t.isFinish); if (i > 0) x += -overlap; w = x + tw - imgOffsetX; x += tw; });
+    return w;
+  })();
+  bg.setAttribute("id", "bgTiles");
+  bg.setAttribute("x", imgOffsetX);
+  bg.setAttribute("y", imgOffsetY);
+  bg.setAttribute("width", totalW);
+  bg.setAttribute("height", 7 * imgCellH);
+  svg.appendChild(bg);
 
   // --- Couche image : 3 tuiles route + Finish Line, calage relatif inchangé ---
   const tiles = [
@@ -142,8 +168,18 @@ ids.forEach((id) => els[id].addEventListener("input", render));
 render();
 
 document.getElementById("copyBtn").addEventListener("click", () => {
-  const lines = ["Réglages de calage Thunder Road Vendetta :", ""];
-  ids.forEach((id) => lines.push(id + " = " + val(id).toFixed(2)));
+  const imgCellW = val("imgScale");
+  const imgCellH = imgCellHFromScale(imgCellW);
+  const lines = ["Réglages de calage Thunder Road Vendetta :", "",
+    "imgOffsetX = " + val("imgOffsetX").toFixed(2),
+    "imgOffsetY = " + val("imgOffsetY").toFixed(2),
+    "imgCellW = " + imgCellW.toFixed(2),
+    "imgCellH (dérivée automatiquement) = " + imgCellH.toFixed(2),
+    "gridOffsetX = " + val("gridOffsetX").toFixed(2),
+    "gridOffsetY = " + val("gridOffsetY").toFixed(2),
+    "gridCellW = " + val("gridCellW").toFixed(2),
+    "gridCellH = " + val("gridCellH").toFixed(2)
+  ];
   const text = lines.join("\n");
   document.getElementById("out").value = text;
   navigator.clipboard.writeText(text).catch(() => {});
