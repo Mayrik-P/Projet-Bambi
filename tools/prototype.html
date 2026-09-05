@@ -6794,8 +6794,8 @@ function carShadowMarkup(imgPath, x, y, isRotated) {
 // moment-là, non revu ici pour ne pas toucher à un rendu déjà validé
 // par Mayrik).
 const HAZARD_SHADOW_OFFSET = HAZARD_IMG_W * 0.05;
-const HAZARD_SHADOW_BLUR = HAZARD_IMG_W * 0.015;
-const HAZARD_SHADOW_OPACITY = 0.5;
+const HAZARD_SHADOW_BLUR = HAZARD_IMG_W * 0.006; // volontairement minime : juste assez pour ne pas laisser de vide sur les pointes (retour de Mayrik, préfère un bord net à un flou doux)
+const HAZARD_SHADOW_OPACITY = 0.7;
 // L'épave (wreck.webp) n'a pas de couleur de propriétaire (p.7 : pion
 // neutre). Chemin relatif à partir de tools/ (où vit ce prototype),
 // comme tileImagePath() ci-dessus.
