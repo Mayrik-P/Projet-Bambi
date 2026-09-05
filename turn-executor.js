@@ -34,7 +34,8 @@ const {
   CAR_STATUS,
   drawSpecificDieFromPool, advanceTurn,
   resolveNitroCommand, resolveRepairCommand, resolveDriftCommand,
-  resolveAirstrikeCommand, playTurnAssignMoveWithProgression,
+  resolveAirstrikeCommand, resolveAirstrikeShoot, placeChopperAirstrike,
+  playTurnAssignMoveWithProgression,
   playTurnAssignEnterWithProgression, playTurnCoastWithProgression,
   playTurnAssignMoveWithProgressionGen, playTurnAssignEnterWithProgressionGen,
   playTurnCoastWithProgressionGen,
@@ -288,6 +289,7 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
 
   let effectiveDieValue = dieValue;
   const slamOptions = { decideReroll: ai.decideSlamRerollDefault };
+  let pendingAirstrikeShoot = null;
 
   if (command && !isCoast) {
     drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);
@@ -306,15 +308,48 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
       let chopper = allChoppers.find((ch) => ch.owner === currentPlayer);
       if (!chopper) { chopper = createChopper(currentPlayer); allChoppers.push(chopper); }
       if (command.placement) {
-        resolveAirstrikeCommand(
-          buildBoardFromProgressionState(progressionState), allCars, allChoppers, chopper, command.placement.col, command.placement.row,
-          { roundNumber: roundState.roundNumber, shootTarget: command.target, progressionState, allChoppers }
+        // Placement SEUL ici (retour de Mayrik) : le tir n'est plus
+        // résolu dans la foulée — sinon le chopper et les dégâts du
+        // tir apparaissaient simultanément à l'écran, incompréhensible
+        // pour le joueur. `pendingAirstrikeShoot` remonte à l'appelant
+        // (tools/ui-script.js, commitAssignAndCommand) tout ce qu'il
+        // faut pour afficher le chopper posé, PUIS résoudre le tir à
+        // part via executeAirstrikeShoot ci-dessous, avec un rendu
+        // entre les deux. resolveAirstrikeCommand (atomique) reste
+        // utilisée telle quelle par le tour de l'IA.
+        const placeResult = placeChopperAirstrike(
+          buildBoardFromProgressionState(progressionState), allCars, allChoppers, chopper, command.placement.col, command.placement.row
         );
+        if (placeResult.ok) {
+          log.push(`AIRSTRIKE : chopper de ${currentPlayer} placé en (col ${command.placement.col}, row ${command.placement.row})`);
+          pendingAirstrikeShoot = { chopper, target: command.target };
+        } else {
+          log.push(`AIRSTRIKE : placement impossible (${placeResult.reason})`);
+        }
       }
     }
   }
 
-  return { log, effectiveDieValue, slamOptions };
+  return { log, effectiveDieValue, slamOptions, pendingAirstrikeShoot };
+}
+
+/**
+ * Deuxième moitié d'une commande Airstrike humaine (voir
+ * executeAssignAndCommand ci-dessus) : résout le tir du chopper déjà
+ * placé, séparément, pour que l'appelant puisse rendre l'écran entre
+ * les deux étapes. `target` peut être null (joueur ayant décliné le
+ * tir), auquel cas rien n'est résolu — même convention qu'executeShoot.
+ */
+function executeAirstrikeShoot(progressionState, allCars, allChoppers, chopper, target, roundNumber) {
+  const log = [];
+  if (!target) {
+    log.push(`Chopper de ${chopper.owner} ne tire pas.`);
+    return { log, shootResult: null };
+  }
+  const board = buildBoardFromProgressionState(progressionState);
+  const outcome = resolveAirstrikeShoot(board, allCars, chopper, target, { roundNumber, progressionState, allChoppers });
+  log.push(...outcome.log);
+  return { log, shootResult: outcome.shootResult };
 }
 
 /**
@@ -486,6 +521,7 @@ module.exports = {
   executeDecisionGen,
   driveInteractive,
   executeAssignAndCommand,
+  executeAirstrikeShoot,
   executeEntryStep,
   executeEntryStepGen,
   executeMoveStep,
