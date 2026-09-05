@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>Outil de calage véhicules — Thunder Road Vendetta (usage unique)</title>
+<title>Outil de calage véhicules — décalage horizontal — Thunder Road Vendetta (usage unique)</title>
 <style>
   body { background:#1a1a1f; color:#eee; font-family: system-ui, sans-serif; margin:0; padding:16px; }
   h1 { font-size: 18px; color:#f5a623; margin: 0 0 4px; }
@@ -26,8 +26,8 @@
 </head>
 <body>
 
-<h1>Outil de calage — taille des images véhicules</h1>
-<p class="sub">Un seul véhicule de chaque taille (small/medium/large) + un chopper, posés sur le vrai plateau (calage grille déjà figé, repris tel quel de ui-script.js). Ajuste le curseur jusqu'à ce que la taille te convienne, puis clique « Copier les réglages ».</p>
+<h1>Outil de calage — décalage horizontal des véhicules</h1>
+<p class="sub">Taille déjà bonne (résolution native identique). Un véhicule de chaque taille (small/medium/large) + un chopper, posés sur le vrai plateau (calage grille déjà figé, repris tel quel de ui-script.js). Ajuste le curseur jusqu'à ce que le véhicule ne chevauche plus trop l'angle rentrant gauche du chevron, puis clique « Copier les réglages ».</p>
 
 <div class="layout">
   <div class="board-wrap">
@@ -36,9 +36,9 @@
 
   <div class="panel">
     <div class="group">
-      <h2>Taille des véhicules</h2>
-      <div class="row"><label>Largeur (CAR_IMG_W)</label><input type="range" id="carImgW" min="15" max="70" step="0.1" value="48.06"><span class="val" id="v_carImgW"></span></div>
-      <div class="hint">Un seul curseur : la hauteur suit automatiquement le vrai rapport largeur/hauteur (600×332px, identique sur toutes les images véhicules) — jamais de déformation possible. La position reste toujours centrée sur la case (les fonds transparents ont le véhicule déjà centré dedans, confirmé par Mayrik).</div>
+      <h2>Décalage horizontal des véhicules</h2>
+      <div class="row"><label>Décalage X</label><input type="range" id="carOffsetX" min="-15" max="15" step="0.1" value="0"><span class="val" id="v_carOffsetX"></span></div>
+      <div class="hint">Taille déjà confirmée correcte (résolution native identique tuiles/véhicules/hazards) — inchangée ici. Décale uniquement le centre de l'image par rapport au centre géométrique de la case (cellCenter()), pour compenser l'effet visuel du chevron (angle rentrant à gauche). Valeur positive = vers la droite.</div>
     </div>
 
     <button id="copyBtn">Copier les réglages</button>
@@ -81,14 +81,18 @@ function cellCenter(col, row) {
 
 // --- Véhicules : ratio natif identique pour toutes les images ---
 const CAR_IMG_NATIVE_W = 600, CAR_IMG_NATIVE_H = 332;
+// Taille déjà confirmée correcte par Mayrik (résolution native
+// identique sur tuiles/véhicules/hazards) — fixe, ne fait PAS partie
+// de ce qu'on recale ici.
+const CAR_IMG_W = 48.06;
+const CAR_IMG_H = CAR_IMG_W * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
 
-const els = { carImgW: document.getElementById("carImgW") };
+const els = { carOffsetX: document.getElementById("carOffsetX") };
 function val(id) { return parseFloat(els[id].value); }
 
 function render() {
-  document.getElementById("v_carImgW").textContent = val("carImgW").toFixed(1);
-  const carImgW = val("carImgW");
-  const carImgH = carImgW * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
+  document.getElementById("v_carOffsetX").textContent = val("carOffsetX").toFixed(1);
+  const carOffsetX = val("carOffsetX");
 
   const svg = document.getElementById("board");
   svg.innerHTML = "";
@@ -128,10 +132,10 @@ function render() {
     const el = document.createElementNS("http://www.w3.org/2000/svg", "image");
     el.setAttribute("href", v.path);
     el.setAttributeNS("http://www.w3.org/1999/xlink", "href", v.path);
-    el.setAttribute("x", cx - carImgW / 2);
-    el.setAttribute("y", cy - carImgH / 2);
-    el.setAttribute("width", carImgW);
-    el.setAttribute("height", carImgH);
+    el.setAttribute("x", cx + carOffsetX - CAR_IMG_W / 2);
+    el.setAttribute("y", cy - CAR_IMG_H / 2);
+    el.setAttribute("width", CAR_IMG_W);
+    el.setAttribute("height", CAR_IMG_H);
     svg.appendChild(el);
   }
 
@@ -151,15 +155,13 @@ function render() {
   }
 }
 
-els.carImgW.addEventListener("input", render);
+els.carOffsetX.addEventListener("input", render);
 render();
 
 document.getElementById("copyBtn").addEventListener("click", () => {
-  const carImgW = val("carImgW");
-  const carImgH = carImgW * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
+  const carOffsetX = val("carOffsetX");
   const lines = ["Réglages de calage véhicules Thunder Road Vendetta :", "",
-    "CAR_IMG_W = " + carImgW.toFixed(2),
-    "CAR_IMG_H (dérivée automatiquement) = " + carImgH.toFixed(2)
+    "CAR_IMG_OFFSET_X = " + carOffsetX.toFixed(2)
   ];
   const text = lines.join("\n");
   document.getElementById("out").value = text;
