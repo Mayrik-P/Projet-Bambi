@@ -228,7 +228,7 @@ function createFinishLineTile(rows, injectedFace = null) {
   const face = injectedFace || (Math.random() < 0.5 ? "a" : "b");
   const grid = [];
   for (let r = 0; r < rows; r++) {
-    grid.push([{ terrain: TERRAIN.ROAD, hazard: null, revealedHazard: null }]);
+    grid.push([{ terrain: TERRAIN.ROAD, hazard: null, revealedHazard: null, isFinishLine: true }]);
   }
   return { cols: 1, rows, grid, face };
 }
@@ -753,6 +753,29 @@ function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remain
   car.row = targetRow;
   let newRemaining = mudExceptionApplies ? 0 : remaining - cost;
   log.push(`${car.id} avance vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
+
+  // Ligne d'arrivée (p.11) : y entrer met fin à la partie IMMÉDIATEMENT
+  // — le mouvement en cours (chemin complet de l'IA, cascade Dazed...)
+  // doit s'arrêter LÀ, sans consommer un seul point de déplacement
+  // supplémentaire. BUG RÉEL corrigé (retour de Mayrik) : avant ce
+  // correctif, seul checkGameEndConditions() (appelé par
+  // l'orchestrateur APRÈS la fin ENTIÈRE du pas) détectait la victoire
+  // — un chemin qui traversait la Finish Line en cours de route (ex.
+  // l'IA calcule tout son trajet d'un coup, contrairement au joueur
+  // humain qui avance case par case) pouvait donc continuer plusieurs
+  // cases de plus avant que la partie ne se termine. `stopped: true`
+  // fait remonter l'arrêt à TOUS les appelants (moveCarGen, entrée sur
+  // le plateau, cascade Dazed) exactement comme une élimination ou un
+  // Slam — la victoire elle-même reste détectée par
+  // checkGameEndConditions(), appelé par l'orchestrateur juste après
+  // ce pas, jamais recalculée ici.
+  if (space.isFinishLine) {
+    log.push(`${car.id} atteint la Finish Line — mouvement interrompu immédiatement.`);
+    if (slamOptions.emitSteps) {
+      yield { type: "step", car, col: car.col, row: car.row };
+    }
+    return { log, remaining: 0, stopped: true, reachedFinishLine: true };
+  }
 
   // Pause purement VISUELLE (aucun effet sur les règles ni sur l'issue
   // de la partie) — demandée par Mayrik le 28/08 pour voir le
@@ -1349,6 +1372,25 @@ function* forceMoveOneSpaceGen(tile, car, allCars, directionName, options = {}, 
   car.col = targetCol;
   car.row = targetRow;
   log.push(`${car.id} est projetée en ${directionName} vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
+
+  // Même correctif que dans enterAdjacentSpaceGen (voir son commentaire
+  // détaillé) : un déplacement FORCÉ (Slam, Skid, glissade Oil Slick,
+  // cascade en chaîne) qui atterrit sur la Finish Line doit lui aussi
+  // arrêter tout net — un véhicule projeté sur la ligne d'arrivée par
+  // un Slam remporte la partie pour son PROPRIÉTAIRE, même si ce n'est
+  // pas son tour (précisé par Mayrik). Retourner sans `slam`/
+  // `frontExit`/`eliminated` équivaut déjà à "déplacement réussi, rien
+  // d'autre à résoudre" pour tous les appelants existants (chaîne de
+  // Slam, Skid, glissade) — aucune plomberie supplémentaire requise :
+  // checkGameEndConditions(), appelé par l'orchestrateur juste après,
+  // détectera la victoire à ce point exact.
+  if (space.isFinishLine) {
+    log.push(`${car.id} atteint la Finish Line — mouvement interrompu immédiatement.`);
+    if (options.emitSteps) {
+      yield { type: "step", car, col: car.col, row: car.row };
+    }
+    return { log, reachedFinishLine: true };
+  }
 
   // Pause purement VISUELLE — voir le commentaire détaillé dans
   // enterAdjacentSpaceGen. Couvre ici les projections forcées (Slam,
@@ -2467,16 +2509,31 @@ function resolveAirstrikeCommand(tile, allCars, allChoppers, chopper, col, row, 
   }
   log.push(`AIRSTRIKE : chopper de ${chopper.owner} placé en (col ${col}, row ${row})`);
 
+  const shootOutcome = resolveAirstrikeShoot(tile, allCars, chopper, options.shootTarget, options);
+  log.push(...shootOutcome.log);
+
+  return { ok: true, log, shootResult: shootOutcome.shootResult };
+}
+
+// Moitié "tir" de l'Airstrike, extraite séparément (retour de Mayrik) :
+// permet à l'appelant de placer le chopper (placeChopperAirstrike),
+// laisser l'interface l'afficher sur la case AVANT de résoudre le tir,
+// puis appeler cette fonction séparément — plutôt que tout résoudre
+// d'un coup, incompréhensible visuellement (le chopper et les dégâts
+// du tir apparaissaient jusqu'ici simultanément). resolveAirstrikeCommand
+// ci-dessus reste la version atomique (placement + tir en un seul
+// appel), toujours utilisée telle quelle par le tour de l'IA.
+function resolveAirstrikeShoot(tile, allCars, chopper, shootTarget, options = {}) {
+  const log = [];
   let shootResult = null;
-  if (options.shootTarget) {
+  if (shootTarget) {
     if (options.roundNumber === 1) {
       log.push(`Tir impossible : les armes ne sont pas encore actives au 1er round (p.10), même pour le chopper`);
     } else {
-      shootResult = resolveShoot(tile, allCars, chopper, options.shootTarget, options);
+      shootResult = resolveShoot(tile, allCars, chopper, shootTarget, options);
       log.push(...shootResult.log);
     }
   }
-
   return { ok: true, log, shootResult };
 }
 
@@ -3176,6 +3233,7 @@ module.exports = {
   applyDamage,
   repairCar,
   resolveAirstrikeCommand,
+  resolveAirstrikeShoot,
   resolveNitroCommand,
   resolveDriftCommand,
   resolveRepairCommand,
@@ -6096,6 +6154,7 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
 
   let effectiveDieValue = dieValue;
   const slamOptions = { decideReroll: decideSlamRerollDefault };
+  let pendingAirstrikeShoot = null;
 
   if (command && !isCoast) {
     drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);
@@ -6114,15 +6173,48 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
       let chopper = allChoppers.find((ch) => ch.owner === currentPlayer);
       if (!chopper) { chopper = createChopper(currentPlayer); allChoppers.push(chopper); }
       if (command.placement) {
-        resolveAirstrikeCommand(
-          buildBoardFromProgressionState(progressionState), allCars, allChoppers, chopper, command.placement.col, command.placement.row,
-          { roundNumber: roundState.roundNumber, shootTarget: command.target, progressionState, allChoppers }
+        // Placement SEUL ici (retour de Mayrik) : le tir n'est plus
+        // résolu dans la foulée — sinon le chopper et les dégâts du
+        // tir apparaissaient simultanément à l'écran, incompréhensible
+        // pour le joueur. `pendingAirstrikeShoot` remonte à l'appelant
+        // (tools/ui-script.js, commitAssignAndCommand) tout ce qu'il
+        // faut pour afficher le chopper posé, PUIS résoudre le tir à
+        // part via executeAirstrikeShoot ci-dessous, avec un rendu
+        // entre les deux. resolveAirstrikeCommand (atomique) reste
+        // utilisée telle quelle par le tour de l'IA.
+        const placeResult = placeChopperAirstrike(
+          buildBoardFromProgressionState(progressionState), allCars, allChoppers, chopper, command.placement.col, command.placement.row
         );
+        if (placeResult.ok) {
+          log.push(`AIRSTRIKE : chopper de ${currentPlayer} placé en (col ${command.placement.col}, row ${command.placement.row})`);
+          pendingAirstrikeShoot = { chopper, target: command.target };
+        } else {
+          log.push(`AIRSTRIKE : placement impossible (${placeResult.reason})`);
+        }
       }
     }
   }
 
-  return { log, effectiveDieValue, slamOptions };
+  return { log, effectiveDieValue, slamOptions, pendingAirstrikeShoot };
+}
+
+/**
+ * Deuxième moitié d'une commande Airstrike humaine (voir
+ * executeAssignAndCommand ci-dessus) : résout le tir du chopper déjà
+ * placé, séparément, pour que l'appelant puisse rendre l'écran entre
+ * les deux étapes. `target` peut être null (joueur ayant décliné le
+ * tir), auquel cas rien n'est résolu — même convention qu'executeShoot.
+ */
+function executeAirstrikeShoot(progressionState, allCars, allChoppers, chopper, target, roundNumber) {
+  const log = [];
+  if (!target) {
+    log.push(`Chopper de ${chopper.owner} ne tire pas.`);
+    return { log, shootResult: null };
+  }
+  const board = buildBoardFromProgressionState(progressionState);
+  const outcome = resolveAirstrikeShoot(board, allCars, chopper, target, { roundNumber, progressionState, allChoppers });
+  log.push(...outcome.log);
+  return { log, shootResult: outcome.shootResult };
 }
 
 /**
@@ -6631,6 +6723,26 @@ const CAR_IMG_H = CAR_IMG_W * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
 // cet angle. Positif = vers la droite.
 const CAR_IMG_OFFSET_X = 1.50;
 
+// Ombre portée sous chaque véhicule (retour de Mayrik) : donne une
+// impression de volume/hauteur au-dessus du plateau. Convention
+// classique des jeux vus du dessus : ellipse aplatie, décalée à 45°
+// vers le bas-droite (même distance en X et Y, PAS proportionnelle à
+// CAR_IMG_W/H séparément, sinon l'angle ne serait pas un vrai 45°),
+// semi-transparente. Pas de flou SVG (feGaussianBlur) : filtre évité
+// par prudence/portabilité (aucun test navigateur réel disponible ici),
+// une ellipse nette à faible opacité suffit largement à lire l'effet.
+// Toujours orientée pareil (jamais tournée avec le véhicule, même
+// inopérable) : une ombre projetée par un éclairage fixe ne suit pas
+// la rotation de son objet.
+const CAR_SHADOW_OFFSET = CAR_IMG_W * 0.11;
+const CAR_SHADOW_RX = CAR_IMG_W * 0.44;
+const CAR_SHADOW_RY = CAR_IMG_H * 0.44;
+const CAR_SHADOW_OPACITY = 0.32;
+function carShadowMarkup(cx, cy) {
+  const sx = cx + CAR_SHADOW_OFFSET, sy = cy + CAR_SHADOW_OFFSET;
+  return `<ellipse cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" rx="${CAR_SHADOW_RX.toFixed(1)}" ry="${CAR_SHADOW_RY.toFixed(1)}" fill="#000" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>`;
+}
+
 // L'épave (wreck.webp) n'a pas de couleur de propriétaire (p.7 : pion
 // neutre). Chemin relatif à partir de tools/ (où vit ce prototype),
 // comme tileImagePath() ci-dessus.
@@ -6772,6 +6884,21 @@ function driveAiTurnGenerator(gen, turnLabel, answer) {
   if (!outcome.done) {
     if (outcome.pending.type === "step") {
       render(); // affiche IMMÉDIATEMENT la case qui vient d'être atteinte
+      // Victoire IMMÉDIATE (retour de Mayrik) : un véhicule — y compris
+      // celui du joueur humain, projeté par un Slam pendant le tour de
+      // l'IA — qui vient d'atteindre la Finish Line doit terminer la
+      // partie À CETTE CASE PRÉCISE, sans attendre la fin du tour
+      // complet de l'IA (qui peut inclure d'autres actions après ce
+      // pas). On abandonne alors le générateur en pause : le moteur a
+      // déjà arrêté net le mouvement à cette case (voir engine.js,
+      // isFinishLine), donc l'état du plateau reste cohérent.
+      checkEnd();
+      if (gameOver) {
+        G.aiAnimating = false;
+        G.aiPending = null;
+        render();
+        return;
+      }
       if (AI_STEP_DELAY_MS > 0) {
         setTimeout(() => driveAiTurnGenerator(gen, turnLabel), AI_STEP_DELAY_MS);
       } else {
@@ -6924,7 +7051,7 @@ function commitAssignAndCommand() {
   sel.turnStarted = false;
 
   const intent = { car: sel.car, dieValue: sel.dieValue, command: sel.command || null, isCoast: sel.mode === "coast" };
-  const { log, effectiveDieValue, slamOptions } = executeAssignAndCommand(G.roundState, G.allCars, G.allChoppers, G.progressionState, HUMAN, intent);
+  const { log, effectiveDieValue, slamOptions, pendingAirstrikeShoot } = executeAssignAndCommand(G.roundState, G.allCars, G.allChoppers, G.progressionState, HUMAN, intent);
   logTurn(log);
 
   sel.slamOptions = slamOptions;
@@ -6942,6 +7069,21 @@ function commitAssignAndCommand() {
   }
   checkEnd();
   if (!gameOver) checkStuckAtMovementStart();
+
+  // Airstrike (retour de Mayrik) : le chopper vient d'être placé
+  // (déjà visible au prochain render(), juste après ce commit) — le
+  // tir, lui, n'est résolu qu'après une courte pause PUREMENT VISUELLE
+  // (même principe que AI_STEP_DELAY_MS pour le mouvement de l'IA :
+  // aucun effet sur les règles), pour que le joueur voie distinctement
+  // le chopper atterrir avant de voir le résultat du tir.
+  if (pendingAirstrikeShoot && !gameOver) {
+    setTimeout(() => {
+      const shootOutcome = executeAirstrikeShoot(G.progressionState, G.allCars, G.allChoppers, pendingAirstrikeShoot.chopper, pendingAirstrikeShoot.target, G.roundState.roundNumber);
+      logTurn(shootOutcome.log);
+      checkEnd();
+      render();
+    }, AI_STEP_DELAY_MS);
+  }
 }
 
 // Vérifie qu'il existe au moins une case légale pour le tout PREMIER
@@ -6994,15 +7136,6 @@ function buildStopMessage(log, pointsLost, fallbackReason) {
   return `${pointsLabel} — ${tail}`;
 }
 
-function buildTileAdvanceMessage(log) {
-  // Ne garde que les lignes utiles à l'annonce (décalage, éliminations
-  // sur la tuile rear retirée, choppers rendus) — pas le "sortie par
-  // l'avant" générique qui précède, déjà implicite dans le titre.
-  const relevant = log.filter((l) =>
-    l.includes("retirée") || l.includes("Nouvelle tuile") || l.includes("Chopper de") || l.includes("Hazards de la tuile rear"));
-  return relevant.length > 0 ? relevant.join(" — ") : "Décalage des tuiles effectué.";
-}
-
 // Point d'entrée commun après CHAQUE pas (entrée en jeu, mouvement
 // normal, ou pas de Bonus Road — même mécanique dans les 3 cas).
 // `remainingBefore`/`option` viennent de l'écran (déjà affichés au
@@ -7015,21 +7148,16 @@ function handleStepResult(remainingBefore, option, result, isEntryStep) {
   sel.hadSlam = sel.hadSlam || !!slam;
   sel.remaining = remainingAfter;
 
-  if (result.gameOver) {
-    checkEnd();
+  // Vérification IMMÉDIATE après CE pas précis (pas seulement quand
+  // `result.gameOver` est explicitement positionné par le moteur, ce
+  // qui n'arrivait en pratique qu'en toute fin de tour via
+  // executeEndOfTurn) : une voiture qui vient d'atteindre la Finish
+  // Line doit déclarer la victoire ICI, avant même de proposer un tir
+  // ou un Bonus Road — jamais après une action supplémentaire (retour
+  // de Mayrik).
+  checkEnd();
+  if (gameOver) {
     resetSelection();
-    return;
-  }
-
-  // Sortie par l'avant de la tuile de tête : le décalage de tuile
-  // (nouvelle tuile posée, tuile rear retirée avec tout véhicule
-  // dessus éliminé, hazards défaussés, choppers rendus) vient de se
-  // produire réellement dans le moteur — jamais silencieusement : on
-  // l'annonce avant de laisser le joueur choisir sa vraie case sur la
-  // nouvelle tuile (exactement comme au livret, p.11).
-  if (!isEntryStep && option.outcome === "exits-front") {
-    sel.step = "tile-advanced";
-    sel.tileMessage = buildTileAdvanceMessage(result.log || []);
     return;
   }
 
@@ -7053,8 +7181,10 @@ function handleStepResult(remainingBefore, option, result, isEntryStep) {
 // Reprend la boucle de mouvement (move-step / road-bonus-step) si au
 // moins une case reste légalement accessible depuis la position
 // actuelle, sinon signale la perte des points restants — factorisé
-// pour être appelé aussi bien après un pas normal qu'après l'annonce
-// de nouvelle tuile (continueAfterTileAdvance).
+// pour être appelé après CHAQUE pas (y compris un décalage de tuile,
+// qui ne bloque plus le joueur avec une annonce séparée : le décalage
+// reste visible dans le journal via logTurn, mais le mouvement
+// continue directement).
 function resumeMovementLoopOrStop(remainingAfter) {
   const nextOptions = getMovementStepOptions(board(), sel.car, remainingAfter, G.allCars);
   if (nextOptions.length === 0) {
@@ -7063,13 +7193,6 @@ function resumeMovementLoopOrStop(remainingAfter) {
     return;
   }
   sel.step = sel.inRoadBonus ? "road-bonus-step" : "move-step";
-}
-
-// Le joueur a pris connaissance de l'annonce de nouvelle tuile —
-// reprend le mouvement là où il en était (mêmes points restants,
-// jamais une perte : voir computePointsLost, "exits-front" -> 0).
-function continueAfterTileAdvance() {
-  resumeMovementLoopOrStop(sel.remaining);
 }
 
 // ===================================================================
@@ -7452,15 +7575,28 @@ function renderBoard() {
     // rotation de l'image AUTOUR DE SON PROPRE CENTRE (x+largeur/2,
     // qui vaut cx+CAR_IMG_OFFSET_X À CAUSE du décalage de calage, PAS
     // cx tout court) : le centre affiché ne bouge donc pas d'un pixel,
-    // seule l'orientation change. Plus de trait blanc en travers (ni
-    // ici, ni sur une épave) — l'opacité réduite reste le seul
-    // traitement visuel de l'inopérabilité.
+    // seule l'orientation change. Plus de trait blanc en travers.
+    // EXCLUT explicitement les épaves (`car.isWreck`) : le moteur leur
+    // donne le statut "inoperable" en interne (p.7 : traitées comme de
+    // petites voitures inopérables pour le Slam), mais ce n'est qu'une
+    // mécanique de jeu — visuellement une épave reste une épave, pas
+    // un véhicule endommagé retourné.
+    const isInoperableVisual = car.status === "inoperable" && !car.isWreck;
     const imgCenterX = x + CAR_IMG_W / 2;
-    const rotation = car.status === "inoperable" ? `transform="rotate(180 ${imgCenterX.toFixed(1)} ${cy.toFixed(1)})"` : "";
+    const rotation = isInoperableVisual ? `transform="rotate(180 ${imgCenterX.toFixed(1)} ${cy.toFixed(1)})"` : "";
+    // pointer-events="none" : l'image est purement visuelle, jamais
+    // cible de clic — sans ça, elle s'interpose au-dessus du polygone
+    // de la case (posé avant dans le DOM, donc visuellement dessous,
+    // mais qui recevait quand même les clics avant) et rendait la case
+    // difficile/impossible à cliquer quand un véhicule adverse
+    // l'occupe. Le surlignage jaune reste lui aussi au-dessus de tout
+    // dans l'ordre visuel (posé sur le polygone, avant les véhicules),
+    // inchangé.
     svg.insertAdjacentHTML("beforeend", `<g>
-      <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
-      ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5"/>` : ""}
-      ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#ffb347"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#111">${car.damageTokens.length}</text>` : ""}
+      ${carShadowMarkup(cx, cy)}
+      <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none" ${isInoperableVisual ? 'opacity="0.5"' : ""}/>
+      ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5" pointer-events="none"/>` : ""}
+      ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#ffb347" pointer-events="none"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#111" pointer-events="none">${car.damageTokens.length}</text>` : ""}
     </g>`);
   });
 
@@ -7469,7 +7605,10 @@ function renderBoard() {
     const { cx, cy } = cellCenter(ch.col, ch.row);
     const imgPath = chopperImagePath(ch);
     const x = cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
-    svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}"/>`);
+    svg.insertAdjacentHTML("beforeend", `<g>
+      ${carShadowMarkup(cx, cy)}
+      <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" pointer-events="none"/>
+    </g>`);
   });
 }
 
@@ -7634,16 +7773,6 @@ function renderPanel() {
     p.textContent = `Bonus Road — choisissez la prochaine case (${sel.remaining} point(s) restants, montant fixe : le trajet doit utiliser tout le bonus).`;
     panel.appendChild(p);
     // Même remarque que pour "move-step" ci-dessus.
-  } else if (sel.step === "tile-advanced") {
-    const msg = document.createElement("div");
-    msg.className = "tile-message";
-    msg.textContent = `🧩 Nouvelle tuile en jeu ! ${sel.tileMessage}`;
-    panel.appendChild(msg);
-    const btn = document.createElement("button");
-    btn.className = "primary";
-    btn.textContent = "Continuer — choisir ma case sur la nouvelle tuile";
-    btn.addEventListener("click", () => { continueAfterTileAdvance(); render(); });
-    panel.appendChild(btn);
   } else if (sel.step === "slam-reroll-choice") {
     const ctx = sel.pendingHumanSlam.ctx;
     const p = document.createElement("div");
