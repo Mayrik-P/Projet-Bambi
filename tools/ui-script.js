@@ -753,8 +753,15 @@ function highlightedCells() {
   }
   if (sel.step === "move-step" || sel.step === "road-bonus-step") {
     const options = getMovementStepOptions(b, sel.car, sel.remaining, G.allCars);
-    const { onBoard } = splitOnAndOffBoardOptions(b, options);
-    return onBoard.map((o) => ({ col: o.col, row: o.row, onClick: () => { pickMoveStep(o); render(); } }));
+    const { onBoard, offBoard } = splitOnAndOffBoardOptions(b, options);
+    // "exits-front" (sortie par l'avant -> tuile suivante) : pas une
+    // élimination, juste la suite normale du plateau. On la propose
+    // directement comme case cliquable dans la marge de droite déjà
+    // réservée pour la Finish Line (col = b.cols), plutôt que par un
+    // bouton texte séparé — même mécanisme de surlignage que le reste
+    // du plateau, à la demande de Mayrik.
+    const exitsFront = offBoard.filter((o) => o.outcome === "exits-front");
+    return [...onBoard, ...exitsFront].map((o) => ({ col: o.col, row: o.row, onClick: () => { pickMoveStep(o); render(); } }));
   }
   if (sel.step === "airstrike-placement") {
     const chopper = G.allChoppers.find((c) => c.owner === HUMAN);
@@ -1055,14 +1062,20 @@ function renderPanel() {
     const p = document.createElement("div");
     p.textContent = `Choisissez la prochaine case (${sel.remaining} point(s) de mouvement restants).`;
     panel.appendChild(p);
-    const { offBoard } = splitOnAndOffBoardOptions(board(), getMovementStepOptions(board(), sel.car, sel.remaining, G.allCars));
-    offBoard.forEach((o) => choices.appendChild(choiceButton(offBoardOptionLabel(o), () => { pickMoveStep(o); render(); })));
+    // Les sorties par l'avant ("exits-front") sont désormais des cases
+    // cliquables sur le plateau (marge de droite) — voir
+    // highlightedCells(). Les sorties latérales/arrière
+    // ("eliminated-edge") ne sont plus proposées du tout ici (ni
+    // bouton, ni case) : confirmé avec Mayrik — légal dans les règles
+    // (élimination volontaire, jamais interdite en soi) mais aucun
+    // joueur ne choisit jamais de s'auto-éliminer un véhicule, donc
+    // inutile à proposer. Reste un choix légal côté moteur
+    // (human-decision.js inchangé) — seul l'affichage humain le masque.
   } else if (sel.step === "road-bonus-step") {
     const p = document.createElement("div");
     p.textContent = `Bonus Road — choisissez la prochaine case (${sel.remaining} point(s) restants, montant fixe : le trajet doit utiliser tout le bonus).`;
     panel.appendChild(p);
-    const { offBoard } = splitOnAndOffBoardOptions(board(), getMovementStepOptions(board(), sel.car, sel.remaining, G.allCars));
-    offBoard.forEach((o) => choices.appendChild(choiceButton(offBoardOptionLabel(o), () => { pickMoveStep(o); render(); })));
+    // Même remarque que pour "move-step" ci-dessus.
   } else if (sel.step === "tile-advanced") {
     const msg = document.createElement("div");
     msg.className = "tile-message";
