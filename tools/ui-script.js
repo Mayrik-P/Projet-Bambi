@@ -159,7 +159,7 @@ const CAR_IMG_OFFSET_X = 1.50;
 // retourné à 180° si inopérable) puisque c'est littéralement sa
 // propre forme qui est projetée, contrairement à une ellipse externe
 // qui n'avait pas à suivre la rotation.
-const CAR_SHADOW_OFFSET = CAR_IMG_W * 0.09;
+const CAR_SHADOW_OFFSET = CAR_IMG_W * 0.045;
 const CAR_SHADOW_OPACITY = 0.4;
 function carShadowMarkup(imgPath, x, y, isRotated) {
   const sx = x + CAR_SHADOW_OFFSET, sy = y + CAR_SHADOW_OFFSET;
@@ -1034,7 +1034,7 @@ function renderBoard() {
       ${carShadowMarkup(imgPath, x, y, isInoperableVisual)}
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none" ${isInoperableVisual ? 'opacity="0.5"' : ""}/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5" pointer-events="none"/>` : ""}
-      ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#ffb347" pointer-events="none"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#111" pointer-events="none">${car.damageTokens.length}</text>` : ""}
+      ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#111" pointer-events="none"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#e11" pointer-events="none">${car.damageTokens.length}</text>` : ""}
     </g>`);
   });
 
