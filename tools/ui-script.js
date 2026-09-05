@@ -198,6 +198,20 @@ function carShadowMarkup(imgPath, x, y, isRotated) {
   return `<image href="${imgPath}" xlink:href="${imgPath}" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} filter="url(#vehicleShadowFilter)" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>`;
 }
 
+// Même traitement d'ombre portée pour les jetons hazard (retour de
+// Mayrik) — même filtre de silhouette partagé (#vehicleShadowFilter,
+// défini une seule fois par rendu, générique — pas spécifique aux
+// véhicules malgré son nom), même principe de décalage proportionnel
+// à la taille de l'image (45°, bas-droite), même opacité. S'applique
+// aussi bien à la face cachée (hazard-back) qu'aux versos persistants
+// (Road/Mud/Oil Slick) — aucune rotation possible pour un hazard (pas
+// de notion d'inopérable ici), donc pas de paramètre de rotation.
+const HAZARD_SHADOW_OFFSET = HAZARD_IMG_W * 0.045;
+function hazardShadowMarkup(imgPath, x, y) {
+  const sx = x + HAZARD_SHADOW_OFFSET, sy = y + HAZARD_SHADOW_OFFSET;
+  return `<image href="${imgPath}" xlink:href="${imgPath}" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" filter="url(#vehicleShadowFilter)" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>`;
+}
+
 // L'épave (wreck.webp) n'a pas de couleur de propriétaire (p.7 : pion
 // neutre). Chemin relatif à partir de tools/ (où vit ce prototype),
 // comme tileImagePath() ci-dessus.
@@ -982,7 +996,10 @@ function renderBoard() {
         // sans connaître le type avant de le révéler en jouant).
         const { cx, cy } = cellCenter(col, row);
         const hx = cx - HAZARD_IMG_W / 2, hy = cy - HAZARD_IMG_H / 2;
-        svg.insertAdjacentHTML("beforeend", `<image href="${HAZARD_BACK_PATH}" xlink:href="${HAZARD_BACK_PATH}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" pointer-events="none"/>`);
+        svg.insertAdjacentHTML("beforeend", `<g>
+          ${hazardShadowMarkup(HAZARD_BACK_PATH, hx, hy)}
+          <image href="${HAZARD_BACK_PATH}" xlink:href="${HAZARD_BACK_PATH}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" pointer-events="none"/>
+        </g>`);
       } else if (cell.revealedHazard && HAZARD_REVEALED_IMAGE[cell.revealedHazard]) {
         // Verso persistant (Blank/Dirt/Oil Slick, p.7) : reste visible
         // pour le reste de la partie, aucune lettre de debug nécessaire
@@ -990,7 +1007,10 @@ function renderBoard() {
         const { cx, cy } = cellCenter(col, row);
         const hx = cx - HAZARD_IMG_W / 2, hy = cy - HAZARD_IMG_H / 2;
         const p = HAZARD_REVEALED_IMAGE[cell.revealedHazard];
-        svg.insertAdjacentHTML("beforeend", `<image href="${p}" xlink:href="${p}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" pointer-events="none"/>`);
+        svg.insertAdjacentHTML("beforeend", `<g>
+          ${hazardShadowMarkup(p, hx, hy)}
+          <image href="${p}" xlink:href="${p}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" pointer-events="none"/>
+        </g>`);
       }
     }
   }
