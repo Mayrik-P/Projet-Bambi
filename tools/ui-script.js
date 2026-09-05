@@ -132,12 +132,18 @@ function tileImageWidth(tile) {
 // Mayrik) — un seul ratio suffit donc pour respecter les proportions,
 // quelle que soit la taille (small/medium/large) ou le type
 // (voiture/chopper). Il suffit de centrer l'image sur cellCenter().
-// VALEUR DE DÉPART pour CAR_IMG_W (point de départ raisonnable, PAS
-// encore calée par Mayrik) : à affiner avec tools/calage.html, même
-// méthode que pour les tuiles route.
+// CAR_IMG_W confirmée correcte par Mayrik dès le premier essai (même
+// résolution native utilisée pour tuiles/véhicules/hazards, donc même
+// échelle) — aucun calage de taille nécessaire.
 const CAR_IMG_NATIVE_W = 600, CAR_IMG_NATIVE_H = 332;
 const CAR_IMG_W = GRID_CELL_W * 1.35;
 const CAR_IMG_H = CAR_IMG_W * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
+// Décalage horizontal calé par Mayrik avec tools/calage-vehicules.html :
+// compense le fait que le centre géométrique de la case (cellCenter())
+// n'est pas perçu visuellement au centre à cause de l'angle rentrant
+// gauche du chevron — sans ce décalage, le véhicule mordait trop sur
+// cet angle. Positif = vers la droite.
+const CAR_IMG_OFFSET_X = 1.50;
 
 // L'épave (wreck.webp) n'a pas de couleur de propriétaire (p.7 : pion
 // neutre). Chemin relatif à partir de tools/ (où vit ce prototype),
@@ -149,6 +155,7 @@ function carImagePath(car) {
 function chopperImagePath(ch) {
   return `../cars/images/chopper-${PLAYER_CAR_COLOR[ch.owner]}.webp`;
 }
+
 
 // ===================================================================
 // ÉTAT DE JEU — initialisation
@@ -940,7 +947,7 @@ function renderBoard() {
     const { cx, cy } = cellCenter(car.col, car.row);
     const isActive = sel.car === car;
     const imgPath = carImagePath(car);
-    const x = cx - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
+    const x = cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
     svg.insertAdjacentHTML("beforeend", `<g>
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5"/>` : ""}
@@ -953,7 +960,7 @@ function renderBoard() {
     if (!ch.placed || ch.col === null) return;
     const { cx, cy } = cellCenter(ch.col, ch.row);
     const imgPath = chopperImagePath(ch);
-    const x = cx - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
+    const x = cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
     svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}"/>`);
   });
 }
