@@ -7388,10 +7388,6 @@ function renderBoard() {
         polyEl.addEventListener("click", hl.onClick);
       }
       svg.appendChild(polyEl);
-      if (cell.terrain === "impassable") {
-        const { cx, cy } = cellCenter(col, row);
-        svg.insertAdjacentHTML("beforeend", `<line x1="${cx - 10}" y1="${cy - 10}" x2="${cx + 10}" y2="${cy + 10}" stroke="#ff6666" stroke-width="1.5"/><line x1="${cx - 10}" y1="${cy + 10}" x2="${cx + 10}" y2="${cy - 10}" stroke="#ff6666" stroke-width="1.5"/>`);
-      }
       if (cell.hazard) {
         // Marqueur de TEST/DEBUG uniquement — affiche le VRAI type du
         // jeton face cachée (jamais visible pour un vrai joueur en
@@ -7428,16 +7424,42 @@ function renderBoard() {
     svg.appendChild(polyEl);
   }
 
-  G.allCars.forEach((car) => {
+  // Cas particulier d'empilement : pendant la pause de décision de
+  // relance d'un Slam (voir driveHumanStepGenerator/G.aiPending plus
+  // haut), la voiture ENTRANTE ("car", passée comme topCar à
+  // resolveSlamGen) et celle déjà présente ("occupant"/wreck, passée
+  // comme bottomCar) partagent réellement la même case — aucune des
+  // deux n'a encore bougé, la résolution est en pause en attendant la
+  // réponse du joueur. Convention demandée par Mayrik : la voiture qui
+  // vient de percuter (TOP) se dessine PAR-DESSUS celle qui était déjà
+  // là (BOTTOM). En dehors de cette pause précise, deux voitures ne
+  // partagent jamais la même case (le Slam est entièrement résolu de
+  // façon synchrone), donc ce réordonnancement ne s'applique dans
+  // aucun autre cas.
+  const pendingSlamCtx = (G.aiPending && G.aiPending.ctx) || (sel.pendingHumanSlam && sel.pendingHumanSlam.ctx) || null;
+  const slamTopCar = pendingSlamCtx ? pendingSlamCtx.topCar : null;
+  const carsInDrawOrder = slamTopCar ? G.allCars.slice().sort((a, b) => (a === slamTopCar ? 1 : 0) - (b === slamTopCar ? 1 : 0)) : G.allCars;
+
+  carsInDrawOrder.forEach((car) => {
     if (car.col === null || car.status === "eliminated") return;
     const { cx, cy } = cellCenter(car.col, car.row);
     const isActive = sel.car === car;
     const imgPath = carImagePath(car);
     const x = cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
+    // Voiture inopérable (2 dégâts) : le jeu physique se contente de
+    // retourner le véhicule à 180° (il pointe vers l'arrière du
+    // plateau, p.8) plutôt que de le retirer — reproduit ici par une
+    // rotation de l'image AUTOUR DE SON PROPRE CENTRE (x+largeur/2,
+    // qui vaut cx+CAR_IMG_OFFSET_X À CAUSE du décalage de calage, PAS
+    // cx tout court) : le centre affiché ne bouge donc pas d'un pixel,
+    // seule l'orientation change. Plus de trait blanc en travers (ni
+    // ici, ni sur une épave) — l'opacité réduite reste le seul
+    // traitement visuel de l'inopérabilité.
+    const imgCenterX = x + CAR_IMG_W / 2;
+    const rotation = car.status === "inoperable" ? `transform="rotate(180 ${imgCenterX.toFixed(1)} ${cy.toFixed(1)})"` : "";
     svg.insertAdjacentHTML("beforeend", `<g>
-      <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
+      <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5"/>` : ""}
-      ${car.status === "inoperable" ? `<line x1="${cx - 12}" y1="${cy - 10}" x2="${cx + 12}" y2="${cy + 10}" stroke="#fff" stroke-width="1.5"/>` : ""}
       ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#ffb347"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#111">${car.damageTokens.length}</text>` : ""}
     </g>`);
   });
