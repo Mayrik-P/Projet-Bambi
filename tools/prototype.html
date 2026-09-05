@@ -7581,7 +7581,7 @@ function renderBoard() {
       const hl = highlightMap.get(key);
       const polyEl = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
       polyEl.setAttribute("points", pts2s(poly));
-      polyEl.setAttribute("fill", hl ? "#ffd166" : fill);
+      polyEl.setAttribute("fill", hl ? "#b0d458" : fill);
       if (hl) polyEl.setAttribute("fill-opacity", "0.55"); // laisse deviner l'image en dessous
       polyEl.setAttribute("stroke", colHasImage[col] ? "none" : "#111");
       polyEl.setAttribute("stroke-width", "0.6");
@@ -7628,7 +7628,7 @@ function renderBoard() {
     const poly = cellPoly(h.col, h.row);
     const polyEl = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
     polyEl.setAttribute("points", pts2s(poly));
-    polyEl.setAttribute("fill", "#ffd166");
+    polyEl.setAttribute("fill", "#b0d458");
     polyEl.setAttribute("fill-opacity", "0.55");
     polyEl.setAttribute("stroke", "none");
     polyEl.classList.add("clickable");
@@ -7684,7 +7684,7 @@ function renderBoard() {
     svg.insertAdjacentHTML("beforeend", `<g>
       ${carShadowMarkup(imgPath, x, y, isInoperableVisual)}
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none" ${isInoperableVisual ? 'opacity="0.5"' : ""}/>
-      ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5" pointer-events="none"/>` : ""}
+      ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#b0d458" stroke-width="2.5" pointer-events="none"/>` : ""}
       ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#111" pointer-events="none"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#e11" pointer-events="none">${car.damageTokens.length}</text>` : ""}
     </g>`);
   });
