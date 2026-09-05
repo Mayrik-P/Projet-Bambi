@@ -6516,36 +6516,53 @@ const PLAYER_NAMES = [HUMAN, OPPONENT];
 const OWNER_COLOR = { [HUMAN]: "#3b82c9", [OPPONENT]: "#c93b3b" };
 
 // --- Géométrie du plateau (reprise à l'identique des viewers de debug) ---
-// CELL_W est un choix arbitraire d'échelle ; CELL_H en revanche DOIT
-// respecter le rapport largeur/hauteur réel des images de tuile
-// (2500x1891px pour 8 colonnes x 7 unités de hauteur — 6 lignes de
-// jeu + 1 bandeau titre, voir TILE_OVERLAP plus bas), sous peine de
-// les étirer/déformer une fois affichées (bug réel trouvé par Mayrik :
-// CELL_H=40 avait été choisi au hasard pour le prototype couleur,
-// sans lien avec les vraies proportions de l'image).
-const CELL_W = 34, QUIN = 6, NOTCH = 4;
+// --- Calibrage final, réglé à la main par Mayrik avec l'outil
+// tools/calage.html (grille interactive posée en transparence sur les
+// vraies images, ajustée visuellement jusqu'à correspondance exacte).
+// Deux couches INDÉPENDANTES avec leurs propres tailles de case :
+// l'image (le visuel des tuiles) et la grille interactive (zones de
+// clic/surlignage). Elles n'ont pas exactement la même taille de case
+// (37.90 vs 35.60) — c'est normal et volontaire, pas une erreur de
+// calcul : réglé ainsi, l'écart s'absorbe naturellement sur la largeur
+// totale du plateau sans qu'aucun saut ou correctif par tuile soit
+// nécessaire côté grille (contrairement à une précédente version plus
+// compliquée qui essayait de faire suivre à la grille les mêmes sauts
+// de chevauchement que l'image, ce qui n'était pas la bonne piste).
 const TILE_NATIVE_W = 2500, TILE_NATIVE_H = 1891, TILE_NATIVE_COLS = 8, TILE_NATIVE_ROW_UNITS = 7;
-const CELL_H = CELL_W * (TILE_NATIVE_H / TILE_NATIVE_ROW_UNITS) / (TILE_NATIVE_W / TILE_NATIVE_COLS);
-// Marge du haut agrandie d'une ligne entière : laisse la place au
-// bandeau titre des vraies images de tuile, qui déborde au-dessus de
-// la grille cliquable (voir TILE_OVERLAP plus bas) sans la décaler.
-const BOARD_TOP = 20 + CELL_H;
-// Position x réelle (chevauchement inclus) du bord gauche de chaque
-// colonne GLOBALE du plateau — recalculée à chaque renderBoard() par
-// la même boucle qui place les images, AVANT que cellPoly() en ait
-// besoin. Sans ça, la grille cliquable (qui ignorait le chevauchement
-// entre tuiles) dérivait de plus en plus vers la droite par rapport
-// aux vraies images au fil des tuiles — bug réel signalé par Mayrik.
-let colLeftX = [];
+const NATIVE_COL_W = TILE_NATIVE_W / TILE_NATIVE_COLS; // 312.5px — largeur native d'une colonne
+
+// Couche IMAGE (le visuel des tuiles)
+const IMG_OFFSET_X = 0, IMG_OFFSET_Y = 0;
+const IMG_CELL_W = 37.90;
+const IMG_CELL_H = IMG_CELL_W * (TILE_NATIVE_H / TILE_NATIVE_ROW_UNITS) / (TILE_NATIVE_W / TILE_NATIVE_COLS); // respecte le vrai rapport largeur/hauteur, jamais de valeur indépendante qui déformerait l'image
+// Chevauchement entre tuiles adjacentes (zigzag qui s'emboîte) —
+// mesuré ~0.48 largeur de colonne (canal alpha, cohérent sur 3 tuiles).
+const TILE_OVERLAP = 0.48 * IMG_CELL_W;
+
+// Couche GRILLE (cases interactives, surlignage) — calage final
+// Mayrik. Un pas RÉGULIER par colonne (pas de saut par tuile).
+const GRID_OFFSET_X = -3.00, GRID_OFFSET_Y = 32.50;
+const GRID_CELL_W = 35.60, GRID_CELL_H = 32.80;
+// Amplitude du zigzag et marge de gauche, mesurées sur le canal alpha
+// (identiques sur 3 tuiles différentes), exprimées en proportion
+// d'une colonne puis appliquées à la taille de case de la GRILLE.
+const ZIGZAG_LEFT_MARGIN = GRID_CELL_W * (89.333 / NATIVE_COL_W);
+const QUIN = GRID_CELL_W * (57.667 / NATIVE_COL_W), NOTCH = 4;
+
+// Particularité du jeu physique, confirmée par Mayrik : la Finish
+// Line ne fait PAS la largeur d'une colonne standard sur les lignes
+// 1/3/5 (rangées "pointe sortante") — ses cases y débordent à droite
+// du visuel. Sans conséquence : la partie est de toute façon terminée
+// dès qu'une voiture l'atteint. On ne cherche donc PAS à faire rentrer
+// la grille dans le visuel de la Finish Line à tout prix.
 function cellPoly(col, row) {
-  const rowTop = BOARD_TOP + row * CELL_H;
-  const rowBot = rowTop + CELL_H;
+  const rowTop = GRID_OFFSET_Y + row * GRID_CELL_H;
+  const rowBot = rowTop + GRID_CELL_H;
   const mid = (rowTop + rowBot) / 2;
   const quinShift = (row % 2 === 0) ? -QUIN : QUIN;
-  const base = colLeftX[col] !== undefined ? colLeftX[col] : 10 + col * CELL_W;
-  const x0 = base + quinShift;
-  const rx = x0 + CELL_W + NOTCH;
-  return [[x0, rowTop], [x0 + CELL_W, rowTop], [rx, mid], [x0 + CELL_W, rowBot], [x0, rowBot], [x0 + NOTCH, mid]];
+  const x0 = GRID_OFFSET_X + col * GRID_CELL_W + ZIGZAG_LEFT_MARGIN + quinShift;
+  const rx = x0 + GRID_CELL_W + NOTCH;
+  return [[x0, rowTop], [x0 + GRID_CELL_W, rowTop], [rx, mid], [x0 + GRID_CELL_W, rowBot], [x0, rowBot], [x0 + NOTCH, mid]];
 }
 function pts2s(p) { return p.map((v) => v[0].toFixed(1) + "," + v[1].toFixed(1)).join(" "); }
 function cellCenter(col, row) {
@@ -6555,25 +6572,6 @@ function cellCenter(col, row) {
   return { cx, cy };
 }
 const TERRAIN_FILL = { road: "#4a4a55", off_road: "#7a5c3a", mud: "#3d2a1a", impassable: "#5c2020" };
-
-// --- Calibrage mesuré directement sur les vrais fichiers (pixels réels
-// de tiles/images/vendetta-01a/02a/04b.webp, cohérent sur les 3) ---
-// - Bandeau titre : le haut de l'image n'est PAS une case cliquable —
-//   la grille des 6 lignes ne commence qu'à 1/7 de la hauteur totale
-//   (mesuré : lignes de séparation à des intervalles de ~271px pour
-//   une image de 1891px de haut = 1891/7, très exactement). Donc une
-//   image de tuile fait la hauteur de 7 lignes, pas 6, et démarre
-//   une ligne plus haut que la grille cliquable.
-// - Chevauchement horizontal entre tuiles : les tuiles s'emboîtent en
-//   quinconce (bord gauche/droit en dents de scie, alpha mesuré :
-//   lignes paires x∈[32,2382], lignes impaires x∈[147,2498] sur une
-//   image de 2500px de large = 8 colonnes) — bord à bord SANS
-//   chevauchement laisse un trou net ; mesuré : chaque tuile doit
-//   chevaucher la précédente de ~0.48 largeur de colonne pour que le
-//   zigzag s'emboîte exactement (vérifié visuellement sur un montage
-//   de test). Approximatif de quelques pixels près, à affiner au
-//   pixel si besoin une fois vu en vrai.
-const TILE_OVERLAP = 0.48 * CELL_W;
 
 // L'identifiant d'une tuile réelle (tile.id, ex. "vendetta-01a") est
 // posé par instantiateTile() (engine.js) et correspond EXACTEMENT au
@@ -6595,8 +6593,8 @@ function tileImagePath(tile) {
 // Largeur d'affichage RÉELLE de l'image d'une tuile, en respectant son
 // PROPRE rapport largeur/hauteur (jamais une valeur forcée qui la
 // déformerait). Les tuiles route standard (2500x1891px, 8 colonnes)
-// ont déjà exactement le bon rapport par construction de CELL_H
-// (voir plus haut) : t.cols*CELL_W est donc déjà correct pour elles.
+// ont déjà exactement le bon rapport par construction de IMG_CELL_H
+// (voir plus haut) : t.cols*IMG_CELL_W est donc déjà correct pour elles.
 // La Finish Line est un visuel à part, mesuré différemment
 // (364x1891px — plus large qu'1/8 d'une tuile standard) : sa largeur
 // est calculée séparément à partir de ses vraies proportions, quitte
@@ -6604,8 +6602,8 @@ function tileImagePath(tile) {
 // que d'être étirée pour la remplir pile.
 const FINISHLINE_NATIVE_W = 364, FINISHLINE_NATIVE_H = 1891;
 function tileImageWidth(tile) {
-  if (tile.face) return (7 * CELL_H) * (FINISHLINE_NATIVE_W / FINISHLINE_NATIVE_H);
-  return tile.cols * CELL_W;
+  if (tile.face) return (7 * IMG_CELL_H) * (FINISHLINE_NATIVE_W / FINISHLINE_NATIVE_H);
+  return tile.cols * IMG_CELL_W;
 }
 
 // ===================================================================
@@ -7258,23 +7256,35 @@ function highlightedCells() {
   return [];
 }
 
+// Fenêtre d'affichage resserrée au plus juste (zéro marge inutile,
+// choix validé avec Mayrik) : calculée une fois pour toutes en
+// simulant le nombre MAXIMAL de tuiles jamais visibles à la fois (3
+// tuiles route + Finish Line), sur les DEUX couches (image ET grille,
+// qui n'ont pas exactement la même étendue) — sinon l'apparition de
+// la Finish Line changerait l'échelle de tout le plateau d'un coup.
+const BOARD_VIEW = (() => {
+  const tiles = [{ cols: TILE_NATIVE_COLS }, { cols: TILE_NATIVE_COLS }, { cols: TILE_NATIVE_COLS }, { face: "a" }];
+  let imgX = IMG_OFFSET_X, imgRight = 0;
+  for (const t of tiles) { const w = tileImageWidth(t); imgRight = Math.max(imgRight, imgX + w); imgX += w - TILE_OVERLAP; }
+  const imgBottom = IMG_OFFSET_Y + 7 * IMG_CELL_H;
+  let gridMaxX = -Infinity, gridMaxY = -Infinity;
+  const totalCols = 3 * TILE_NATIVE_COLS + 1;
+  for (let row = 0; row < 6; row++) {
+    for (let col = 0; col < totalCols; col++) {
+      const rowBot = GRID_OFFSET_Y + (row + 1) * GRID_CELL_H;
+      const quinShift = (row % 2 === 0) ? -QUIN : QUIN;
+      const rx = GRID_OFFSET_X + col * GRID_CELL_W + ZIGZAG_LEFT_MARGIN + quinShift + GRID_CELL_W + NOTCH;
+      gridMaxX = Math.max(gridMaxX, rx);
+      gridMaxY = Math.max(gridMaxY, rowBot);
+    }
+  }
+  return { w: Math.max(imgRight, gridMaxX), h: Math.max(imgBottom, gridMaxY) };
+})();
+
 function renderBoard() {
   const b = board();
   const svg = document.getElementById("board");
-  // Largeur réservée pour le NOMBRE MAXIMAL de tuiles visibles à la
-  // fois (3 tuiles route + Finish Line), PAS le nombre actuel — sinon
-  // l'apparition de la Finish Line agrandit le viewBox et rétrécit
-  // visuellement tout le plateau d'un coup. Calculée en SIMULANT le
-  // même enchaînement que la vraie boucle de pose d'images plus bas
-  // (chevauchements inclus) : un simple "nb colonnes × CELL_W" ne
-  // suffisait pas, ça laissait un vide trop large à droite (chaque
-  // chevauchement grignote un peu de largeur totale) — bug réel
-  // signalé par Mayrik.
-  const maxSeqWidth = [{ cols: TILE_NATIVE_COLS }, { cols: TILE_NATIVE_COLS }, { cols: TILE_NATIVE_COLS }, { face: "a" }]
-    .reduce((sum, t, i) => sum + tileImageWidth(t) - (i > 0 ? TILE_OVERLAP : 0), 0);
-  const w = 10 + maxSeqWidth + 20;
-  const h = BOARD_TOP + b.rows * CELL_H + 10;
-  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("viewBox", `0 0 ${BOARD_VIEW.w} ${BOARD_VIEW.h}`);
   svg.innerHTML = "";
 
   const highlights = highlightedCells();
@@ -7290,9 +7300,8 @@ function renderBoard() {
   // visuel par-dessus lequel rien ne se déclenche.
   const orderedTiles = [G.progressionState.rearTile, G.progressionState.middleTile, G.progressionState.leadTile, G.progressionState.finishLineTile].filter(Boolean);
   const colHasImage = [];
-  colLeftX = []; // recalculée à chaque rendu, lue par cellPoly()
   let colOffset = 0;
-  let imgX = 10; // position réelle de l'image courante — chevauche la précédente
+  let imgX = IMG_OFFSET_X; // position réelle de l'image courante — chevauche la précédente
   for (const t of orderedTiles) {
     const imgPath = tileImagePath(t);
     if (imgPath) {
@@ -7300,17 +7309,14 @@ function renderBoard() {
       imgEl.setAttribute("href", imgPath);
       imgEl.setAttributeNS("http://www.w3.org/1999/xlink", "href", imgPath); // vieux moteurs de rendu SVG
       imgEl.setAttribute("x", imgX);
-      imgEl.setAttribute("y", BOARD_TOP - CELL_H); // déborde d'une ligne au-dessus (bandeau titre)
+      imgEl.setAttribute("y", IMG_OFFSET_Y);
       imgEl.setAttribute("width", tileImageWidth(t));
-      imgEl.setAttribute("height", 7 * CELL_H); // 6 lignes cliquables + 1 ligne de bandeau
+      imgEl.setAttribute("height", 7 * IMG_CELL_H); // 6 lignes cliquables + 1 ligne de bandeau
       imgEl.setAttribute("preserveAspectRatio", "none");
       imgEl.setAttribute("pointer-events", "none");
       svg.appendChild(imgEl);
     }
-    for (let c = 0; c < t.cols; c++) {
-      colHasImage[colOffset + c] = !!imgPath;
-      colLeftX[colOffset + c] = imgX + c * CELL_W; // lu par cellPoly() — même repère que l'image réelle
-    }
+    for (let c = 0; c < t.cols; c++) colHasImage[colOffset + c] = !!imgPath;
     colOffset += t.cols;
     imgX += tileImageWidth(t) - TILE_OVERLAP;
   }
