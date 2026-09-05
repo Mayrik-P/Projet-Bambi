@@ -146,23 +146,30 @@ const CAR_IMG_H = CAR_IMG_W * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
 const CAR_IMG_OFFSET_X = 1.50;
 
 // Ombre portée sous chaque véhicule (retour de Mayrik) : donne une
-// impression de volume/hauteur au-dessus du plateau. Convention
-// classique des jeux vus du dessus : ellipse aplatie, décalée à 45°
-// vers le bas-droite (même distance en X et Y, PAS proportionnelle à
-// CAR_IMG_W/H séparément, sinon l'angle ne serait pas un vrai 45°),
-// semi-transparente. Pas de flou SVG (feGaussianBlur) : filtre évité
-// par prudence/portabilité (aucun test navigateur réel disponible ici),
-// une ellipse nette à faible opacité suffit largement à lire l'effet.
-// Toujours orientée pareil (jamais tournée avec le véhicule, même
-// inopérable) : une ombre projetée par un éclairage fixe ne suit pas
-// la rotation de son objet.
-const CAR_SHADOW_OFFSET = CAR_IMG_W * 0.11;
-const CAR_SHADOW_RX = CAR_IMG_W * 0.44;
-const CAR_SHADOW_RY = CAR_IMG_H * 0.44;
-const CAR_SHADOW_OPACITY = 0.32;
-function carShadowMarkup(cx, cy) {
-  const sx = cx + CAR_SHADOW_OFFSET, sy = cy + CAR_SHADOW_OFFSET;
-  return `<ellipse cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" rx="${CAR_SHADOW_RX.toFixed(1)}" ry="${CAR_SHADOW_RY.toFixed(1)}" fill="#000" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>`;
+// impression de volume/hauteur au-dessus du plateau. Une ellipse
+// générique ne collait pas bien à la silhouette allongée des
+// véhicules (retour de Mayrik, 1er essai) — remplacée par une VRAIE
+// silhouette : une copie de la même image, teintée en noir via un
+// filtre SVG (feColorMatrix, force tous les canaux de couleur à 0 en
+// gardant le canal alpha intact — donc la forme exacte du véhicule,
+// pas une approximation géométrique), légèrement décalée à 45° vers
+// le bas-droite (même distance en X et Y, PAS proportionnelle à
+// CAR_IMG_W/H séparément, sinon l'angle ne serait pas un vrai 45°).
+// Toujours dans la MÊME orientation que le véhicule (y compris
+// retourné à 180° si inopérable) puisque c'est littéralement sa
+// propre forme qui est projetée, contrairement à une ellipse externe
+// qui n'avait pas à suivre la rotation.
+const CAR_SHADOW_OFFSET = CAR_IMG_W * 0.09;
+const CAR_SHADOW_OPACITY = 0.4;
+function carShadowMarkup(imgPath, x, y, isRotated) {
+  const sx = x + CAR_SHADOW_OFFSET, sy = y + CAR_SHADOW_OFFSET;
+  // Si le véhicule est retourné à 180° (inopérable), sa silhouette
+  // l'est aussi — mais autour du propre centre DÉCALÉ de la silhouette
+  // (sx+largeur/2, sy+hauteur/2), jamais celui du véhicule réel :
+  // sinon la rotation swinguerait l'ombre à un endroit différent d'un
+  // simple décalage, au lieu de rester fidèle à sa position.
+  const rotation = isRotated ? `transform="rotate(180 ${(sx + CAR_IMG_W / 2).toFixed(1)} ${(sy + CAR_IMG_H / 2).toFixed(1)})"` : "";
+  return `<image href="${imgPath}" xlink:href="${imgPath}" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} filter="url(#vehicleShadowFilter)" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>`;
 }
 
 // L'épave (wreck.webp) n'a pas de couleur de propriétaire (p.7 : pion
@@ -876,6 +883,15 @@ function renderBoard() {
   svg.setAttribute("viewBox", `0 0 ${BOARD_VIEW.w} ${BOARD_VIEW.h}`);
   svg.innerHTML = "";
 
+  // Filtre de silhouette pour l'ombre des véhicules (voir
+  // carShadowMarkup) : force tous les canaux de couleur à 0 tout en
+  // gardant le canal alpha (donc la forme) intact — une image de
+  // véhicule normale, passée par ce filtre, devient sa propre
+  // silhouette noire. Défini UNE SEULE FOIS par rendu (réutilisé par
+  // tous les véhicules/choppers via url(#vehicleShadowFilter)), jamais
+  // par voiture — inutile de dupliquer un <filter> identique.
+  svg.insertAdjacentHTML("beforeend", `<defs><filter id="vehicleShadowFilter" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter></defs>`);
+
   const highlights = highlightedCells();
   const highlightMap = new Map(highlights.map((h) => [h.col + "," + h.row, h]));
 
@@ -1015,7 +1031,7 @@ function renderBoard() {
     // dans l'ordre visuel (posé sur le polygone, avant les véhicules),
     // inchangé.
     svg.insertAdjacentHTML("beforeend", `<g>
-      ${carShadowMarkup(cx, cy)}
+      ${carShadowMarkup(imgPath, x, y, isInoperableVisual)}
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none" ${isInoperableVisual ? 'opacity="0.5"' : ""}/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5" pointer-events="none"/>` : ""}
       ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#ffb347" pointer-events="none"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#111" pointer-events="none">${car.damageTokens.length}</text>` : ""}
@@ -1028,7 +1044,7 @@ function renderBoard() {
     const imgPath = chopperImagePath(ch);
     const x = cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
     svg.insertAdjacentHTML("beforeend", `<g>
-      ${carShadowMarkup(cx, cy)}
+      ${carShadowMarkup(imgPath, x, y, false)}
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" pointer-events="none"/>
     </g>`);
   });
