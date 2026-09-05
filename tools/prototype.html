@@ -6779,15 +6779,31 @@ function carShadowMarkup(imgPath, x, y, isRotated) {
 // Même traitement d'ombre portée pour les jetons hazard (retour de
 // Mayrik) — même filtre de silhouette partagé (#vehicleShadowFilter,
 // défini une seule fois par rendu, générique — pas spécifique aux
-// véhicules malgré son nom), même principe de décalage proportionnel
-// à la taille de l'image (45°, bas-droite), même opacité. S'applique
-// aussi bien à la face cachée (hazard-back) qu'aux versos persistants
-// (Road/Mud/Oil Slick) — aucune rotation possible pour un hazard (pas
-// de notion d'inopérable ici), donc pas de paramètre de rotation.
+// véhicules malgré son nom), même principe de décalage (45°,
+// bas-droite), même opacité. S'applique aussi bien à la face cachée
+// (hazard-back) qu'aux versos persistants (Road/Mud/Oil Slick) —
+// aucune rotation possible pour un hazard (pas de notion
+// d'inopérable ici).
+// DIFFÉRENCE avec le véhicule (retour de Mayrik après capture d'écran
+// réelle) : la silhouette d'une voiture est arrondie, sans jamais
+// atteindre une largeur nulle nulle part — un simple décalage laisse
+// donc toujours un peu de silhouette qui dépasse tout autour. Le
+// jeton hazard, lui, a de VRAIES pointes (pointe droite, encoche
+// gauche) où la forme a une largeur quasi nulle : un simple décalage
+// y sépare complètement l'ombre du jeton (vide visible constaté par
+// Mayrik, "impression de flotter"). Correction : l'ombre est aussi
+// LÉGÈREMENT AGRANDIE (pas seulement décalée) autour de son propre
+// centre déjà décalé — elle déborde donc un peu de partout, ce qui
+// comble ce vide au niveau des pointes tout en gardant le décalage
+// diagonal comme direction dominante.
 const HAZARD_SHADOW_OFFSET = HAZARD_IMG_W * 0.045;
+const HAZARD_SHADOW_SCALE = 1.10;
 function hazardShadowMarkup(imgPath, x, y) {
-  const sx = x + HAZARD_SHADOW_OFFSET, sy = y + HAZARD_SHADOW_OFFSET;
-  return `<image href="${imgPath}" xlink:href="${imgPath}" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" filter="url(#vehicleShadowFilter)" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>`;
+  const realCenterX = x + HAZARD_IMG_W / 2, realCenterY = y + HAZARD_IMG_H / 2;
+  const shadowCenterX = realCenterX + HAZARD_SHADOW_OFFSET, shadowCenterY = realCenterY + HAZARD_SHADOW_OFFSET;
+  const shadowW = HAZARD_IMG_W * HAZARD_SHADOW_SCALE, shadowH = HAZARD_IMG_H * HAZARD_SHADOW_SCALE;
+  const sx = shadowCenterX - shadowW / 2, sy = shadowCenterY - shadowH / 2;
+  return `<image href="${imgPath}" xlink:href="${imgPath}" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${shadowW.toFixed(1)}" height="${shadowH.toFixed(1)}" filter="url(#vehicleShadowFilter)" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>`;
 }
 
 // L'épave (wreck.webp) n'a pas de couleur de propriétaire (p.7 : pion
