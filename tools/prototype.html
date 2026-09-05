@@ -6776,26 +6776,43 @@ function carShadowMarkup(imgPath, x, y, isRotated) {
   return `<image href="${imgPath}" xlink:href="${imgPath}" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} filter="url(#vehicleShadowFilter)" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>`;
 }
 
-// Même idée d'ombre portée que pour les véhicules, mais implémentée
-// différemment (retour de Mayrik après capture d'écran réelle + tour
-// d'horizon des techniques standard) : la silhouette d'une voiture
-// est arrondie (un simple décalage suffit), alors qu'un jeton hazard
-// a de VRAIES pointes (pointe droite, encoche gauche) où la forme a
-// une largeur quasi nulle — un décalage seul y sépare complètement
-// l'ombre du jeton. `feDropShadow` (l'outil standard pour exactement
-// ce cas : ombre qui suit le canal alpha d'une forme irrégulière,
-// accéléré par le GPU du navigateur) résout ça nativement : le léger
-// flou intégré au filtre borde suffisamment les pointes pour ne
-// jamais laisser de vide, sans avoir à dessiner plusieurs copies. Un
-// seul filtre, posé directement sur l'image réelle (qui gère aussi la
-// fusion avec l'ombre en dessous) — beaucoup plus simple que
-// l'ombrage des véhicules (qui, lui, doit dessiner une silhouette
-// séparée : feDropShadow n'existait pas encore dans le code à ce
-// moment-là, non revu ici pour ne pas toucher à un rendu déjà validé
-// par Mayrik).
-const HAZARD_SHADOW_OFFSET = HAZARD_IMG_W * 0.05;
-const HAZARD_SHADOW_BLUR = HAZARD_IMG_W * 0.006; // volontairement minime : juste assez pour ne pas laisser de vide sur les pointes (retour de Mayrik, préfère un bord net à un flou doux)
-const HAZARD_SHADOW_OPACITY = 0.7;
+// Ombre portée des jetons hazard (retour de Mayrik, après plusieurs
+// essais de filtres SVG jamais pleinement satisfaisants — voile,
+// vide sur les pointes, rendu trop doux...) : plutôt qu'un calcul en
+// direct, Mayrik dessine lui-même l'ombre comme une vraie image —
+// contrôle artistique total, et bien plus simple/léger côté code :
+// une image de plus à afficher, sans le moindre filtre.
+// CONVENTION DE CANEVAS (important, retour de Mayrik) : son fichier
+// est nécessairement PLUS GRAND que 316×265 pour contenir le
+// débordement de l'ombre — mais le jeton lui-même reste au même
+// endroit EXACT dans ce fichier (coin haut-gauche à 0,0, comme sur
+// hazard-back.webp etc.), le canevas étant simplement agrandi vers la
+// DROITE et le BAS (jamais vers le haut/la gauche, jamais en
+// recentrant le jeton). Grâce à ça, la position à l'écran ne bouge
+// PAS d'un pixel (toujours calée sur le même coin haut-gauche que les
+// autres jetons) — seule la taille affichée change, mise à l'échelle
+// proportionnellement à la vraie taille du fichier. Mettre à jour
+// HAZARD_SHADOW_NATIVE_W/H ci-dessous avec les dimensions réelles du
+// fichier une fois dessiné (mesurées en pixels, ex. via un aperçu
+// d'image) — tant que ce n'est pas fait, valeurs de départ = même
+// taille que les jetons (aucun débordement, à corriger dès que
+// Mayrik donne les vraies dimensions).
+const HAZARD_SHADOW_NATIVE_W = 339;
+const HAZARD_SHADOW_NATIVE_H = 284;
+const HAZARD_SHADOW_SCALE = HAZARD_IMG_W / HAZARD_IMG_NATIVE_W; // même facteur d'échelle que les jetons normaux (pixels natifs -> unités SVG)
+const HAZARD_SHADOW_W = HAZARD_SHADOW_NATIVE_W * HAZARD_SHADOW_SCALE;
+const HAZARD_SHADOW_H = HAZARD_SHADOW_NATIVE_H * HAZARD_SHADOW_SCALE;
+const HAZARD_SHADOW_PATH = "../hazards/Images/hazard-shadow.webp";
+// Consigne pour Mayrik (retour après sa question sur la cohérence
+// visuelle) : dessiner la forme de l'ombre en NOIR OPAQUE (alpha
+// plein, pas de transparence propre au fichier) — c'est le CODE qui
+// applique l'opacité, via CAR_SHADOW_OPACITY, la MÊME constante déjà
+// utilisée pour l'ombre des véhicules (jamais une valeur séparée) :
+// garantit une intensité rigoureusement identique entre les deux,
+// impossible à obtenir en réglant "à l'œil" une transparence dans le
+// fichier lui-même. Un futur ajustement global de l'intensité se fait
+// alors en un seul endroit (cette constante), sans jamais retoucher
+// ni réexporter l'image.
 // L'épave (wreck.webp) n'a pas de couleur de propriétaire (p.7 : pion
 // neutre). Chemin relatif à partir de tools/ (où vit ce prototype),
 // comme tileImagePath() ci-dessus.
@@ -7516,13 +7533,6 @@ function renderBoard() {
   // par voiture — inutile de dupliquer un <filter> identique.
   svg.insertAdjacentHTML("beforeend", `<defs><filter id="vehicleShadowFilter" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter></defs>`);
 
-  // Filtre d'ombre portée pour les jetons hazard (voir le commentaire
-  // détaillé près de HAZARD_SHADOW_OFFSET) — feDropShadow standard,
-  // suit le canal alpha de la forme (donc ses pointes) sans laisser de
-  // vide, fusionne lui-même l'ombre et l'image d'origine. Défini UNE
-  // SEULE FOIS par rendu, réutilisé par tous les jetons.
-  svg.insertAdjacentHTML("beforeend", `<defs><filter id="hazardDropShadow" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="${HAZARD_SHADOW_OFFSET.toFixed(2)}" dy="${HAZARD_SHADOW_OFFSET.toFixed(2)}" stdDeviation="${HAZARD_SHADOW_BLUR.toFixed(2)}" flood-color="#000000" flood-opacity="${HAZARD_SHADOW_OPACITY}"/></filter></defs>`);
-
   const highlights = highlightedCells();
   const highlightMap = new Map(highlights.map((h) => [h.col + "," + h.row, h]));
 
@@ -7587,7 +7597,10 @@ function renderBoard() {
         // sans connaître le type avant de le révéler en jouant).
         const { cx, cy } = cellCenter(col, row);
         const hx = cx - HAZARD_IMG_W / 2, hy = cy - HAZARD_IMG_H / 2;
-        svg.insertAdjacentHTML("beforeend", `<image href="${HAZARD_BACK_PATH}" xlink:href="${HAZARD_BACK_PATH}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" filter="url(#hazardDropShadow)" pointer-events="none"/>`);
+        svg.insertAdjacentHTML("beforeend", `<g>
+          <image href="${HAZARD_SHADOW_PATH}" xlink:href="${HAZARD_SHADOW_PATH}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_SHADOW_W.toFixed(1)}" height="${HAZARD_SHADOW_H.toFixed(1)}" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>
+          <image href="${HAZARD_BACK_PATH}" xlink:href="${HAZARD_BACK_PATH}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" pointer-events="none"/>
+        </g>`);
       } else if (cell.revealedHazard && HAZARD_REVEALED_IMAGE[cell.revealedHazard]) {
         // Verso persistant (Blank/Dirt/Oil Slick, p.7) : reste visible
         // pour le reste de la partie, aucune lettre de debug nécessaire
@@ -7595,7 +7608,10 @@ function renderBoard() {
         const { cx, cy } = cellCenter(col, row);
         const hx = cx - HAZARD_IMG_W / 2, hy = cy - HAZARD_IMG_H / 2;
         const p = HAZARD_REVEALED_IMAGE[cell.revealedHazard];
-        svg.insertAdjacentHTML("beforeend", `<image href="${p}" xlink:href="${p}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" filter="url(#hazardDropShadow)" pointer-events="none"/>`);
+        svg.insertAdjacentHTML("beforeend", `<g>
+          <image href="${HAZARD_SHADOW_PATH}" xlink:href="${HAZARD_SHADOW_PATH}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_SHADOW_W.toFixed(1)}" height="${HAZARD_SHADOW_H.toFixed(1)}" opacity="${CAR_SHADOW_OPACITY}" pointer-events="none"/>
+          <image href="${p}" xlink:href="${p}" x="${hx.toFixed(1)}" y="${hy.toFixed(1)}" width="${HAZARD_IMG_W.toFixed(1)}" height="${HAZARD_IMG_H.toFixed(1)}" pointer-events="none"/>
+        </g>`);
       }
     }
   }
