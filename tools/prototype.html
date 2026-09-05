@@ -7371,6 +7371,26 @@ function renderBoard() {
     }
   }
 
+  // Cases surlignées HORS de la grille réelle (col >= b.cols) : la
+  // sortie par l'avant ("exits-front"), affichée dans la marge de
+  // droite réservée à la Finish Line (voir highlightedCells()). La
+  // boucle ci-dessus ne les couvre jamais (elle s'arrête à b.cols-1) —
+  // sans ce complément, ces cases étaient calculées mais jamais
+  // dessinées ni cliquables : partie bloquée (bug réel signalé par
+  // Mayrik). Pas de case/terrain réel ici, juste le surlignage.
+  for (const h of highlights) {
+    if (h.col < b.cols) continue;
+    const poly = cellPoly(h.col, h.row);
+    const polyEl = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    polyEl.setAttribute("points", pts2s(poly));
+    polyEl.setAttribute("fill", "#ffd166");
+    polyEl.setAttribute("fill-opacity", "0.55");
+    polyEl.setAttribute("stroke", "none");
+    polyEl.classList.add("clickable");
+    polyEl.addEventListener("click", h.onClick);
+    svg.appendChild(polyEl);
+  }
+
   G.allCars.forEach((car) => {
     if (car.col === null || car.status === "eliminated") return;
     const { cx, cy } = cellCenter(car.col, car.row);
