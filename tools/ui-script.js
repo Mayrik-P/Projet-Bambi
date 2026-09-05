@@ -37,13 +37,26 @@ const OWNER_COLOR = { [HUMAN]: "#3b82c9", [OPPONENT]: "#c93b3b" };
 // les étirer/déformer une fois affichées (bug réel trouvé par Mayrik :
 // CELL_H=40 avait été choisi au hasard pour le prototype couleur,
 // sans lien avec les vraies proportions de l'image).
-const CELL_W = 34, QUIN = 6, NOTCH = 4;
+const CELL_W = 34;
 const TILE_NATIVE_W = 2500, TILE_NATIVE_H = 1891, TILE_NATIVE_COLS = 8, TILE_NATIVE_ROW_UNITS = 7;
 const CELL_H = CELL_W * (TILE_NATIVE_H / TILE_NATIVE_ROW_UNITS) / (TILE_NATIVE_W / TILE_NATIVE_COLS);
 // Marge du haut agrandie d'une ligne entière : laisse la place au
 // bandeau titre des vraies images de tuile, qui déborde au-dessus de
 // la grille cliquable (voir TILE_OVERLAP plus bas) sans la décaler.
 const BOARD_TOP = 20 + CELL_H;
+const NATIVE_COL_W = TILE_NATIVE_W / TILE_NATIVE_COLS; // 312.5px — largeur native d'une colonne
+// Mesuré sur le canal alpha de 3 tuiles différentes (identique aux
+// trois, donc constante du gabarit) : le motif en dents de scie ne
+// démarre PAS pile au bord gauche du rectangle de l'image — lignes
+// paires : contenu dès x≈31.7px ; lignes impaires : x≈147px. Cette
+// marge (leur centre) manquait entièrement à notre grille de clic,
+// qui supposait le zigzag centré sur le bord même de l'image — d'où
+// les cases cliquables systématiquement décalées vers la gauche par
+// rapport au vrai visuel (bug réel signalé par Mayrik). QUIN (le
+// demi-amplitude du zigzag) est recalculé à partir des mêmes mesures,
+// remplaçant l'ancienne valeur au jugé (6) par la valeur réelle.
+const ZIGZAG_LEFT_MARGIN = CELL_W * (89.333 / NATIVE_COL_W);
+const QUIN = CELL_W * (57.667 / NATIVE_COL_W), NOTCH = 4;
 // Position x réelle (chevauchement inclus) du bord gauche de chaque
 // colonne GLOBALE du plateau — recalculée à chaque renderBoard() par
 // la même boucle qui place les images, AVANT que cellPoly() en ait
@@ -56,7 +69,7 @@ function cellPoly(col, row) {
   const rowBot = rowTop + CELL_H;
   const mid = (rowTop + rowBot) / 2;
   const quinShift = (row % 2 === 0) ? -QUIN : QUIN;
-  const base = colLeftX[col] !== undefined ? colLeftX[col] : 10 + col * CELL_W;
+  const base = (colLeftX[col] !== undefined ? colLeftX[col] : 10 + col * CELL_W) + ZIGZAG_LEFT_MARGIN;
   const x0 = base + quinShift;
   const rx = x0 + CELL_W + NOTCH;
   return [[x0, rowTop], [x0 + CELL_W, rowTop], [rx, mid], [x0 + CELL_W, rowBot], [x0, rowBot], [x0 + NOTCH, mid]];
