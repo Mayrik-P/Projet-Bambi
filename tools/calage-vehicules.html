@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Outil de calage véhicules — Thunder Road Vendetta (usage unique)</title>
+<style>
+  body { background:#1a1a1f; color:#eee; font-family: system-ui, sans-serif; margin:0; padding:16px; }
+  h1 { font-size: 18px; color:#f5a623; margin: 0 0 4px; }
+  p.sub { color:#aaa; margin: 0 0 16px; font-size: 13px; }
+  .layout { display:flex; gap:20px; flex-wrap: wrap; align-items:flex-start; }
+  .board-wrap { flex: 1 1 600px; min-width: 300px; background:#111; border-radius:8px; padding:10px; overflow:auto; }
+  svg { width: 100%; height: auto; display:block; background:#000; }
+  .panel { flex: 0 0 320px; background:#25252b; border-radius:8px; padding:14px; }
+  .group { border:1px solid #444; border-radius:6px; padding:10px; margin-bottom:14px; }
+  .group h2 { font-size:14px; margin:0 0 10px; color:#ffd166; }
+  .row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .row label { flex:0 0 110px; font-size:12px; color:#ccc; }
+  .row input[type=range] { flex:1; }
+  .row .val { flex:0 0 50px; text-align:right; font-variant-numeric: tabular-nums; font-size:12px; }
+  button#copyBtn { width:100%; padding:10px; background:#f5a623; color:#111; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:14px; }
+  button#copyBtn:active { background:#d9901a; }
+  textarea#out { width:100%; height:120px; margin-top:10px; background:#111; color:#8f8; font-family: monospace; font-size:11px; border:1px solid #444; border-radius:6px; padding:8px; box-sizing:border-box; }
+  .hint { font-size:11px; color:#888; margin-top:4px; }
+  .legend { font-size:11px; color:#999; margin-top:6px; }
+</style>
+</head>
+<body>
+
+<h1>Outil de calage — taille des images véhicules</h1>
+<p class="sub">Un seul véhicule de chaque taille (small/medium/large) + un chopper, posés sur le vrai plateau (calage grille déjà figé, repris tel quel de ui-script.js). Ajuste le curseur jusqu'à ce que la taille te convienne, puis clique « Copier les réglages ».</p>
+
+<div class="layout">
+  <div class="board-wrap">
+    <svg id="board" viewBox="0 0 900 260" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"></svg>
+  </div>
+
+  <div class="panel">
+    <div class="group">
+      <h2>Taille des véhicules</h2>
+      <div class="row"><label>Largeur (CAR_IMG_W)</label><input type="range" id="carImgW" min="15" max="70" step="0.1" value="48.06"><span class="val" id="v_carImgW"></span></div>
+      <div class="hint">Un seul curseur : la hauteur suit automatiquement le vrai rapport largeur/hauteur (600×332px, identique sur toutes les images véhicules) — jamais de déformation possible. La position reste toujours centrée sur la case (les fonds transparents ont le véhicule déjà centré dedans, confirmé par Mayrik).</div>
+    </div>
+
+    <button id="copyBtn">Copier les réglages</button>
+    <textarea id="out" readonly placeholder="Les valeurs copiées apparaîtront ici..."></textarea>
+    <div class="legend">Bleu = Vous (small/medium/large + chopper), Orange = IA (large, pour comparer un gros véhicule côte à côte).</div>
+  </div>
+</div>
+
+<script>
+// --- Calage grille/image des tuiles : repris À L'IDENTIQUE de
+// ui-script.js (déjà validé par Mayrik, ne fait PAS partie de ce
+// qu'on recale ici — juste le décor de fond pour voir les véhicules
+// en contexte réel). ---
+const TILE_NATIVE_W = 2500, TILE_NATIVE_H = 1891, TILE_NATIVE_COLS = 8, TILE_NATIVE_ROW_UNITS = 7;
+const NATIVE_COL_W = TILE_NATIVE_W / TILE_NATIVE_COLS;
+const IMG_OFFSET_X = 0, IMG_OFFSET_Y = 0;
+const IMG_CELL_W = 37.90;
+const IMG_CELL_H = IMG_CELL_W * (TILE_NATIVE_H / TILE_NATIVE_ROW_UNITS) / (TILE_NATIVE_W / TILE_NATIVE_COLS);
+const TILE_OVERLAP = 0.48 * IMG_CELL_W;
+const GRID_OFFSET_X = -3.00, GRID_OFFSET_Y = 32.50;
+const GRID_CELL_W = 35.60, GRID_CELL_H = 32.80;
+const ZIGZAG_LEFT_MARGIN = GRID_CELL_W * (89.333 / NATIVE_COL_W);
+const QUIN = GRID_CELL_W * (57.667 / NATIVE_COL_W), NOTCH = 4;
+
+function cellPoly(col, row) {
+  const rowTop = GRID_OFFSET_Y + row * GRID_CELL_H;
+  const rowBot = rowTop + GRID_CELL_H;
+  const mid = (rowTop + rowBot) / 2;
+  const quinShift = (row % 2 === 0) ? -QUIN : QUIN;
+  const x0 = GRID_OFFSET_X + col * GRID_CELL_W + ZIGZAG_LEFT_MARGIN + quinShift;
+  const rx = x0 + GRID_CELL_W + NOTCH;
+  return [[x0, rowTop], [x0 + GRID_CELL_W, rowTop], [rx, mid], [x0 + GRID_CELL_W, rowBot], [x0, rowBot], [x0 + NOTCH, mid]];
+}
+function cellCenter(col, row) {
+  const p = cellPoly(col, row);
+  const cx = (p[0][0] + p[1][0] + p[3][0] + p[4][0]) / 4 + NOTCH / 2;
+  const cy = (p[0][1] + p[3][1]) / 2;
+  return { cx, cy };
+}
+
+// --- Véhicules : ratio natif identique pour toutes les images ---
+const CAR_IMG_NATIVE_W = 600, CAR_IMG_NATIVE_H = 332;
+
+const els = { carImgW: document.getElementById("carImgW") };
+function val(id) { return parseFloat(els[id].value); }
+
+function render() {
+  document.getElementById("v_carImgW").textContent = val("carImgW").toFixed(1);
+  const carImgW = val("carImgW");
+  const carImgH = carImgW * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
+
+  const svg = document.getElementById("board");
+  svg.innerHTML = "";
+
+  // --- Fond : 2 tuiles route réelles, pour un contexte visuel fidèle ---
+  const tiles = [
+    { path: "../tiles/images/vendetta-01a.webp", cols: 8 },
+    { path: "../tiles/images/vendetta-03a.webp", cols: 8 }
+  ];
+  let imgX = IMG_OFFSET_X;
+  for (const t of tiles) {
+    const w = t.cols * IMG_CELL_W;
+    const el = document.createElementNS("http://www.w3.org/2000/svg", "image");
+    el.setAttribute("href", t.path);
+    el.setAttributeNS("http://www.w3.org/1999/xlink", "href", t.path);
+    el.setAttribute("x", imgX);
+    el.setAttribute("y", IMG_OFFSET_Y);
+    el.setAttribute("width", w);
+    el.setAttribute("height", 7 * IMG_CELL_H);
+    el.setAttribute("preserveAspectRatio", "none");
+    svg.appendChild(el);
+    imgX += w - TILE_OVERLAP;
+  }
+
+  // --- Véhicules de test : small/medium/large (Vous, bleu) sur une
+  // colonne, + large (IA, orange) juste à côté pour comparer un gros
+  // véhicule adverse, + chopper (Vous) en haut ---
+  const vehicles = [
+    { path: "../cars/images/small-blue.webp", col: 3, row: 1 },
+    { path: "../cars/images/medium-blue.webp", col: 3, row: 3 },
+    { path: "../cars/images/large-blue.webp", col: 3, row: 5 },
+    { path: "../cars/images/large-orange.webp", col: 5, row: 5 },
+    { path: "../cars/images/chopper-blue.webp", col: 5, row: 1 }
+  ];
+  for (const v of vehicles) {
+    const { cx, cy } = cellCenter(v.col, v.row);
+    const el = document.createElementNS("http://www.w3.org/2000/svg", "image");
+    el.setAttribute("href", v.path);
+    el.setAttributeNS("http://www.w3.org/1999/xlink", "href", v.path);
+    el.setAttribute("x", cx - carImgW / 2);
+    el.setAttribute("y", cy - carImgH / 2);
+    el.setAttribute("width", carImgW);
+    el.setAttribute("height", carImgH);
+    svg.appendChild(el);
+  }
+
+  // --- Grille interactive par-dessus, en fin repère semi-transparent ---
+  const totalCols = 2 * TILE_NATIVE_COLS;
+  for (let row = 0; row < 6; row++) {
+    for (let col = 0; col < totalCols; col++) {
+      const poly = cellPoly(col, row);
+      const el = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+      el.setAttribute("points", poly.map((p) => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" "));
+      el.setAttribute("fill", "none");
+      el.setAttribute("stroke", "#ff0066");
+      el.setAttribute("stroke-width", "0.4");
+      el.setAttribute("stroke-opacity", "0.6");
+      svg.appendChild(el);
+    }
+  }
+}
+
+els.carImgW.addEventListener("input", render);
+render();
+
+document.getElementById("copyBtn").addEventListener("click", () => {
+  const carImgW = val("carImgW");
+  const carImgH = carImgW * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
+  const lines = ["Réglages de calage véhicules Thunder Road Vendetta :", "",
+    "CAR_IMG_W = " + carImgW.toFixed(2),
+    "CAR_IMG_H (dérivée automatiquement) = " + carImgH.toFixed(2)
+  ];
+  const text = lines.join("\n");
+  document.getElementById("out").value = text;
+  navigator.clipboard.writeText(text).catch(() => {});
+});
+</script>
+
+</body>
+</html>
