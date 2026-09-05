@@ -6513,7 +6513,13 @@ function loadRealTiles() {
 const HUMAN = "Vous";
 const OPPONENT = "IA";
 const PLAYER_NAMES = [HUMAN, OPPONENT];
-const OWNER_COLOR = { [HUMAN]: "#3b82c9", [OPPONENT]: "#c93b3b" };
+// Couleur de véhicule par joueur — table FIXE temporaire (Mayrik n'a
+// pas encore tranché : à terme, un écran proposera le choix parmi les
+// 5 couleurs disponibles avant le lancement d'une partie). En
+// attendant, changer ces deux valeurs suffit pour tester une autre
+// combinaison. Couleurs disponibles : blue/green/orange/purple/white
+// (voir cars/images/).
+const PLAYER_CAR_COLOR = { [HUMAN]: "blue", [OPPONENT]: "orange" };
 
 // --- Géométrie du plateau (reprise à l'identique des viewers de debug) ---
 // --- Calibrage final, réglé à la main par Mayrik avec l'outil
@@ -6605,6 +6611,37 @@ function tileImageWidth(tile) {
   if (tile.face) return (7 * IMG_CELL_H) * (FINISHLINE_NATIVE_W / FINISHLINE_NATIVE_H);
   return tile.cols * IMG_CELL_W;
 }
+
+// --- Images véhicules (voitures + choppers) ---
+// Tous les fonds transparents (cars/images/*.webp) sont à la même
+// taille native (600x332px), véhicule centré dedans (confirmé par
+// Mayrik) — un seul ratio suffit donc pour respecter les proportions,
+// quelle que soit la taille (small/medium/large) ou le type
+// (voiture/chopper). Il suffit de centrer l'image sur cellCenter().
+// CAR_IMG_W confirmée correcte par Mayrik dès le premier essai (même
+// résolution native utilisée pour tuiles/véhicules/hazards, donc même
+// échelle) — aucun calage de taille nécessaire.
+const CAR_IMG_NATIVE_W = 600, CAR_IMG_NATIVE_H = 332;
+const CAR_IMG_W = GRID_CELL_W * 1.35;
+const CAR_IMG_H = CAR_IMG_W * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
+// Décalage horizontal calé par Mayrik avec tools/calage-vehicules.html :
+// compense le fait que le centre géométrique de la case (cellCenter())
+// n'est pas perçu visuellement au centre à cause de l'angle rentrant
+// gauche du chevron — sans ce décalage, le véhicule mordait trop sur
+// cet angle. Positif = vers la droite.
+const CAR_IMG_OFFSET_X = 1.50;
+
+// L'épave (wreck.webp) n'a pas de couleur de propriétaire (p.7 : pion
+// neutre). Chemin relatif à partir de tools/ (où vit ce prototype),
+// comme tileImagePath() ci-dessus.
+function carImagePath(car) {
+  if (car.isWreck) return "../cars/images/wreck.webp";
+  return `../cars/images/${car.size}-${PLAYER_CAR_COLOR[car.owner]}.webp`;
+}
+function chopperImagePath(ch) {
+  return `../cars/images/chopper-${PLAYER_CAR_COLOR[ch.owner]}.webp`;
+}
+
 
 // ===================================================================
 // ÉTAT DE JEU — initialisation
@@ -7395,19 +7432,11 @@ function renderBoard() {
     if (car.col === null || car.status === "eliminated") return;
     const { cx, cy } = cellCenter(car.col, car.row);
     const isActive = sel.car === car;
-    // Une épave est un vrai pion physique sur le plateau (p.7) — elle
-    // reste toujours visible (Slam, tir), simplement avec une couleur
-    // neutre (aucun propriétaire) et un repère "W" au lieu d'une
-    // taille, plutôt que la couleur de propriétaire habituelle
-    // (`OWNER_COLOR[null]` serait `undefined`, invisible/noir).
-    const color = car.isWreck ? "#6b6b6b" : OWNER_COLOR[car.owner];
-    const label = car.isWreck ? "W" : car.size[0].toUpperCase();
-    let extra = "";
-    if (isActive) extra += `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5"/>`;
+    const imgPath = carImagePath(car);
+    const x = cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
     svg.insertAdjacentHTML("beforeend", `<g>
-      ${extra}
-      <rect x="${cx - 12}" y="${cy - 10}" width="24" height="20" rx="4" fill="${color}" stroke="#000" stroke-width="1" ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
-      <text x="${cx}" y="${cy + 4}" font-size="11" fill="#fff" text-anchor="middle" font-weight="bold">${label}</text>
+      <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${car.status === "inoperable" ? 'opacity="0.5"' : ""}/>
+      ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#ffd166" stroke-width="2.5"/>` : ""}
       ${car.status === "inoperable" ? `<line x1="${cx - 12}" y1="${cy - 10}" x2="${cx + 12}" y2="${cy + 10}" stroke="#fff" stroke-width="1.5"/>` : ""}
       ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#ffb347"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#111">${car.damageTokens.length}</text>` : ""}
     </g>`);
@@ -7416,8 +7445,9 @@ function renderBoard() {
   G.allChoppers.forEach((ch) => {
     if (!ch.placed || ch.col === null) return;
     const { cx, cy } = cellCenter(ch.col, ch.row);
-    const color = OWNER_COLOR[ch.owner];
-    svg.insertAdjacentHTML("beforeend", `<polygon points="${cx},${cy - 9} ${cx - 9},${cy + 7} ${cx + 9},${cy + 7}" fill="#111" stroke="${color}" stroke-width="2"/>`);
+    const imgPath = chopperImagePath(ch);
+    const x = cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
+    svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}"/>`);
   });
 }
 
