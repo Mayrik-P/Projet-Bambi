@@ -6834,6 +6834,75 @@ let fullLog = []; // journal cumulé affiché sous le plateau
 let gameOver = false;
 let gameOverInfo = null;
 
+// ===================================================================
+// SAUVEGARDE LOCALE (localStorage) — retour de Mayrik : éviter de
+// perdre une partie de test si le téléphone interrompt l'onglet
+// (appel, changement d'appli...). Pratique standard des jeux
+// web/PWA : sauvegarde à des points de contrôle sûrs (jamais en plein
+// milieu d'un clic) + sur perte de focus de l'onglet (`visibilitychange`,
+// plus fiable que `beforeunload` sur mobile, gardé quand même en
+// filet de sécurité). Ne sauvegarde QUE les données de partie pures
+// (progressionState/allCars/allChoppers/roundState — déjà de purs
+// objets JSON, vérifié) — jamais `sel` (état d'interface transitoire,
+// contient des références directes vers des objets voiture, pas du
+// JSON à part entière) : au chargement, la partie restaurée reprend
+// toujours au DÉBUT d'une activation (choix dé+véhicule), jamais en
+// plein milieu d'un mouvement en cours. Compromis assumé : si une
+// voiture avait déjà commencé à bouger au moment de la coupure, elle
+// reste simplement là où elle en était et son tour est considéré
+// terminé — plutôt que de tenter de rejouer le clic en cours.
+const SAVE_KEY = "trv_bambi_save_v1";
+const SAVE_VERSION = 1;
+
+function saveGameState() {
+  try {
+    if (!G || !G.progressionState) return;
+    const payload = {
+      v: SAVE_VERSION,
+      savedAt: Date.now(),
+      progressionState: G.progressionState,
+      allCars: G.allCars,
+      allChoppers: G.allChoppers,
+      roundState: G.roundState
+    };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
+  } catch (e) {
+    // best-effort uniquement (quota dépassé, navigation privée,
+    // localStorage désactivé...) — ne doit jamais interrompre la partie
+  }
+}
+
+function loadGameState() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    const payload = JSON.parse(raw);
+    if (!payload || payload.v !== SAVE_VERSION || !payload.progressionState || !payload.allCars || !payload.roundState) return null;
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
+
+function clearSavedGame() {
+  try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* best-effort */ }
+}
+
+// Restaure une partie sauvegardée dans G, prête à reprendre au début
+// d'une nouvelle activation (voir le compromis expliqué plus haut).
+function restoreGameState(payload) {
+  G = {
+    progressionState: payload.progressionState,
+    allCars: payload.allCars,
+    allChoppers: payload.allChoppers,
+    roundState: payload.roundState,
+    aiPending: null,
+    aiAnimating: false
+  };
+  sel = {};
+  fullLog = [{ sep: "🔄 Partie reprise (sauvegarde locale)" }];
+}
+
 function newGame() {
   const rawTiles = loadRealTiles();
   let setup, attempts = 0;
@@ -6878,6 +6947,7 @@ function checkEnd() {
     gameOver = true;
     gameOverInfo = end;
     pushLogLines(end.log || []);
+    clearSavedGame(); // partie terminée : rien à reprendre
   }
 }
 
@@ -7927,6 +7997,8 @@ function renderPanel() {
 }
 
 function render() {
+  saveGameState(); // point de contrôle sûr : voir le commentaire détaillé près de SAVE_KEY
+
   ensureRoadDieRolled(G.roundState);
   document.getElementById("roundBadge").textContent = `Round ${G.roundState.roundNumber}`;
   const cp = getCurrentPlayer(G.roundState);
@@ -7960,9 +8032,26 @@ function render() {
 // ===================================================================
 // DÉMARRAGE
 // ===================================================================
-newGame();
+const savedGame = loadGameState();
+if (savedGame && confirm("Une partie sauvegardée a été trouvée. Reprendre cette partie ?")) {
+  restoreGameState(savedGame);
+} else {
+  if (savedGame) clearSavedGame(); // le joueur a choisi de repartir à zéro
+  newGame();
+}
 resetSelection();
 render();
+
+// Filets de sécurité (voir le commentaire détaillé près de SAVE_KEY) :
+// `visibilitychange` est plus fiable que `beforeunload` sur mobile
+// (déclenché quand l'app passe en arrière-plan, pas seulement à la
+// fermeture) — les deux sont gardés, `render()` sauvegarde déjà à
+// chaque action mais ces deux événements couvrent le cas où le
+// dernier `render()` remonte à un moment antérieur.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") saveGameState();
+});
+window.addEventListener("beforeunload", () => { saveGameState(); });
 
 </script>
 </body>
