@@ -1003,8 +1003,7 @@ function renderBoard() {
       const hl = highlightMap.get(key);
       const polyEl = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
       polyEl.setAttribute("points", pts2s(poly));
-      polyEl.setAttribute("fill", hl ? "#b0d458" : fill);
-      if (hl) polyEl.setAttribute("fill-opacity", "0.55"); // laisse deviner l'image en dessous
+      polyEl.setAttribute("fill", fill);
       polyEl.setAttribute("stroke", colHasImage[col] ? "none" : "#111");
       polyEl.setAttribute("stroke-width", "0.6");
       if (hl) {
@@ -1050,8 +1049,7 @@ function renderBoard() {
     const poly = cellPoly(h.col, h.row);
     const polyEl = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
     polyEl.setAttribute("points", pts2s(poly));
-    polyEl.setAttribute("fill", "#b0d458");
-    polyEl.setAttribute("fill-opacity", "0.55");
+    polyEl.setAttribute("fill", "transparent");
     polyEl.setAttribute("stroke", "none");
     polyEl.classList.add("clickable");
     polyEl.addEventListener("click", h.onClick);
@@ -1121,6 +1119,27 @@ function renderBoard() {
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" pointer-events="none"/>
     </g>`);
   });
+
+  // Surlignage des cases sélectionnables — TOUJOURS par-dessus tout
+  // (tuiles, hazards, véhicules), retour de Mayrik après capture
+  // d'écran réelle montrant le surlignage caché sous les jetons
+  // hazard. Dessiné en tout dernier, purement visuel et non
+  // interactif (pointer-events none) : le clic reste géré par le
+  // polygone d'origine de la case (transparent, plus haut dans cette
+  // fonction) — même zone cliquable qu'avant, juste redessinée
+  // par-dessus pour rester visible quel que soit ce qu'il y a dessous.
+  // cellPoly() fonctionne aussi bien pour les cases réelles que pour
+  // la marge hors grille (sortie par l'avant) : un seul passage
+  // couvre les deux cas, plus besoin de logique séparée.
+  for (const h of highlights) {
+    const poly = cellPoly(h.col, h.row);
+    const polyEl = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    polyEl.setAttribute("points", pts2s(poly));
+    polyEl.setAttribute("fill", "#b0d458");
+    polyEl.setAttribute("fill-opacity", "0.55");
+    polyEl.setAttribute("pointer-events", "none");
+    svg.appendChild(polyEl);
+  }
 }
 
 function choiceButton(label, onClick, selected) {
