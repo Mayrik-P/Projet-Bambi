@@ -121,11 +121,11 @@ function render() {
   // colonne, + large (IA, orange) juste à côté pour comparer un gros
   // véhicule adverse, + chopper (Vous) en haut ---
   const vehicles = [
-    { path: "../cars/images/small-blue.webp", col: 3, row: 1 },
-    { path: "../cars/images/medium-blue.webp", col: 3, row: 3 },
-    { path: "../cars/images/large-blue.webp", col: 3, row: 5 },
-    { path: "../cars/images/large-orange.webp", col: 5, row: 5 },
-    { path: "../cars/images/chopper-blue.webp", col: 5, row: 1 }
+    { path: "../images/vehicles/small-blue.webp", col: 3, row: 1 },
+    { path: "../images/vehicles/medium-blue.webp", col: 3, row: 3 },
+    { path: "../images/vehicles/large-blue.webp", col: 3, row: 5 },
+    { path: "../images/vehicles/large-orange.webp", col: 5, row: 5 },
+    { path: "../images/vehicles/chopper-blue.webp", col: 5, row: 1 }
   ];
   for (const v of vehicles) {
     const { cx, cy } = cellCenter(v.col, v.row);

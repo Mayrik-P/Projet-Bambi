@@ -32,7 +32,7 @@ const PLAYER_NAMES = [HUMAN, OPPONENT];
 // 5 couleurs disponibles avant le lancement d'une partie). En
 // attendant, changer ces deux valeurs suffit pour tester une autre
 // combinaison. Couleurs disponibles : blue/green/orange/purple/white
-// (voir cars/images/).
+// (voir images/vehicles/).
 const PLAYER_CAR_COLOR = { [HUMAN]: "blue", [OPPONENT]: "orange" };
 
 // --- Géométrie du plateau (reprise à l'identique des viewers de debug) ---
@@ -79,9 +79,13 @@ const QUIN = GRID_CELL_W * (57.667 / NATIVE_COL_W), NOTCH = 4;
 const HAZARD_IMG_NATIVE_W = 316, HAZARD_IMG_NATIVE_H = 265;
 const HAZARD_IMG_W = IMG_CELL_W;
 const HAZARD_IMG_H = HAZARD_IMG_W * (HAZARD_IMG_NATIVE_H / HAZARD_IMG_NATIVE_W);
-// Dossier réel du dépôt : "hazards/Images" (I majuscule, contrairement
-// à cars/images et tiles/images) — respecter exactement la casse.
-const HAZARD_BACK_PATH = "../hazards/Images/hazard-back.webp";
+// Arborescence : images/hazards/ (voir aussi images/vehicles/ — dossier
+// "images/" unique à la racine, une catégorie par sous-dossier, choix
+// retenu avec Mayrik pour rester cohérent quand d'autres catégories
+// s'ajouteront : dashboards, dégâts, extensions... SEULE exception :
+// tiles/images/ reste à part, binôme avec tiles/data/ — justifié,
+// contrairement aux autres catégories qui ne sont QUE des images).
+const HAZARD_BACK_PATH = "../images/hazards/hazard-back.webp";
 // Versos "persist" (p.7 : Blank/Dirt/Oil Slick restent en place, face
 // visible, pour le reste de la partie — voir HAZARD_TYPES, engine.js).
 // Mine et Wreck n'apparaissent JAMAIS ici : le moteur les défausse
@@ -90,9 +94,9 @@ const HAZARD_BACK_PATH = "../hazards/Images/hazard-back.webp";
 // voiture (wreckCar, déjà gérée par carImagePath), Mine disparaît
 // purement et simplement, comme au livret.
 const HAZARD_REVEALED_IMAGE = {
-  blank: "../hazards/Images/hazard-road.webp",
-  dirt: "../hazards/Images/hazard-mud.webp",
-  oil_slick: "../hazards/Images/hazard-oilslick.webp"
+  blank: "../images/hazards/hazard-road.webp",
+  dirt: "../images/hazards/hazard-mud.webp",
+  oil_slick: "../images/hazards/hazard-oilslick.webp"
 };
 
 // Particularité du jeu physique, confirmée par Mayrik : la Finish
@@ -153,7 +157,7 @@ function tileImageWidth(tile) {
 }
 
 // --- Images véhicules (voitures + choppers) ---
-// Tous les fonds transparents (cars/images/*.webp) sont à la même
+// Tous les fonds transparents (images/vehicles/*.webp) sont à la même
 // taille native (600x332px), véhicule centré dedans (confirmé par
 // Mayrik) — un seul ratio suffit donc pour respecter les proportions,
 // quelle que soit la taille (small/medium/large) ou le type
@@ -224,7 +228,7 @@ const HAZARD_SHADOW_NATIVE_H = 275;
 const HAZARD_SHADOW_SCALE = HAZARD_IMG_W / HAZARD_IMG_NATIVE_W; // même facteur d'échelle que les jetons normaux (pixels natifs -> unités SVG)
 const HAZARD_SHADOW_W = HAZARD_SHADOW_NATIVE_W * HAZARD_SHADOW_SCALE;
 const HAZARD_SHADOW_H = HAZARD_SHADOW_NATIVE_H * HAZARD_SHADOW_SCALE;
-const HAZARD_SHADOW_PATH = "../hazards/Images/hazard-shadow.webp";
+const HAZARD_SHADOW_PATH = "../images/hazards/hazard-shadow.webp";
 // Consigne pour Mayrik (retour après sa question sur la cohérence
 // visuelle) : dessiner la forme de l'ombre en NOIR OPAQUE (alpha
 // plein, pas de transparence propre au fichier) — c'est le CODE qui
@@ -239,11 +243,11 @@ const HAZARD_SHADOW_PATH = "../hazards/Images/hazard-shadow.webp";
 // neutre). Chemin relatif à partir de tools/ (où vit ce prototype),
 // comme tileImagePath() ci-dessus.
 function carImagePath(car) {
-  if (car.isWreck) return "../cars/images/wreck.webp";
-  return `../cars/images/${car.size}-${PLAYER_CAR_COLOR[car.owner]}.webp`;
+  if (car.isWreck) return "../images/vehicles/wreck.webp";
+  return `../images/vehicles/${car.size}-${PLAYER_CAR_COLOR[car.owner]}.webp`;
 }
 function chopperImagePath(ch) {
-  return `../cars/images/chopper-${PLAYER_CAR_COLOR[ch.owner]}.webp`;
+  return `../images/vehicles/chopper-${PLAYER_CAR_COLOR[ch.owner]}.webp`;
 }
 
 
