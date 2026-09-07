@@ -219,8 +219,8 @@ function carShadowMarkup(imgPath, x, y, isRotated) {
 // d'image) — tant que ce n'est pas fait, valeurs de départ = même
 // taille que les jetons (aucun débordement, à corriger dès que
 // Mayrik donne les vraies dimensions).
-const HAZARD_SHADOW_NATIVE_W = 339;
-const HAZARD_SHADOW_NATIVE_H = 284;
+const HAZARD_SHADOW_NATIVE_W = 326;
+const HAZARD_SHADOW_NATIVE_H = 275;
 const HAZARD_SHADOW_SCALE = HAZARD_IMG_W / HAZARD_IMG_NATIVE_W; // même facteur d'échelle que les jetons normaux (pixels natifs -> unités SVG)
 const HAZARD_SHADOW_W = HAZARD_SHADOW_NATIVE_W * HAZARD_SHADOW_SCALE;
 const HAZARD_SHADOW_H = HAZARD_SHADOW_NATIVE_H * HAZARD_SHADOW_SCALE;
