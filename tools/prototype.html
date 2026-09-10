@@ -6861,6 +6861,7 @@ function chopperImagePath(ch) {
 // images/dice/) — mêmes conventions que TILE_NATIVE_*/CAR_IMG_NATIVE_*
 // plus haut.
 const COMMAND_IMG_NATIVE_W = 1293, COMMAND_IMG_NATIVE_H = 1134;
+const DICEBOARD_IMG_NATIVE_W = 913, DICEBOARD_IMG_NATIVE_H = 341;
 const VEHICLE_DASH_NATIVE = {
   small: { w: 1409, h: 756 },
   medium: { w: 1515, h: 756 },
@@ -6876,12 +6877,11 @@ const DIE_IMG_NATIVE = 189;
 // l'image, même principe que pour les tuiles/véhicules).
 const DASH_H = 70;
 const DASH_GAP = 6;
-const DIE_SIZE = 22;
-const DIE_GAP = 4;
 const PLAYER_ROW_GAP = 16;
 
 function dashboardImagePath(playerName, kind) {
-  // kind: "command" | "small" | "medium" | "large" | "<size>-inoperable"
+  // kind: "command" | "diceboard" | "small" | "medium" | "large" | "<size>-inoperable"
+  if (kind === "diceboard") return "../images/dashboards/diceboard.webp"; // fichier générique, sans couleur
   const color = PLAYER_CAR_COLOR[playerName];
   if (kind === "command") return `../images/dashboards/command-${color}.webp`;
   return `../images/dashboards/dashboard-${color}-${kind}.webp`;
@@ -6933,6 +6933,26 @@ const COMMAND_SLOT_FRACTION = {
   repair: { x: 0.86, y: 0.78 },
   airstrike: { x: 0.86, y: 0.06 }
 };
+// Orientation imprimée de chaque slot sur l'image réelle (retour de
+// Mayrik) : ANY et END TURN sont de vrais carrés droits, mais COAST
+// et les 4 commandes sont dessinés tournés à 45° (losanges) — un dé
+// posé dessus doit donc être tourné pareil, pas juste centré. Les 4
+// emplacements du diceboard sont eux aussi de vrais carrés droits.
+const SLOT_ROTATION = {
+  any: 0, endTurn: 0, coast1: 45, coast2: 45,
+  nitro: 45, drift: 45, repair: 45, airstrike: 45,
+  slot0: 0, slot1: 0, slot2: 0, slot3: 0
+};
+const DICEBOARD_SLOT_SIZE_FRACTION = 0.55; // fraction de DASH_H — taille affichée des 4 dés sur le diceboard
+// 4 emplacements DROITS (retour de Mayrik) — première estimation à
+// l'œil (répartition régulière en ligne), à remplacer par l'export de
+// tools/calage-dashboards.html comme les autres.
+const DICEBOARD_SLOT_FRACTION = {
+  slot0: { x: 0.14, y: 0.50 },
+  slot1: { x: 0.38, y: 0.50 },
+  slot2: { x: 0.62, y: 0.50 },
+  slot3: { x: 0.86, y: 0.50 }
+};
 
 // Coordonnées en cellule d'une grille 3x3 (col,row) — un pip fait
 // exactement 1/3 de la face (voir DIE_IMG_NATIVE), donc un placement
@@ -6953,7 +6973,10 @@ function diePipLayout(value) {
 // reste un chantier séparé). x,y = coin haut-gauche, size = côté
 // affiché. extraAttrs sert à ajouter class="clickable" sans dupliquer
 // le markup entre dé du diceboard et dé déjà posé sur un dashboard.
-function dieMarkup(value, color, x, y, size, extraAttrs) {
+// rotationDeg (optionnel) : tourne le dé (face + pips ensemble, comme
+// un vrai dé physique) autour de son propre centre — nécessaire pour
+// les slots COAST/Command, imprimés en losange (voir SLOT_ROTATION).
+function dieMarkup(value, color, x, y, size, extraAttrs, rotationDeg) {
   const pipCell = size / 3;
   const facePath = `../images/dice/die-move-${color}.webp`;
   const pipPath = `../images/dice/die-move-pip.webp`;
@@ -6961,10 +6984,60 @@ function dieMarkup(value, color, x, y, size, extraAttrs) {
     const px = x + col * pipCell, py = y + row * pipCell;
     return `<image href="${pipPath}" xlink:href="${pipPath}" x="${px.toFixed(1)}" y="${py.toFixed(1)}" width="${pipCell.toFixed(1)}" height="${pipCell.toFixed(1)}" pointer-events="none"/>`;
   }).join("");
-  return `<g ${extraAttrs || ""}>
+  const cx = x + size / 2, cy = y + size / 2;
+  const rot = rotationDeg ? `transform="rotate(${rotationDeg} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
+  return `<g ${extraAttrs || ""} ${rot}>
     <image href="${facePath}" xlink:href="${facePath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${size.toFixed(1)}" height="${size.toFixed(1)}" pointer-events="none"/>
     ${pips}
   </g>`;
+}
+
+// Réconcilie l'état visuel des 4 emplacements du diceboard d'un
+// joueur avec son pool réel (G.roundState.dicePool[joueur]) pour CE
+// round. Ré-initialisé au changement de round (les 4 dés fraîchement
+// lancés reprennent l'ordre du tableau, gauche à droite). Dans le
+// même round, un slot ne bouge JAMAIS tant que sa valeur reste dans
+// le pool — seul un dé réellement assigné (retiré du pool par
+// commitAssignAndCommand) vide son emplacement, plutôt que de faire
+// glisser visuellement les autres dés vers la gauche à chaque pose.
+// Les valeurs en double (ex. deux 4) sont réconciliées par comptage,
+// pas par égalité stricte — un slot n'est vidé que si le pool a
+// réellement moins d'occurrences de sa valeur qu'avant.
+function diceboardSlots(playerName) {
+  const pool = G.roundState.dicePool[playerName] || [];
+  const state = diceboardSlotState[playerName];
+  const remaining = new Map(); // valeur -> nombre d'occurrences dans le pool actuel
+  pool.forEach((v) => remaining.set(v, (remaining.get(v) || 0) + 1));
+
+  if (state && state.round === G.roundState.roundNumber) {
+    const reconciled = state.slots.map((v) => {
+      if (v === null) return null;
+      const left = remaining.get(v) || 0;
+      if (left <= 0) return null; // ce dé a été assigné depuis le dernier rendu
+      remaining.set(v, left - 1);
+      return v;
+    });
+    let leftover = 0;
+    remaining.forEach((n) => { leftover += n; });
+    if (leftover === 0) {
+      // Cas normal en vraie partie : le pool n'a fait QUE rétrécir
+      // depuis le dernier rendu (jamais de dé qui "réapparaît" en
+      // cours de round) -> les slots gardent leur position stable.
+      state.slots = reconciled;
+      return state.slots;
+    }
+    // Sinon : le pool contient des valeurs qu'aucun slot existant ne
+    // peut expliquer — n'arrive jamais en vraie partie (un pool ne
+    // fait que rétrécir dans un round), mais peut arriver quand un
+    // scénario de test impose un pool directement (convention déjà
+    // utilisée par tous les autres test-ui-*.js). On retombe alors sur
+    // une réinitialisation propre plutôt que de laisser des dés
+    // orphelins invisibles.
+  }
+  const slots = [null, null, null, null];
+  for (let i = 0; i < Math.min(4, pool.length); i++) slots[i] = pool[i];
+  diceboardSlotState[playerName] = { round: G.roundState.roundNumber, slots };
+  return slots;
 }
 
 // Rend le diceboard + command board + 3 dashboards véhicule de chaque
@@ -6993,18 +7066,25 @@ function renderDashboards() {
     const originY = rowIndex * (DASH_H + PLAYER_ROW_GAP) + 10;
     let x = 10;
 
-    // --- Diceboard : dés du pool de ce joueur, non encore assignés ---
-    const pool = G.roundState.dicePool[playerName] || [];
-    pool.forEach((value) => {
+    // --- Diceboard : vraie image, 4 emplacements droits (retour de
+    // Mayrik). Réconcilié avec le pool réel via diceboardSlots() —
+    // voir déclaration de diceboardSlotState plus haut.
+    const diceW = dashWidth(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H);
+    const dicePath = dashboardImagePath(playerName, "diceboard");
+    svg.insertAdjacentHTML("beforeend", `<image href="${dicePath}" xlink:href="${dicePath}" x="${x.toFixed(1)}" y="${originY.toFixed(1)}" width="${diceW.toFixed(1)}" height="${DASH_H.toFixed(1)}" pointer-events="none"/>`);
+    const dieSize = DASH_H * DICEBOARD_SLOT_SIZE_FRACTION;
+    diceboardSlots(playerName).forEach((value, i) => {
+      if (value === null) return;
+      const slotKey = "slot" + i;
+      const f = DICEBOARD_SLOT_FRACTION[slotKey];
+      const dx = x + f.x * diceW - dieSize / 2, dy = originY + f.y * DASH_H - dieSize / 2;
       const isClickable = playerName === HUMAN && dieStep;
-      const dieY = originY + (DASH_H - DIE_SIZE) / 2;
-      svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], x, dieY, DIE_SIZE, isClickable ? 'class="clickable"' : ""));
+      svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, dieSize, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
       if (isClickable) {
         svg.lastElementChild.addEventListener("click", () => { pickDie(value); render(); });
       }
-      x += DIE_SIZE + DIE_GAP;
     });
-    x += DASH_GAP * 2;
+    x += diceW + DASH_GAP * 2;
 
     // --- Command board (slots pas encore câblés cette tranche) ---
     const cmdW = dashWidth(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
@@ -7030,9 +7110,12 @@ function renderDashboards() {
       const slotSize = DASH_H * VEHICLE_SLOT_SIZE_FRACTION;
 
       if (car && !isInoperable && playerName === HUMAN && clickableCarSet.has(car)) {
-        const f = VEHICLE_SLOT_FRACTION[size][ctx.mode === "coast" ? (car.coastCount === 0 ? "coast1" : "coast2") : "any"];
-        const sx = x + f.x * w - slotSize / 2, sy = originY + f.y * DASH_H - slotSize / 2;
-        svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${slotSize.toFixed(1)}" height="${slotSize.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"/>`);
+        const slotKey = ctx.mode === "coast" ? (car.coastCount === 0 ? "coast1" : "coast2") : "any";
+        const f = VEHICLE_SLOT_FRACTION[size][slotKey];
+        const cx = x + f.x * w, cy = originY + f.y * DASH_H;
+        const sx = cx - slotSize / 2, sy = cy - slotSize / 2;
+        const rotAttr = SLOT_ROTATION[slotKey] ? ` transform="rotate(${SLOT_ROTATION[slotKey]} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
+        svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${slotSize.toFixed(1)}" height="${slotSize.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
         svg.lastElementChild.addEventListener("click", () => { pickCar(car); render(); });
       }
 
@@ -7042,10 +7125,11 @@ function renderDashboards() {
       // exactement comme le bouton "Annuler" déjà utilisé par le
       // panneau texte (cancelSelection() gère déjà son propre render()).
       if (car && ctx && sel.car === car) {
-        const f = VEHICLE_SLOT_FRACTION[size][ctx.mode === "coast" ? "coast1" : "any"];
+        const slotKey = ctx.mode === "coast" ? "coast1" : "any";
+        const f = VEHICLE_SLOT_FRACTION[size][slotKey];
         const dieX = x + f.x * w - slotSize / 2, dieY = originY + f.y * DASH_H - slotSize / 2;
         const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
-        svg.insertAdjacentHTML("beforeend", dieMarkup(sel.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, slotSize, isCancelable ? 'class="clickable"' : ""));
+        svg.insertAdjacentHTML("beforeend", dieMarkup(sel.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, slotSize, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
         if (isCancelable) {
           svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
         }
@@ -7068,6 +7152,14 @@ function renderDashboards() {
 let G = null; // { progressionState, allCars, allChoppers, roundState }
 let sel = {}; // sélection/progression en cours de construction pour le tour humain
 let fullLog = []; // journal cumulé affiché sous le plateau
+// Couche de présentation propre à l'UI (voir spec-dashboards.md
+// section 1) : le moteur ne connaît qu'un TABLEAU de dés restants
+// (G.roundState.dicePool[joueur]), pas leur emplacement visuel parmi
+// les 4 du diceboard — sans ça, retirer un dé du milieu ferait
+// "glisser" tous les autres visuellement à chaque clic. Réconciliée à
+// chaque rendu par diceboardSlots() ci-dessous, jamais lue par le
+// moteur. Forme : { [joueur]: { round, slots: [valeur|null, ...4] } }.
+let diceboardSlotState = {};
 let gameOver = false;
 let gameOverInfo = null;
 

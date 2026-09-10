@@ -49,6 +49,7 @@
 
     <div class="group">
       <h2>Taille des slots</h2>
+      <div class="row"><label>Diceboard</label><input type="range" id="diceSize" min="0.20" max="0.80" step="0.01" value="0.55"><span class="val" id="v_diceSize"></span></div>
       <div class="row"><label>Véhicules</label><input type="range" id="vehSize" min="0.10" max="0.45" step="0.01" value="0.28"><span class="val" id="v_vehSize"></span></div>
       <div class="row"><label>Command</label><input type="range" id="cmdSize" min="0.08" max="0.35" step="0.01" value="0.20"><span class="val" id="v_cmdSize"></span></div>
       <div class="hint">Fraction de la hauteur affichée du dashboard concerné — carré centré sur chaque point déjà posé.</div>
@@ -65,6 +66,7 @@
 // constantes là-bas — dupliquées ici uniquement car cet outil est
 // autonome, comme calage.html/calage-vehicules.html avant lui) ---
 const COMMAND_IMG_NATIVE_W = 1293, COMMAND_IMG_NATIVE_H = 1134;
+const DICEBOARD_IMG_NATIVE_W = 913, DICEBOARD_IMG_NATIVE_H = 341;
 const VEHICLE_DASH_NATIVE = {
   small: { w: 1409, h: 756 },
   medium: { w: 1515, h: 756 },
@@ -77,24 +79,30 @@ const COLOR = "blue"; // agencement supposé identique pour toutes les couleurs 
 function dashWidth(nativeW, nativeH) { return DASH_H * (nativeW / nativeH); }
 
 // --- Cibles à placer, dans l'ordre. board = clé utilisée pour
-// retrouver la bounding box au clic ---
+// retrouver la bounding box au clic. rot = orientation imprimée sur
+// l'image réelle (retour de Mayrik : ANY/END TURN sont de vrais
+// carrés droits, COAST et les 4 commandes sont des losanges à 45°). ---
 const TARGETS = [
-  { board: "command", slot: "nitro",     label: "Command — NITRO" },
-  { board: "command", slot: "drift",     label: "Command — DRIFT" },
-  { board: "command", slot: "repair",    label: "Command — REPAIR" },
-  { board: "command", slot: "airstrike", label: "Command — AIRSTRIKE" },
-  { board: "small",  slot: "any",     label: "SMALL — ANY" },
-  { board: "small",  slot: "endTurn",label: "SMALL — END TURN" },
-  { board: "small",  slot: "coast1", label: "SMALL — COAST (1er, dessiné)" },
-  { board: "small",  slot: "coast2", label: "SMALL — COAST (2e, arbitraire)" },
-  { board: "medium", slot: "any",     label: "MEDIUM — ANY" },
-  { board: "medium", slot: "endTurn",label: "MEDIUM — END TURN" },
-  { board: "medium", slot: "coast1", label: "MEDIUM — COAST (1er, dessiné)" },
-  { board: "medium", slot: "coast2", label: "MEDIUM — COAST (2e, arbitraire)" },
-  { board: "large",  slot: "any",     label: "LARGE — ANY" },
-  { board: "large",  slot: "endTurn",label: "LARGE — END TURN" },
-  { board: "large",  slot: "coast1", label: "LARGE — COAST (1er, dessiné)" },
-  { board: "large",  slot: "coast2", label: "LARGE — COAST (2e, arbitraire)" }
+  { board: "diceboard", slot: "slot0", label: "Diceboard — emplacement 1", rot: 0 },
+  { board: "diceboard", slot: "slot1", label: "Diceboard — emplacement 2", rot: 0 },
+  { board: "diceboard", slot: "slot2", label: "Diceboard — emplacement 3", rot: 0 },
+  { board: "diceboard", slot: "slot3", label: "Diceboard — emplacement 4", rot: 0 },
+  { board: "command", slot: "nitro",     label: "Command — NITRO",     rot: 45 },
+  { board: "command", slot: "drift",     label: "Command — DRIFT",     rot: 45 },
+  { board: "command", slot: "repair",    label: "Command — REPAIR",    rot: 45 },
+  { board: "command", slot: "airstrike", label: "Command — AIRSTRIKE", rot: 45 },
+  { board: "small",  slot: "any",     label: "SMALL — ANY",                      rot: 0 },
+  { board: "small",  slot: "endTurn",label: "SMALL — END TURN",                  rot: 0 },
+  { board: "small",  slot: "coast1", label: "SMALL — COAST (1er, dessiné)",      rot: 45 },
+  { board: "small",  slot: "coast2", label: "SMALL — COAST (2e, arbitraire)",    rot: 45 },
+  { board: "medium", slot: "any",     label: "MEDIUM — ANY",                     rot: 0 },
+  { board: "medium", slot: "endTurn",label: "MEDIUM — END TURN",                 rot: 0 },
+  { board: "medium", slot: "coast1", label: "MEDIUM — COAST (1er, dessiné)",     rot: 45 },
+  { board: "medium", slot: "coast2", label: "MEDIUM — COAST (2e, arbitraire)",   rot: 45 },
+  { board: "large",  slot: "any",     label: "LARGE — ANY",                      rot: 0 },
+  { board: "large",  slot: "endTurn",label: "LARGE — END TURN",                  rot: 0 },
+  { board: "large",  slot: "coast1", label: "LARGE — COAST (1er, dessiné)",      rot: 45 },
+  { board: "large",  slot: "coast2", label: "LARGE — COAST (2e, arbitraire)",    rot: 45 }
 ];
 
 let results = {}; // clé "board:slot" -> {x,y} fraction
@@ -102,7 +110,7 @@ let currentIndex = 0;
 let boards = {}; // clé board -> {x,y,w,h} dans le repère SVG courant
 
 const svg = document.getElementById("board");
-const els = { vehSize: document.getElementById("vehSize"), cmdSize: document.getElementById("cmdSize") };
+const els = { diceSize: document.getElementById("diceSize"), vehSize: document.getElementById("vehSize"), cmdSize: document.getElementById("cmdSize") };
 function val(id) { return parseFloat(els[id].value); }
 
 function key(t) { return t.board + ":" + t.slot; }
@@ -111,6 +119,9 @@ function layoutBoards() {
   let x = 10;
   const y = 10;
   boards = {};
+  const diceW = dashWidth(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H);
+  boards.diceboard = { x, y, w: diceW, h: DASH_H, path: `../images/dashboards/diceboard.webp` };
+  x += diceW + DASH_GAP;
   const cmdW = dashWidth(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
   boards.command = { x, y, w: cmdW, h: DASH_H, path: `../images/dashboards/command-${COLOR}.webp` };
   x += cmdW + DASH_GAP;
@@ -124,6 +135,7 @@ function layoutBoards() {
 }
 
 function render() {
+  document.getElementById("v_diceSize").textContent = val("diceSize").toFixed(2);
   document.getElementById("v_vehSize").textContent = val("vehSize").toFixed(2);
   document.getElementById("v_cmdSize").textContent = val("cmdSize").toFixed(2);
 
@@ -141,11 +153,12 @@ function render() {
     const r = results[key(t)];
     if (!r) return;
     const b = boards[t.board];
-    const sizeFrac = t.board === "command" ? val("cmdSize") : val("vehSize");
+    const sizeFrac = t.board === "command" ? val("cmdSize") : (t.board === "diceboard" ? val("diceSize") : val("vehSize"));
     const size = b.h * sizeFrac;
     const cx = b.x + r.x * b.w, cy = b.y + r.y * b.h;
+    const rotAttr = t.rot ? ` transform="rotate(${t.rot} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
     svg.insertAdjacentHTML("beforeend", `
-      <rect x="${(cx - size / 2).toFixed(1)}" y="${(cy - size / 2).toFixed(1)}" width="${size.toFixed(1)}" height="${size.toFixed(1)}" fill="#b0d458" fill-opacity="0.45" stroke="#b0d458" stroke-width="1.5" pointer-events="none"/>
+      <rect x="${(cx - size / 2).toFixed(1)}" y="${(cy - size / 2).toFixed(1)}" width="${size.toFixed(1)}" height="${size.toFixed(1)}" fill="#b0d458" fill-opacity="0.45" stroke="#b0d458" stroke-width="1.5" pointer-events="none"${rotAttr}/>
       <line x1="${(cx - 5).toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx + 5).toFixed(1)}" y2="${cy.toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
       <line x1="${cx.toFixed(1)}" y1="${(cy - 5).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${(cy + 5).toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
       <text x="${cx.toFixed(1)}" y="${(cy - size / 2 - 4).toFixed(1)}" font-size="9" fill="#ffd166" text-anchor="middle" pointer-events="none">${t.slot}</text>
@@ -196,6 +209,7 @@ svg.addEventListener("click", (evt) => {
   render();
 });
 
+els.diceSize.addEventListener("input", render);
 els.vehSize.addEventListener("input", render);
 els.cmdSize.addEventListener("input", render);
 
@@ -220,10 +234,18 @@ document.getElementById("copyBtn").addEventListener("click", () => {
   }`;
   const text = [
     "// --- Réglages de calage Dashboards (générés par tools/calage-dashboards.html) ---",
-    "// Remplace directement les 4 constantes correspondantes dans tools/ui-script.js.",
+    "// Remplace directement les 6 constantes correspondantes dans tools/ui-script.js.",
     "",
+    `const DICEBOARD_SLOT_SIZE_FRACTION = ${val("diceSize").toFixed(2)};`,
     `const VEHICLE_SLOT_SIZE_FRACTION = ${val("vehSize").toFixed(2)};`,
     `const COMMAND_SLOT_SIZE_FRACTION = ${val("cmdSize").toFixed(2)};`,
+    "",
+    "const DICEBOARD_SLOT_FRACTION = {",
+    `  slot0: { x: ${fmt(results["diceboard:slot0"].x)}, y: ${fmt(results["diceboard:slot0"].y)} },`,
+    `  slot1: { x: ${fmt(results["diceboard:slot1"].x)}, y: ${fmt(results["diceboard:slot1"].y)} },`,
+    `  slot2: { x: ${fmt(results["diceboard:slot2"].x)}, y: ${fmt(results["diceboard:slot2"].y)} },`,
+    `  slot3: { x: ${fmt(results["diceboard:slot3"].x)}, y: ${fmt(results["diceboard:slot3"].y)} }`,
+    "};",
     "",
     "const VEHICLE_SLOT_FRACTION = {",
     vehBlock("small") + ",",
