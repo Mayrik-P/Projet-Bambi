@@ -174,7 +174,7 @@ function createFinishLineTile(rows, injectedFace = null) {
   const face = injectedFace || (Math.random() < 0.5 ? "a" : "b");
   const grid = [];
   for (let r = 0; r < rows; r++) {
-    grid.push([{ terrain: TERRAIN.ROAD, hazard: null, revealedHazard: null }]);
+    grid.push([{ terrain: TERRAIN.ROAD, hazard: null, revealedHazard: null, isFinishLine: true }]);
   }
   return { cols: 1, rows, grid, face };
 }
@@ -699,6 +699,29 @@ function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remain
   car.row = targetRow;
   let newRemaining = mudExceptionApplies ? 0 : remaining - cost;
   log.push(`${car.id} avance vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
+
+  // Ligne d'arrivée (p.11) : y entrer met fin à la partie IMMÉDIATEMENT
+  // — le mouvement en cours (chemin complet de l'IA, cascade Dazed...)
+  // doit s'arrêter LÀ, sans consommer un seul point de déplacement
+  // supplémentaire. BUG RÉEL corrigé (retour de Mayrik) : avant ce
+  // correctif, seul checkGameEndConditions() (appelé par
+  // l'orchestrateur APRÈS la fin ENTIÈRE du pas) détectait la victoire
+  // — un chemin qui traversait la Finish Line en cours de route (ex.
+  // l'IA calcule tout son trajet d'un coup, contrairement au joueur
+  // humain qui avance case par case) pouvait donc continuer plusieurs
+  // cases de plus avant que la partie ne se termine. `stopped: true`
+  // fait remonter l'arrêt à TOUS les appelants (moveCarGen, entrée sur
+  // le plateau, cascade Dazed) exactement comme une élimination ou un
+  // Slam — la victoire elle-même reste détectée par
+  // checkGameEndConditions(), appelé par l'orchestrateur juste après
+  // ce pas, jamais recalculée ici.
+  if (space.isFinishLine) {
+    log.push(`${car.id} atteint la Finish Line — mouvement interrompu immédiatement.`);
+    if (slamOptions.emitSteps) {
+      yield { type: "step", car, col: car.col, row: car.row };
+    }
+    return { log, remaining: 0, stopped: true, reachedFinishLine: true };
+  }
 
   // Pause purement VISUELLE (aucun effet sur les règles ni sur l'issue
   // de la partie) — demandée par Mayrik le 28/08 pour voir le
@@ -1295,6 +1318,25 @@ function* forceMoveOneSpaceGen(tile, car, allCars, directionName, options = {}, 
   car.col = targetCol;
   car.row = targetRow;
   log.push(`${car.id} est projetée en ${directionName} vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
+
+  // Même correctif que dans enterAdjacentSpaceGen (voir son commentaire
+  // détaillé) : un déplacement FORCÉ (Slam, Skid, glissade Oil Slick,
+  // cascade en chaîne) qui atterrit sur la Finish Line doit lui aussi
+  // arrêter tout net — un véhicule projeté sur la ligne d'arrivée par
+  // un Slam remporte la partie pour son PROPRIÉTAIRE, même si ce n'est
+  // pas son tour (précisé par Mayrik). Retourner sans `slam`/
+  // `frontExit`/`eliminated` équivaut déjà à "déplacement réussi, rien
+  // d'autre à résoudre" pour tous les appelants existants (chaîne de
+  // Slam, Skid, glissade) — aucune plomberie supplémentaire requise :
+  // checkGameEndConditions(), appelé par l'orchestrateur juste après,
+  // détectera la victoire à ce point exact.
+  if (space.isFinishLine) {
+    log.push(`${car.id} atteint la Finish Line — mouvement interrompu immédiatement.`);
+    if (options.emitSteps) {
+      yield { type: "step", car, col: car.col, row: car.row };
+    }
+    return { log, reachedFinishLine: true };
+  }
 
   // Pause purement VISUELLE — voir le commentaire détaillé dans
   // enterAdjacentSpaceGen. Couvre ici les projections forcées (Slam,
@@ -2413,16 +2455,31 @@ function resolveAirstrikeCommand(tile, allCars, allChoppers, chopper, col, row, 
   }
   log.push(`AIRSTRIKE : chopper de ${chopper.owner} placé en (col ${col}, row ${row})`);
 
+  const shootOutcome = resolveAirstrikeShoot(tile, allCars, chopper, options.shootTarget, options);
+  log.push(...shootOutcome.log);
+
+  return { ok: true, log, shootResult: shootOutcome.shootResult };
+}
+
+// Moitié "tir" de l'Airstrike, extraite séparément (retour de Mayrik) :
+// permet à l'appelant de placer le chopper (placeChopperAirstrike),
+// laisser l'interface l'afficher sur la case AVANT de résoudre le tir,
+// puis appeler cette fonction séparément — plutôt que tout résoudre
+// d'un coup, incompréhensible visuellement (le chopper et les dégâts
+// du tir apparaissaient jusqu'ici simultanément). resolveAirstrikeCommand
+// ci-dessus reste la version atomique (placement + tir en un seul
+// appel), toujours utilisée telle quelle par le tour de l'IA.
+function resolveAirstrikeShoot(tile, allCars, chopper, shootTarget, options = {}) {
+  const log = [];
   let shootResult = null;
-  if (options.shootTarget) {
+  if (shootTarget) {
     if (options.roundNumber === 1) {
       log.push(`Tir impossible : les armes ne sont pas encore actives au 1er round (p.10), même pour le chopper`);
     } else {
-      shootResult = resolveShoot(tile, allCars, chopper, options.shootTarget, options);
+      shootResult = resolveShoot(tile, allCars, chopper, shootTarget, options);
       log.push(...shootResult.log);
     }
   }
-
   return { ok: true, log, shootResult };
 }
 
@@ -3122,6 +3179,7 @@ module.exports = {
   applyDamage,
   repairCar,
   resolveAirstrikeCommand,
+  resolveAirstrikeShoot,
   resolveNitroCommand,
   resolveDriftCommand,
   resolveRepairCommand,
@@ -6042,6 +6100,7 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
 
   let effectiveDieValue = dieValue;
   const slamOptions = { decideReroll: decideSlamRerollDefault };
+  let pendingAirstrikeShoot = null;
 
   if (command && !isCoast) {
     drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);
@@ -6060,15 +6119,48 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
       let chopper = allChoppers.find((ch) => ch.owner === currentPlayer);
       if (!chopper) { chopper = createChopper(currentPlayer); allChoppers.push(chopper); }
       if (command.placement) {
-        resolveAirstrikeCommand(
-          buildBoardFromProgressionState(progressionState), allCars, allChoppers, chopper, command.placement.col, command.placement.row,
-          { roundNumber: roundState.roundNumber, shootTarget: command.target, progressionState, allChoppers }
+        // Placement SEUL ici (retour de Mayrik) : le tir n'est plus
+        // résolu dans la foulée — sinon le chopper et les dégâts du
+        // tir apparaissaient simultanément à l'écran, incompréhensible
+        // pour le joueur. `pendingAirstrikeShoot` remonte à l'appelant
+        // (tools/ui-script.js, commitAssignAndCommand) tout ce qu'il
+        // faut pour afficher le chopper posé, PUIS résoudre le tir à
+        // part via executeAirstrikeShoot ci-dessous, avec un rendu
+        // entre les deux. resolveAirstrikeCommand (atomique) reste
+        // utilisée telle quelle par le tour de l'IA.
+        const placeResult = placeChopperAirstrike(
+          buildBoardFromProgressionState(progressionState), allCars, allChoppers, chopper, command.placement.col, command.placement.row
         );
+        if (placeResult.ok) {
+          log.push(`AIRSTRIKE : chopper de ${currentPlayer} placé en (col ${command.placement.col}, row ${command.placement.row})`);
+          pendingAirstrikeShoot = { chopper, target: command.target };
+        } else {
+          log.push(`AIRSTRIKE : placement impossible (${placeResult.reason})`);
+        }
       }
     }
   }
 
-  return { log, effectiveDieValue, slamOptions };
+  return { log, effectiveDieValue, slamOptions, pendingAirstrikeShoot };
+}
+
+/**
+ * Deuxième moitié d'une commande Airstrike humaine (voir
+ * executeAssignAndCommand ci-dessus) : résout le tir du chopper déjà
+ * placé, séparément, pour que l'appelant puisse rendre l'écran entre
+ * les deux étapes. `target` peut être null (joueur ayant décliné le
+ * tir), auquel cas rien n'est résolu — même convention qu'executeShoot.
+ */
+function executeAirstrikeShoot(progressionState, allCars, allChoppers, chopper, target, roundNumber) {
+  const log = [];
+  if (!target) {
+    log.push(`Chopper de ${chopper.owner} ne tire pas.`);
+    return { log, shootResult: null };
+  }
+  const board = buildBoardFromProgressionState(progressionState);
+  const outcome = resolveAirstrikeShoot(board, allCars, chopper, target, { roundNumber, progressionState, allChoppers });
+  log.push(...outcome.log);
+  return { log, shootResult: outcome.shootResult };
 }
 
 /**

@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Outil de calage — slots des Dashboards — Thunder Road Vendetta (usage unique)</title>
+<style>
+  body { background:#1a1a1f; color:#eee; font-family: system-ui, sans-serif; margin:0; padding:16px; }
+  h1 { font-size: 18px; color:#f5a623; margin: 0 0 4px; }
+  p.sub { color:#aaa; margin: 0 0 16px; font-size: 13px; line-height:1.5; }
+  .layout { display:flex; gap:20px; flex-wrap: wrap; align-items:flex-start; }
+  .board-wrap { flex: 1 1 700px; min-width: 320px; background:#111; border-radius:8px; padding:10px; overflow:auto; }
+  svg { width: 100%; height: auto; display:block; background:#000; cursor: crosshair; }
+  .panel { flex: 0 0 320px; background:#25252b; border-radius:8px; padding:14px; }
+  .group { border:1px solid #444; border-radius:6px; padding:10px; margin-bottom:14px; }
+  .group h2 { font-size:14px; margin:0 0 10px; color:#ffd166; }
+  .current { font-size:14px; font-weight:bold; color:#7fd858; margin-bottom:6px; }
+  .row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .row label { flex:0 0 110px; font-size:12px; color:#ccc; }
+  .row input[type=range] { flex:1; }
+  .row .val { flex:0 0 40px; text-align:right; font-variant-numeric: tabular-nums; font-size:12px; }
+  ul#targetList { list-style:none; margin:0; padding:0; font-size:12px; max-height:260px; overflow-y:auto; }
+  ul#targetList li { padding:4px 6px; border-radius:4px; cursor:pointer; margin-bottom:2px; }
+  ul#targetList li:hover { background:#333; }
+  ul#targetList li.done { color:#7fd858; }
+  ul#targetList li.active { background:#3a3a1f; color:#ffd166; font-weight:bold; }
+  button { width:100%; padding:10px; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:14px; margin-top:6px; }
+  button#copyBtn { background:#f5a623; color:#111; }
+  button#copyBtn:active { background:#d9901a; }
+  button#resetBtn { background:#555; color:#eee; }
+  textarea#out { width:100%; height:220px; margin-top:10px; background:#111; color:#8f8; font-family: monospace; font-size:10.5px; border:1px solid #444; border-radius:6px; padding:8px; box-sizing:border-box; }
+  .hint { font-size:11px; color:#888; margin-top:4px; }
+</style>
+</head>
+<body>
+
+<h1>Outil de calage — slots des Dashboards</h1>
+<p class="sub">Une cible à la fois (voir liste à droite). Clique directement sur la vraie image à l'endroit où doit tomber le slot indiqué. Le point se place immédiatement, la cible suivante s'active toute seule. Clique un élément de la liste pour revenir corriger un slot déjà placé. Une fois les 16 cibles posées, ajuste si besoin la taille des carrés avec les curseurs, puis clique « Copier les réglages » : le texte généré remplace directement <code>VEHICLE_SLOT_FRACTION</code> / <code>COMMAND_SLOT_FRACTION</code> / <code>VEHICLE_SLOT_SIZE_FRACTION</code> / <code>COMMAND_SLOT_SIZE_FRACTION</code> dans <code>tools/ui-script.js</code>.</p>
+
+<div class="layout">
+  <div class="board-wrap">
+    <svg id="board" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"></svg>
+  </div>
+
+  <div class="panel">
+    <div class="group">
+      <div class="current" id="currentLabel"></div>
+      <ul id="targetList"></ul>
+    </div>
+
+    <div class="group">
+      <h2>Taille des slots</h2>
+      <div class="row"><label>Véhicules</label><input type="range" id="vehSize" min="0.10" max="0.45" step="0.01" value="0.28"><span class="val" id="v_vehSize"></span></div>
+      <div class="row"><label>Command</label><input type="range" id="cmdSize" min="0.08" max="0.35" step="0.01" value="0.20"><span class="val" id="v_cmdSize"></span></div>
+      <div class="hint">Fraction de la hauteur affichée du dashboard concerné — carré centré sur chaque point déjà posé.</div>
+    </div>
+
+    <button id="resetBtn">Recommencer</button>
+    <button id="copyBtn">Copier les réglages</button>
+    <textarea id="out" readonly placeholder="Les valeurs copiées apparaîtront ici une fois les 16 cibles posées..."></textarea>
+  </div>
+</div>
+
+<script>
+// --- Tailles natives (reprises de tools/ui-script.js, voir ces
+// constantes là-bas — dupliquées ici uniquement car cet outil est
+// autonome, comme calage.html/calage-vehicules.html avant lui) ---
+const COMMAND_IMG_NATIVE_W = 1293, COMMAND_IMG_NATIVE_H = 1134;
+const VEHICLE_DASH_NATIVE = {
+  small: { w: 1409, h: 756 },
+  medium: { w: 1515, h: 756 },
+  large: { w: 1409, h: 756 }
+};
+const DASH_H = 300; // hauteur d'affichage pour CE calage (bien plus grande que les 70 en jeu, pour cliquer précisément)
+const DASH_GAP = 24;
+const COLOR = "blue"; // agencement supposé identique pour toutes les couleurs (même gabarit recoloré) — voir hint
+
+function dashWidth(nativeW, nativeH) { return DASH_H * (nativeW / nativeH); }
+
+// --- Cibles à placer, dans l'ordre. board = clé utilisée pour
+// retrouver la bounding box au clic ---
+const TARGETS = [
+  { board: "command", slot: "nitro",     label: "Command — NITRO" },
+  { board: "command", slot: "drift",     label: "Command — DRIFT" },
+  { board: "command", slot: "repair",    label: "Command — REPAIR" },
+  { board: "command", slot: "airstrike", label: "Command — AIRSTRIKE" },
+  { board: "small",  slot: "any",     label: "SMALL — ANY" },
+  { board: "small",  slot: "endTurn",label: "SMALL — END TURN" },
+  { board: "small",  slot: "coast1", label: "SMALL — COAST (1er, dessiné)" },
+  { board: "small",  slot: "coast2", label: "SMALL — COAST (2e, arbitraire)" },
+  { board: "medium", slot: "any",     label: "MEDIUM — ANY" },
+  { board: "medium", slot: "endTurn",label: "MEDIUM — END TURN" },
+  { board: "medium", slot: "coast1", label: "MEDIUM — COAST (1er, dessiné)" },
+  { board: "medium", slot: "coast2", label: "MEDIUM — COAST (2e, arbitraire)" },
+  { board: "large",  slot: "any",     label: "LARGE — ANY" },
+  { board: "large",  slot: "endTurn",label: "LARGE — END TURN" },
+  { board: "large",  slot: "coast1", label: "LARGE — COAST (1er, dessiné)" },
+  { board: "large",  slot: "coast2", label: "LARGE — COAST (2e, arbitraire)" }
+];
+
+let results = {}; // clé "board:slot" -> {x,y} fraction
+let currentIndex = 0;
+let boards = {}; // clé board -> {x,y,w,h} dans le repère SVG courant
+
+const svg = document.getElementById("board");
+const els = { vehSize: document.getElementById("vehSize"), cmdSize: document.getElementById("cmdSize") };
+function val(id) { return parseFloat(els[id].value); }
+
+function key(t) { return t.board + ":" + t.slot; }
+
+function layoutBoards() {
+  let x = 10;
+  const y = 10;
+  boards = {};
+  const cmdW = dashWidth(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
+  boards.command = { x, y, w: cmdW, h: DASH_H, path: `../images/dashboards/command-${COLOR}.webp` };
+  x += cmdW + DASH_GAP;
+  ["small", "medium", "large"].forEach((size) => {
+    const n = VEHICLE_DASH_NATIVE[size];
+    const w = dashWidth(n.w, n.h);
+    boards[size] = { x, y, w, h: DASH_H, path: `../images/dashboards/dashboard-${COLOR}-${size}.webp` };
+    x += w + DASH_GAP;
+  });
+  return x;
+}
+
+function render() {
+  document.getElementById("v_vehSize").textContent = val("vehSize").toFixed(2);
+  document.getElementById("v_cmdSize").textContent = val("cmdSize").toFixed(2);
+
+  const totalW = layoutBoards();
+  svg.setAttribute("viewBox", `0 0 ${totalW} ${DASH_H + 20}`);
+  svg.innerHTML = "";
+
+  Object.values(boards).forEach((b) => {
+    svg.insertAdjacentHTML("beforeend", `<image href="${b.path}" xlink:href="${b.path}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" pointer-events="none"/>
+      <rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="none" stroke="#444" stroke-width="1"/>`);
+  });
+
+  // Points déjà posés (carré + croix + étiquette courte)
+  TARGETS.forEach((t) => {
+    const r = results[key(t)];
+    if (!r) return;
+    const b = boards[t.board];
+    const sizeFrac = t.board === "command" ? val("cmdSize") : val("vehSize");
+    const size = b.h * sizeFrac;
+    const cx = b.x + r.x * b.w, cy = b.y + r.y * b.h;
+    svg.insertAdjacentHTML("beforeend", `
+      <rect x="${(cx - size / 2).toFixed(1)}" y="${(cy - size / 2).toFixed(1)}" width="${size.toFixed(1)}" height="${size.toFixed(1)}" fill="#b0d458" fill-opacity="0.45" stroke="#b0d458" stroke-width="1.5" pointer-events="none"/>
+      <line x1="${(cx - 5).toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx + 5).toFixed(1)}" y2="${cy.toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
+      <line x1="${cx.toFixed(1)}" y1="${(cy - 5).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${(cy + 5).toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
+      <text x="${cx.toFixed(1)}" y="${(cy - size / 2 - 4).toFixed(1)}" font-size="9" fill="#ffd166" text-anchor="middle" pointer-events="none">${t.slot}</text>
+    `);
+  });
+
+  // Cadre autour du board concerné par la cible active
+  if (currentIndex < TARGETS.length) {
+    const b = boards[TARGETS[currentIndex].board];
+    svg.insertAdjacentHTML("beforeend", `<rect x="${b.x - 3}" y="${b.y - 3}" width="${b.w + 6}" height="${b.h + 6}" fill="none" stroke="#ffd166" stroke-width="2" pointer-events="none"/>`);
+  }
+
+  renderPanel();
+}
+
+function renderPanel() {
+  const label = document.getElementById("currentLabel");
+  label.textContent = currentIndex < TARGETS.length
+    ? "Cliquer : " + TARGETS[currentIndex].label
+    : "Terminé — ajuste la taille si besoin puis copie les réglages.";
+
+  const list = document.getElementById("targetList");
+  list.innerHTML = "";
+  TARGETS.forEach((t, i) => {
+    const li = document.createElement("li");
+    const done = !!results[key(t)];
+    li.textContent = (done ? "✓ " : "· ") + t.label;
+    li.className = (done ? "done " : "") + (i === currentIndex ? "active" : "");
+    li.addEventListener("click", () => { currentIndex = i; render(); });
+    list.appendChild(li);
+  });
+}
+
+function svgPoint(evt) {
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+svg.addEventListener("click", (evt) => {
+  if (currentIndex >= TARGETS.length) return;
+  const t = TARGETS[currentIndex];
+  const b = boards[t.board];
+  const p = svgPoint(evt);
+  results[key(t)] = { x: (p.x - b.x) / b.w, y: (p.y - b.y) / b.h };
+  currentIndex++;
+  while (currentIndex < TARGETS.length && results[key(TARGETS[currentIndex])]) currentIndex++; // saute les cibles déjà corrigées manuellement
+  render();
+});
+
+els.vehSize.addEventListener("input", render);
+els.cmdSize.addEventListener("input", render);
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  results = {};
+  currentIndex = 0;
+  render();
+});
+
+document.getElementById("copyBtn").addEventListener("click", () => {
+  const missing = TARGETS.filter((t) => !results[key(t)]);
+  if (missing.length > 0) {
+    alert("Encore " + missing.length + " cible(s) non posée(s) : " + missing.map((t) => t.label).join(", "));
+    return;
+  }
+  const fmt = (n) => n.toFixed(3);
+  const vehBlock = (size) => `  ${size}: {
+    any: { x: ${fmt(results[size + ":any"].x)}, y: ${fmt(results[size + ":any"].y)} },
+    endTurn: { x: ${fmt(results[size + ":endTurn"].x)}, y: ${fmt(results[size + ":endTurn"].y)} },
+    coast1: { x: ${fmt(results[size + ":coast1"].x)}, y: ${fmt(results[size + ":coast1"].y)} },
+    coast2: { x: ${fmt(results[size + ":coast2"].x)}, y: ${fmt(results[size + ":coast2"].y)} }
+  }`;
+  const text = [
+    "// --- Réglages de calage Dashboards (générés par tools/calage-dashboards.html) ---",
+    "// Remplace directement les 4 constantes correspondantes dans tools/ui-script.js.",
+    "",
+    `const VEHICLE_SLOT_SIZE_FRACTION = ${val("vehSize").toFixed(2)};`,
+    `const COMMAND_SLOT_SIZE_FRACTION = ${val("cmdSize").toFixed(2)};`,
+    "",
+    "const VEHICLE_SLOT_FRACTION = {",
+    vehBlock("small") + ",",
+    vehBlock("medium") + ",",
+    vehBlock("large"),
+    "};",
+    "",
+    "const COMMAND_SLOT_FRACTION = {",
+    `  nitro: { x: ${fmt(results["command:nitro"].x)}, y: ${fmt(results["command:nitro"].y)} },`,
+    `  drift: { x: ${fmt(results["command:drift"].x)}, y: ${fmt(results["command:drift"].y)} },`,
+    `  repair: { x: ${fmt(results["command:repair"].x)}, y: ${fmt(results["command:repair"].y)} },`,
+    `  airstrike: { x: ${fmt(results["command:airstrike"].x)}, y: ${fmt(results["command:airstrike"].y)} }`,
+    "};"
+  ].join("\n");
+  document.getElementById("out").value = text;
+  navigator.clipboard.writeText(text).catch(() => {});
+});
+
+render();
+</script>
+
+</body>
+</html>

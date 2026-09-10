@@ -45,6 +45,7 @@
     <span class="badge">Pool : <span id="dicePool"></span></span>
   </div>
   <svg id="board" viewBox="0 0 900 500"></svg>
+  <svg id="dashboards" viewBox="0 0 900 300"></svg>
   <div id="panel"></div>
   <div class="damageList" id="damageRow"></div>
   <div id="winnerBanner"></div>
@@ -6807,6 +6808,16 @@ const HAZARD_SHADOW_SCALE = HAZARD_IMG_W / HAZARD_IMG_NATIVE_W; // même facteur
 const HAZARD_SHADOW_W = HAZARD_SHADOW_NATIVE_W * HAZARD_SHADOW_SCALE;
 const HAZARD_SHADOW_H = HAZARD_SHADOW_NATIVE_H * HAZARD_SHADOW_SCALE;
 const HAZARD_SHADOW_PATH = "../images/hazards/hazard-shadow.webp";
+
+// --- Marqueurs état véhicule (images/markers/) — remplacent l'ancien
+// rond noir/chiffre en surimpression (retour de Mayrik) une fois les
+// vrais fichiers déposés sur GitHub. Taille eyeballée (pas de repère
+// visuel précis à mesurer, contrairement aux tuiles/véhicules/hazards
+// qui ont une résolution native calée sur la case) — à ajuster si
+// besoin une fois vu par Mayrik dans son navigateur.
+const DAMAGE_MARKER_PATH = "../images/markers/marker-damaged.webp";
+const INOPERABLE_MARKER_PATH = "../images/markers/marker-inoperable.webp";
+const MARKER_ICON_SIZE = IMG_CELL_W * 0.55;
 // Consigne pour Mayrik (retour après sa question sur la cohérence
 // visuelle) : dessiner la forme de l'ombre en NOIR OPAQUE (alpha
 // plein, pas de transparence propre au fichier) — c'est le CODE qui
@@ -6826,6 +6837,228 @@ function carImagePath(car) {
 }
 function chopperImagePath(ch) {
   return `../images/vehicles/chopper-${PLAYER_CAR_COLOR[ch.owner]}.webp`;
+}
+
+// ===================================================================
+// DASHBOARDS — pose visuelle des dés (chantier en cours, voir
+// docs/spec-dashboards.md pour la spec complète validée avec Mayrik).
+// PREMIÈRE TRANCHE câblée ici : sélection du dé (S1) + pose sur un
+// slot ANY ou COAST d'un véhicule (S2/S3), annulation comprise (le
+// dé posé reste cliquable pour revenir au diceboard, exactement
+// comme cancelSelection() déjà utilisé par le panneau texte).
+// Command/Repair/Airstrike/Tir/passage à END TURN (S4-S8) restent
+// sur le panneau texte (renderPanel) pour l'instant — prochaine
+// tranche.
+//
+// AUCUNE logique de jeu ajoutée ici (voir spec-dashboards.md section
+// 0) : chaque clic appelle une fonction déjà existante et déjà
+// utilisée par renderPanel() (pickDie/pickCar/cancelSelection) — la
+// validité de ce qui est cliquable vient uniquement de
+// currentTurnContext(), jamais recalculée ici.
+// ===================================================================
+
+// Tailles natives mesurées sur les vraies images (images/dashboards/,
+// images/dice/) — mêmes conventions que TILE_NATIVE_*/CAR_IMG_NATIVE_*
+// plus haut.
+const COMMAND_IMG_NATIVE_W = 1293, COMMAND_IMG_NATIVE_H = 1134;
+const VEHICLE_DASH_NATIVE = {
+  small: { w: 1409, h: 756 },
+  medium: { w: 1515, h: 756 },
+  large: { w: 1409, h: 756 }
+};
+// die-move-pip.webp fait exactement 63px = 189/3 : la grille de pips
+// 3x3 tombe pile sur les tiers de la face, aucune approximation.
+const DIE_IMG_NATIVE = 189;
+
+// Hauteur d'affichage commune à tous les dashboards d'une même ligne
+// (la largeur de chacun se déduit de son propre rapport largeur/
+// hauteur natif — jamais une valeur indépendante qui déformerait
+// l'image, même principe que pour les tuiles/véhicules).
+const DASH_H = 70;
+const DASH_GAP = 6;
+const DIE_SIZE = 22;
+const DIE_GAP = 4;
+const PLAYER_ROW_GAP = 16;
+
+function dashboardImagePath(playerName, kind) {
+  // kind: "command" | "small" | "medium" | "large" | "<size>-inoperable"
+  const color = PLAYER_CAR_COLOR[playerName];
+  if (kind === "command") return `../images/dashboards/command-${color}.webp`;
+  return `../images/dashboards/dashboard-${color}-${kind}.webp`;
+}
+
+function dashWidth(nativeW, nativeH) { return DASH_H * (nativeW / nativeH); }
+
+// Positions des slots de pose de dé, en FRACTION (0..1) de la largeur/
+// hauteur AFFICHÉE du dashboard concerné. Première estimation faite à
+// l'œil sur l'image de référence envoyée par Mayrik — aucune image
+// n'étant visible dans ce bac à sable, PAS encore calée finement. À
+// affiner avec un outil de calage dédié une fois vérifié par Mayrik
+// dans son navigateur (même méthode que tools/calage.html /
+// tools/calage-vehicules.html) — la géométrie (fractions) est isolée
+// ici pour rester facile à corriger sans toucher au reste du rendu.
+const VEHICLE_SLOT_SIZE_FRACTION = 0.28; // fraction de DASH_H — taille affichée des slots ANY/COAST
+const COMMAND_SLOT_SIZE_FRACTION = 0.20; // idem pour les 4 slots du command board
+const VEHICLE_SLOT_FRACTION = {
+  // Une entrée par TAILLE de véhicule (small/medium/large) — jamais
+  // partagée entre les 3 : leurs dashboards n'ont pas le même rapport
+  // largeur/hauteur (medium ~7% plus large que small/large), donc pas
+  // forcément le même agencement imprimé. Valeurs de départ =
+  // estimation à l'œil sur l'image de référence de Mayrik, à
+  // remplacer par l'export de tools/calage-dashboards.html.
+  small: {
+    any: { x: 0.50, y: 0.42 },
+    endTurn: { x: 0.50, y: 0.68 }, // pas encore câblé (S8, prochaine tranche)
+    coast1: { x: 0.86, y: 0.30 },
+    coast2: { x: 0.97, y: 0.30 } // arbitraire (aucun repère visuel imprimé, voir spec section 6)
+  },
+  medium: {
+    any: { x: 0.50, y: 0.42 },
+    endTurn: { x: 0.50, y: 0.68 },
+    coast1: { x: 0.86, y: 0.30 },
+    coast2: { x: 0.97, y: 0.30 }
+  },
+  large: {
+    any: { x: 0.50, y: 0.42 },
+    endTurn: { x: 0.50, y: 0.68 },
+    coast1: { x: 0.86, y: 0.30 },
+    coast2: { x: 0.97, y: 0.30 }
+  }
+};
+const COMMAND_SLOT_FRACTION = {
+  // Pas encore câblés cette tranche (Command reste sur le panneau
+  // texte) — géométrie posée ici par anticipation pour la prochaine.
+  nitro: { x: 0.86, y: 0.22 },
+  drift: { x: 0.14, y: 0.78 },
+  repair: { x: 0.86, y: 0.78 },
+  airstrike: { x: 0.86, y: 0.06 }
+};
+
+// Coordonnées en cellule d'une grille 3x3 (col,row) — un pip fait
+// exactement 1/3 de la face (voir DIE_IMG_NATIVE), donc un placement
+// par cellule de grille est pixel-exact, pas une approximation.
+function diePipLayout(value) {
+  const TL = [0, 0], TR = [2, 0], ML = [0, 1], MR = [2, 1], BL = [0, 2], BR = [2, 2], C = [1, 1];
+  const layouts = {
+    1: [C], 2: [TL, BR], 3: [TL, C, BR],
+    4: [TL, TR, BL, BR], 5: [TL, TR, C, BL, BR],
+    6: [TL, TR, ML, MR, BL, BR]
+  };
+  return layouts[value] || [];
+}
+
+// Dessine un dé de mouvement statique (face colorée + pips) — PREMIER
+// rendu statique du projet (l'animation de lancer — chute/rebonds/
+// cyclage 2D, déjà décidée dans son principe, voir mémoire projet —
+// reste un chantier séparé). x,y = coin haut-gauche, size = côté
+// affiché. extraAttrs sert à ajouter class="clickable" sans dupliquer
+// le markup entre dé du diceboard et dé déjà posé sur un dashboard.
+function dieMarkup(value, color, x, y, size, extraAttrs) {
+  const pipCell = size / 3;
+  const facePath = `../images/dice/die-move-${color}.webp`;
+  const pipPath = `../images/dice/die-move-pip.webp`;
+  const pips = diePipLayout(value).map(([col, row]) => {
+    const px = x + col * pipCell, py = y + row * pipCell;
+    return `<image href="${pipPath}" xlink:href="${pipPath}" x="${px.toFixed(1)}" y="${py.toFixed(1)}" width="${pipCell.toFixed(1)}" height="${pipCell.toFixed(1)}" pointer-events="none"/>`;
+  }).join("");
+  return `<g ${extraAttrs || ""}>
+    <image href="${facePath}" xlink:href="${facePath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${size.toFixed(1)}" height="${size.toFixed(1)}" pointer-events="none"/>
+    ${pips}
+  </g>`;
+}
+
+// Rend le diceboard + command board + 3 dashboards véhicule de chaque
+// joueur, joueur actif en haut (retour de Mayrik, voir
+// spec-dashboards.md section 2). Construit comme un bloc paramétrique
+// par joueur (originY en paramètre implicite via rowIndex) — pour ne
+// pas avoir à retoucher cette fonction le jour où on passera à un
+// affichage un-joueur-à-la-fois (carousel/slider), décision actée
+// avec Mayrik.
+function renderDashboards() {
+  const svg = document.getElementById("dashboards");
+  if (!svg) return; // anciens tests jsdom sans ce conteneur : ne casse rien
+  svg.innerHTML = "";
+
+  const cp = getCurrentPlayer(G.roundState);
+  const ctx = (cp === HUMAN && !gameOver) ? currentTurnContext() : null;
+  const dieStep = !!(ctx && ctx.canPlay && (sel.step || "die") === "die");
+  const carStep = !!(ctx && ctx.canPlay && sel.step === "car");
+  const clickableCars = carStep ? (ctx.mode === "coast" ? ctx.coastableCars : ctx.activatableCars) : [];
+  const clickableCarSet = new Set(clickableCars);
+
+  const order = cp ? [cp, ...PLAYER_NAMES.filter((p) => p !== cp)] : PLAYER_NAMES;
+
+  let maxRight = 0;
+  order.forEach((playerName, rowIndex) => {
+    const originY = rowIndex * (DASH_H + PLAYER_ROW_GAP) + 10;
+    let x = 10;
+
+    // --- Diceboard : dés du pool de ce joueur, non encore assignés ---
+    const pool = G.roundState.dicePool[playerName] || [];
+    pool.forEach((value) => {
+      const isClickable = playerName === HUMAN && dieStep;
+      const dieY = originY + (DASH_H - DIE_SIZE) / 2;
+      svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], x, dieY, DIE_SIZE, isClickable ? 'class="clickable"' : ""));
+      if (isClickable) {
+        svg.lastElementChild.addEventListener("click", () => { pickDie(value); render(); });
+      }
+      x += DIE_SIZE + DIE_GAP;
+    });
+    x += DASH_GAP * 2;
+
+    // --- Command board (slots pas encore câblés cette tranche) ---
+    const cmdW = dashWidth(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
+    const cmdPath = dashboardImagePath(playerName, "command");
+    svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${x.toFixed(1)}" y="${originY.toFixed(1)}" width="${cmdW.toFixed(1)}" height="${DASH_H.toFixed(1)}" pointer-events="none"/>`);
+    x += cmdW + DASH_GAP;
+
+    // --- Dashboards véhicules, alignés small -> medium -> large ---
+    ["small", "medium", "large"].forEach((size) => {
+      const car = G.allCars.find((c) => c.owner === playerName && c.size === size && c.status !== "eliminated");
+      const native = VEHICLE_DASH_NATIVE[size];
+      const w = dashWidth(native.w, native.h);
+      const isInoperable = !!(car && car.status === "inoperable");
+      const kind = isInoperable ? `${size}-inoperable` : size;
+
+      if (car) {
+        const imgPath = dashboardImagePath(playerName, kind);
+        svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${originY.toFixed(1)}" width="${w.toFixed(1)}" height="${DASH_H.toFixed(1)}" pointer-events="none"/>`);
+      }
+      // Véhicule éliminé (car === undefined ici) -> emplacement laissé
+      // vide, voir spec-dashboards.md section 2.
+
+      const slotSize = DASH_H * VEHICLE_SLOT_SIZE_FRACTION;
+
+      if (car && !isInoperable && playerName === HUMAN && clickableCarSet.has(car)) {
+        const f = VEHICLE_SLOT_FRACTION[size][ctx.mode === "coast" ? (car.coastCount === 0 ? "coast1" : "coast2") : "any"];
+        const sx = x + f.x * w - slotSize / 2, sy = originY + f.y * DASH_H - slotSize / 2;
+        svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${slotSize.toFixed(1)}" height="${slotSize.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"/>`);
+        svg.lastElementChild.addEventListener("click", () => { pickCar(car); render(); });
+      }
+
+      // Dé déjà posé sur ce véhicule (couche de présentation propre à
+      // l'UI, voir spec-dashboards.md section 1 — le moteur ne connaît
+      // pas la position visuelle des dés). Reclic dessus = annuler,
+      // exactement comme le bouton "Annuler" déjà utilisé par le
+      // panneau texte (cancelSelection() gère déjà son propre render()).
+      if (car && ctx && sel.car === car) {
+        const f = VEHICLE_SLOT_FRACTION[size][ctx.mode === "coast" ? "coast1" : "any"];
+        const dieX = x + f.x * w - slotSize / 2, dieY = originY + f.y * DASH_H - slotSize / 2;
+        const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
+        svg.insertAdjacentHTML("beforeend", dieMarkup(sel.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, slotSize, isCancelable ? 'class="clickable"' : ""));
+        if (isCancelable) {
+          svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
+        }
+      }
+
+      x += w + DASH_GAP;
+    });
+
+    maxRight = Math.max(maxRight, x);
+  });
+
+  const totalH = order.length * (DASH_H + PLAYER_ROW_GAP) + 10;
+  svg.setAttribute("viewBox", `0 0 ${maxRight} ${totalH}`);
 }
 
 
@@ -7757,7 +7990,7 @@ function renderBoard() {
       ${carShadowMarkup(imgPath, x, y, isInoperableVisual)}
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none" ${isInoperableVisual ? 'opacity="0.5"' : ""}/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#b0d458" stroke-width="2.5" pointer-events="none"/>` : ""}
-      ${car.damageTokens.length > 0 ? `<circle cx="${cx + 10}" cy="${cy - 8}" r="5" fill="#111" pointer-events="none"/><text x="${cx + 10}" y="${cy - 5}" font-size="7" text-anchor="middle" fill="#e11" pointer-events="none">${car.damageTokens.length}</text>` : ""}
+      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : "")}
     </g>`);
   });
 
@@ -8012,6 +8245,7 @@ function render() {
   document.getElementById("dicePool").innerHTML = cp ? (G.roundState.dicePool[cp] || []).map((d) => `<span class="die">${d}</span>`).join("") : "";
 
   renderBoard();
+  renderDashboards();
   renderPanel();
 
   document.getElementById("damageRow").innerHTML = G.allCars
