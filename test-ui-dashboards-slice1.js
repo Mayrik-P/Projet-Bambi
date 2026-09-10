@@ -96,6 +96,10 @@ sel = win.eval("sel");
 console.log("sel.car pointe vers le véhicule small (attendu true) :", sel.car === s2);
 console.log("Coast -> jamais de Command -> étape directement 'commit' (attendu true) :", sel.step === "commit");
 
+win.render();
+const dashboardsHtml = dom.window.document.getElementById("dashboards").innerHTML;
+console.log("Le dé posé sur le slot COAST est bien tourné à 45° (attendu true) :", dashboardsHtml.includes("rotate(45"));
+
 section("Test 3 — Non-régression : pendant le tour de l'IA, aucun élément du diceboard humain n'est cliquable");
 
 dom = makeDom();
@@ -126,5 +130,37 @@ const boardHtml = dom.window.document.getElementById("board").innerHTML;
 console.log("marker-damaged présent pour le véhicule à 1 dégât (attendu true) :", boardHtml.includes("marker-damaged.webp"));
 console.log("marker-inoperable présent pour le véhicule inopérable (attendu true) :", boardHtml.includes("marker-inoperable.webp"));
 console.log("Plus aucun rond noir/chiffre de l'ancien système (attendu true) :", !boardHtml.includes('fill="#111"'));
+
+section("Test 5 — Diceboard : positions stables (pas de glissement) quand un pool imposé directement en cours de round rétrécit");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s5 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
+const m5 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
+G.allCars.push(s5, m5);
+G.roundState.dicePool[HUMAN] = [4, 3, 3, 1]; // pool imposé directement, comme les autres test-ui-*.js
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+
+let slots = win.eval('diceboardSlots("Vous")');
+console.log("Les 4 valeurs imposées apparaissent bien dans les 4 emplacements (attendu true) :",
+  JSON.stringify([...slots].sort()) === JSON.stringify([1, 3, 3, 4]));
+
+// Un des deux dés "3" est assigné (retiré du pool réel) -> le pool
+// rétrécit à 3 éléments. Sans passer par un vrai commit (pas
+// nécessaire pour ce test ciblé sur l'affichage), on simule
+// exactement ce que fait le moteur : retirer UNE occurrence de "3".
+const idx = G.roundState.dicePool[HUMAN].indexOf(3);
+G.roundState.dicePool[HUMAN].splice(idx, 1);
+win.render();
+const slots2 = win.eval('diceboardSlots("Vous")');
+console.log("Les 3 positions des dés restants n'ont PAS bougé (attendu true) :",
+  slots.map((v, i) => (v === 3 ? true : v === slots2[i])).every(Boolean));
+console.log("Exactement un emplacement est maintenant vide (attendu true) :",
+  slots2.filter((v) => v === null).length === 1);
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
