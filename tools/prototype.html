@@ -6871,11 +6871,32 @@ const VEHICLE_DASH_NATIVE = {
 // 3x3 tombe pile sur les tiers de la face, aucune approximation.
 const DIE_IMG_NATIVE = 189;
 
-// Hauteur d'affichage commune à tous les dashboards d'une même ligne
-// (la largeur de chacun se déduit de son propre rapport largeur/
-// hauteur natif — jamais une valeur indépendante qui déformerait
-// l'image, même principe que pour les tuiles/véhicules).
-const DASH_H = 70;
+// Échelle UNIQUE appliquée aux pixels natifs de TOUTES les images de
+// cette zone (dashboards ET dés) — retour de Mayrik : tous ces
+// visuels ont été dessinés à la même résolution/proportion, et tous
+// les emplacements (ANY/COAST/Command/diceboard) sont prévus à la
+// taille exacte d'un dé. Donc AUCUN coefficient de taille séparé par
+// catégorie n'est nécessaire (contrairement à une 1ère version de ce
+// fichier qui forçait tous les dashboards à la même hauteur affichée,
+// obligeant à ajuster une taille de dé différente par catégorie pour
+// compenser) : un seul facteur d'échelle suffit, exactement comme
+// IMG_CELL_W/GRID_CELL_W plus haut pour les tuiles.
+const DASH_SCALE = 0.16;
+function scaledSize(nativeW, nativeH) { return { w: nativeW * DASH_SCALE, h: nativeH * DASH_SCALE }; }
+// Taille affichée d'un dé — LA SEULE taille utilisée pour tout ce qui
+// est dé, que ce soit sur le diceboard ou posé sur un slot.
+const DIE_DISPLAY_SIZE = DIE_IMG_NATIVE * DASH_SCALE;
+// Hauteur commune de la ligne (le plus grand des 5 visuels à cette
+// échelle — le command board, plus haut que les autres) : sert à
+// centrer verticalement chaque visuel dans sa ligne et à empiler les
+// lignes des différents joueurs.
+const DASHBOARD_ROW_H = Math.max(
+  scaledSize(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H).h,
+  scaledSize(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H).h,
+  scaledSize(VEHICLE_DASH_NATIVE.small.w, VEHICLE_DASH_NATIVE.small.h).h,
+  scaledSize(VEHICLE_DASH_NATIVE.medium.w, VEHICLE_DASH_NATIVE.medium.h).h,
+  scaledSize(VEHICLE_DASH_NATIVE.large.w, VEHICLE_DASH_NATIVE.large.h).h
+);
 const DASH_GAP = 6;
 const PLAYER_ROW_GAP = 16;
 
@@ -6887,8 +6908,6 @@ function dashboardImagePath(playerName, kind) {
   return `../images/dashboards/dashboard-${color}-${kind}.webp`;
 }
 
-function dashWidth(nativeW, nativeH) { return DASH_H * (nativeW / nativeH); }
-
 // Positions des slots de pose de dé, en FRACTION (0..1) de la largeur/
 // hauteur AFFICHÉE du dashboard concerné. Première estimation faite à
 // l'œil sur l'image de référence envoyée par Mayrik — aucune image
@@ -6897,8 +6916,6 @@ function dashWidth(nativeW, nativeH) { return DASH_H * (nativeW / nativeH); }
 // dans son navigateur (même méthode que tools/calage.html /
 // tools/calage-vehicules.html) — la géométrie (fractions) est isolée
 // ici pour rester facile à corriger sans toucher au reste du rendu.
-const VEHICLE_SLOT_SIZE_FRACTION = 0.28; // fraction de DASH_H — taille affichée des slots ANY/COAST
-const COMMAND_SLOT_SIZE_FRACTION = 0.20; // idem pour les 4 slots du command board
 const VEHICLE_SLOT_FRACTION = {
   // Une entrée par TAILLE de véhicule (small/medium/large) — jamais
   // partagée entre les 3 : leurs dashboards n'ont pas le même rapport
@@ -6943,7 +6960,6 @@ const SLOT_ROTATION = {
   nitro: 45, drift: 45, repair: 45, airstrike: 45,
   slot0: 0, slot1: 0, slot2: 0, slot3: 0
 };
-const DICEBOARD_SLOT_SIZE_FRACTION = 0.55; // fraction de DASH_H — taille affichée des 4 dés sur le diceboard
 // 4 emplacements DROITS (retour de Mayrik) — première estimation à
 // l'œil (répartition régulière en ligne), à remplacer par l'export de
 // tools/calage-dashboards.html comme les autres.
@@ -7063,59 +7079,61 @@ function renderDashboards() {
 
   let maxRight = 0;
   order.forEach((playerName, rowIndex) => {
-    const originY = rowIndex * (DASH_H + PLAYER_ROW_GAP) + 10;
+    const rowTop = rowIndex * (DASHBOARD_ROW_H + PLAYER_ROW_GAP) + 10;
     let x = 10;
+    // Centre verticalement un visuel de hauteur h dans la ligne.
+    const centerY = (h) => rowTop + (DASHBOARD_ROW_H - h) / 2;
 
     // --- Diceboard : vraie image, 4 emplacements droits (retour de
     // Mayrik). Réconcilié avec le pool réel via diceboardSlots() —
     // voir déclaration de diceboardSlotState plus haut.
-    const diceW = dashWidth(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H);
+    const dice = scaledSize(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H);
+    const diceY = centerY(dice.h);
     const dicePath = dashboardImagePath(playerName, "diceboard");
-    svg.insertAdjacentHTML("beforeend", `<image href="${dicePath}" xlink:href="${dicePath}" x="${x.toFixed(1)}" y="${originY.toFixed(1)}" width="${diceW.toFixed(1)}" height="${DASH_H.toFixed(1)}" pointer-events="none"/>`);
-    const dieSize = DASH_H * DICEBOARD_SLOT_SIZE_FRACTION;
+    svg.insertAdjacentHTML("beforeend", `<image href="${dicePath}" xlink:href="${dicePath}" x="${x.toFixed(1)}" y="${diceY.toFixed(1)}" width="${dice.w.toFixed(1)}" height="${dice.h.toFixed(1)}" pointer-events="none"/>`);
     diceboardSlots(playerName).forEach((value, i) => {
       if (value === null) return;
       const slotKey = "slot" + i;
       const f = DICEBOARD_SLOT_FRACTION[slotKey];
-      const dx = x + f.x * diceW - dieSize / 2, dy = originY + f.y * DASH_H - dieSize / 2;
+      const dx = x + f.x * dice.w - DIE_DISPLAY_SIZE / 2, dy = diceY + f.y * dice.h - DIE_DISPLAY_SIZE / 2;
       const isClickable = playerName === HUMAN && dieStep;
-      svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, dieSize, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
+      svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
       if (isClickable) {
         svg.lastElementChild.addEventListener("click", () => { pickDie(value); render(); });
       }
     });
-    x += diceW + DASH_GAP * 2;
+    x += dice.w + DASH_GAP * 2;
 
     // --- Command board (slots pas encore câblés cette tranche) ---
-    const cmdW = dashWidth(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
+    const cmd = scaledSize(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
+    const cmdY = centerY(cmd.h);
     const cmdPath = dashboardImagePath(playerName, "command");
-    svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${x.toFixed(1)}" y="${originY.toFixed(1)}" width="${cmdW.toFixed(1)}" height="${DASH_H.toFixed(1)}" pointer-events="none"/>`);
-    x += cmdW + DASH_GAP;
+    svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${x.toFixed(1)}" y="${cmdY.toFixed(1)}" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" pointer-events="none"/>`);
+    x += cmd.w + DASH_GAP;
 
     // --- Dashboards véhicules, alignés small -> medium -> large ---
     ["small", "medium", "large"].forEach((size) => {
       const car = G.allCars.find((c) => c.owner === playerName && c.size === size && c.status !== "eliminated");
       const native = VEHICLE_DASH_NATIVE[size];
-      const w = dashWidth(native.w, native.h);
+      const dim = scaledSize(native.w, native.h);
+      const dimY = centerY(dim.h);
       const isInoperable = !!(car && car.status === "inoperable");
       const kind = isInoperable ? `${size}-inoperable` : size;
 
       if (car) {
         const imgPath = dashboardImagePath(playerName, kind);
-        svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${originY.toFixed(1)}" width="${w.toFixed(1)}" height="${DASH_H.toFixed(1)}" pointer-events="none"/>`);
+        svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${dimY.toFixed(1)}" width="${dim.w.toFixed(1)}" height="${dim.h.toFixed(1)}" pointer-events="none"/>`);
       }
       // Véhicule éliminé (car === undefined ici) -> emplacement laissé
       // vide, voir spec-dashboards.md section 2.
 
-      const slotSize = DASH_H * VEHICLE_SLOT_SIZE_FRACTION;
-
       if (car && !isInoperable && playerName === HUMAN && clickableCarSet.has(car)) {
         const slotKey = ctx.mode === "coast" ? (car.coastCount === 0 ? "coast1" : "coast2") : "any";
         const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const cx = x + f.x * w, cy = originY + f.y * DASH_H;
-        const sx = cx - slotSize / 2, sy = cy - slotSize / 2;
+        const cx = x + f.x * dim.w, cy = dimY + f.y * dim.h;
+        const sx = cx - DIE_DISPLAY_SIZE / 2, sy = cy - DIE_DISPLAY_SIZE / 2;
         const rotAttr = SLOT_ROTATION[slotKey] ? ` transform="rotate(${SLOT_ROTATION[slotKey]} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
-        svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${slotSize.toFixed(1)}" height="${slotSize.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
+        svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
         svg.lastElementChild.addEventListener("click", () => { pickCar(car); render(); });
       }
 
@@ -7127,21 +7145,21 @@ function renderDashboards() {
       if (car && ctx && sel.car === car) {
         const slotKey = ctx.mode === "coast" ? "coast1" : "any";
         const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const dieX = x + f.x * w - slotSize / 2, dieY = originY + f.y * DASH_H - slotSize / 2;
+        const dieX = x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dimY + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
         const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
-        svg.insertAdjacentHTML("beforeend", dieMarkup(sel.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, slotSize, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
+        svg.insertAdjacentHTML("beforeend", dieMarkup(sel.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
         if (isCancelable) {
           svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
         }
       }
 
-      x += w + DASH_GAP;
+      x += dim.w + DASH_GAP;
     });
 
     maxRight = Math.max(maxRight, x);
   });
 
-  const totalH = order.length * (DASH_H + PLAYER_ROW_GAP) + 10;
+  const totalH = order.length * (DASHBOARD_ROW_H + PLAYER_ROW_GAP) + 10;
   svg.setAttribute("viewBox", `0 0 ${maxRight} ${totalH}`);
 }
 

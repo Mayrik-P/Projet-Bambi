@@ -14,11 +14,7 @@
   .group { border:1px solid #444; border-radius:6px; padding:10px; margin-bottom:14px; }
   .group h2 { font-size:14px; margin:0 0 10px; color:#ffd166; }
   .current { font-size:14px; font-weight:bold; color:#7fd858; margin-bottom:6px; }
-  .row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-  .row label { flex:0 0 110px; font-size:12px; color:#ccc; }
-  .row input[type=range] { flex:1; }
-  .row .val { flex:0 0 40px; text-align:right; font-variant-numeric: tabular-nums; font-size:12px; }
-  ul#targetList { list-style:none; margin:0; padding:0; font-size:12px; max-height:260px; overflow-y:auto; }
+  ul#targetList { list-style:none; margin:0; padding:0; font-size:12px; max-height:320px; overflow-y:auto; }
   ul#targetList li { padding:4px 6px; border-radius:4px; cursor:pointer; margin-bottom:2px; }
   ul#targetList li:hover { background:#333; }
   ul#targetList li.done { color:#7fd858; }
@@ -34,7 +30,7 @@
 <body>
 
 <h1>Outil de calage — slots des Dashboards</h1>
-<p class="sub">Une cible à la fois (voir liste à droite). Clique directement sur la vraie image à l'endroit où doit tomber le slot indiqué. Le point se place immédiatement, la cible suivante s'active toute seule. Clique un élément de la liste pour revenir corriger un slot déjà placé. Une fois les 16 cibles posées, ajuste si besoin la taille des carrés avec les curseurs, puis clique « Copier les réglages » : le texte généré remplace directement <code>VEHICLE_SLOT_FRACTION</code> / <code>COMMAND_SLOT_FRACTION</code> / <code>VEHICLE_SLOT_SIZE_FRACTION</code> / <code>COMMAND_SLOT_SIZE_FRACTION</code> dans <code>tools/ui-script.js</code>.</p>
+<p class="sub">Une cible à la fois (voir liste à droite). Clique directement sur la vraie image à l'endroit où doit tomber le slot indiqué — le carré affiché fait déjà la taille réelle d'un dé (aucun réglage de taille séparé : tous les emplacements, diceboard compris, sont prévus à cette même taille). Le point se place immédiatement, la cible suivante s'active toute seule. Clique un élément de la liste pour revenir corriger un slot déjà placé. Une fois les 20 cibles posées, clique « Copier les réglages » : le texte généré remplace directement <code>DICEBOARD_SLOT_FRACTION</code> / <code>VEHICLE_SLOT_FRACTION</code> / <code>COMMAND_SLOT_FRACTION</code> dans <code>tools/ui-script.js</code>.</p>
 
 <div class="layout">
   <div class="board-wrap">
@@ -45,25 +41,18 @@
     <div class="group">
       <div class="current" id="currentLabel"></div>
       <ul id="targetList"></ul>
-    </div>
-
-    <div class="group">
-      <h2>Taille des slots</h2>
-      <div class="row"><label>Diceboard</label><input type="range" id="diceSize" min="0.20" max="0.80" step="0.01" value="0.55"><span class="val" id="v_diceSize"></span></div>
-      <div class="row"><label>Véhicules</label><input type="range" id="vehSize" min="0.10" max="0.45" step="0.01" value="0.28"><span class="val" id="v_vehSize"></span></div>
-      <div class="row"><label>Command</label><input type="range" id="cmdSize" min="0.08" max="0.35" step="0.01" value="0.20"><span class="val" id="v_cmdSize"></span></div>
-      <div class="hint">Fraction de la hauteur affichée du dashboard concerné — carré centré sur chaque point déjà posé.</div>
+      <div class="hint">Si le carré paraît trop grand/petit par rapport aux vrais emplacements imprimés, dis-le — ça veut dire qu'un des visuels n'a pas été dessiné exactement à la même échelle que les autres, et ça se corrige d'un coup (une seule constante), pas cible par cible.</div>
     </div>
 
     <button id="resetBtn">Recommencer</button>
     <button id="copyBtn">Copier les réglages</button>
-    <textarea id="out" readonly placeholder="Les valeurs copiées apparaîtront ici une fois les 16 cibles posées..."></textarea>
+    <textarea id="out" readonly placeholder="Les valeurs copiées apparaîtront ici une fois les 20 cibles posées..."></textarea>
   </div>
 </div>
 
 <script>
-// --- Tailles natives (reprises de tools/ui-script.js, voir ces
-// constantes là-bas — dupliquées ici uniquement car cet outil est
+// --- Tailles natives + échelle (reprises de tools/ui-script.js, voir
+// ces constantes là-bas — dupliquées ici uniquement car cet outil est
 // autonome, comme calage.html/calage-vehicules.html avant lui) ---
 const COMMAND_IMG_NATIVE_W = 1293, COMMAND_IMG_NATIVE_H = 1134;
 const DICEBOARD_IMG_NATIVE_W = 913, DICEBOARD_IMG_NATIVE_H = 341;
@@ -72,16 +61,28 @@ const VEHICLE_DASH_NATIVE = {
   medium: { w: 1515, h: 756 },
   large: { w: 1409, h: 756 }
 };
-const DASH_H = 300; // hauteur d'affichage pour CE calage (bien plus grande que les 70 en jeu, pour cliquer précisément)
-const DASH_GAP = 24;
-const COLOR = "blue"; // agencement supposé identique pour toutes les couleurs (même gabarit recoloré) — voir hint
-
-function dashWidth(nativeW, nativeH) { return DASH_H * (nativeW / nativeH); }
+const DIE_IMG_NATIVE = 189;
+// Échelle plus grande que dans le jeu (0.16) pour cliquer précisément
+// — c'est un simple zoom, ça ne change AUCUNE proportion relative
+// entre les visuels (voir DASH_SCALE dans ui-script.js).
+const CAL_SCALE = 0.5;
+function scaledSize(nativeW, nativeH) { return { w: nativeW * CAL_SCALE, h: nativeH * CAL_SCALE }; }
+const DIE_DISPLAY_SIZE = DIE_IMG_NATIVE * CAL_SCALE;
+const ROW_H = Math.max(
+  scaledSize(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H).h,
+  scaledSize(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H).h,
+  scaledSize(VEHICLE_DASH_NATIVE.small.w, VEHICLE_DASH_NATIVE.small.h).h,
+  scaledSize(VEHICLE_DASH_NATIVE.medium.w, VEHICLE_DASH_NATIVE.medium.h).h,
+  scaledSize(VEHICLE_DASH_NATIVE.large.w, VEHICLE_DASH_NATIVE.large.h).h
+);
+const GAP = 24;
+const COLOR = "blue"; // agencement supposé identique pour toutes les couleurs (même gabarit recoloré)
 
 // --- Cibles à placer, dans l'ordre. board = clé utilisée pour
 // retrouver la bounding box au clic. rot = orientation imprimée sur
-// l'image réelle (retour de Mayrik : ANY/END TURN sont de vrais
-// carrés droits, COAST et les 4 commandes sont des losanges à 45°). ---
+// l'image réelle (retour de Mayrik : ANY/END TURN/diceboard sont de
+// vrais carrés droits, COAST et les 4 commandes sont des losanges à
+// 45°). ---
 const TARGETS = [
   { board: "diceboard", slot: "slot0", label: "Diceboard — emplacement 1", rot: 0 },
   { board: "diceboard", slot: "slot1", label: "Diceboard — emplacement 2", rot: 0 },
@@ -110,37 +111,30 @@ let currentIndex = 0;
 let boards = {}; // clé board -> {x,y,w,h} dans le repère SVG courant
 
 const svg = document.getElementById("board");
-const els = { diceSize: document.getElementById("diceSize"), vehSize: document.getElementById("vehSize"), cmdSize: document.getElementById("cmdSize") };
-function val(id) { return parseFloat(els[id].value); }
-
 function key(t) { return t.board + ":" + t.slot; }
+const centerY = (h) => 10 + (ROW_H - h) / 2;
 
 function layoutBoards() {
   let x = 10;
-  const y = 10;
   boards = {};
-  const diceW = dashWidth(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H);
-  boards.diceboard = { x, y, w: diceW, h: DASH_H, path: `../images/dashboards/diceboard.webp` };
-  x += diceW + DASH_GAP;
-  const cmdW = dashWidth(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
-  boards.command = { x, y, w: cmdW, h: DASH_H, path: `../images/dashboards/command-${COLOR}.webp` };
-  x += cmdW + DASH_GAP;
+  const dice = scaledSize(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H);
+  boards.diceboard = { x, y: centerY(dice.h), w: dice.w, h: dice.h, path: `../images/dashboards/diceboard.webp` };
+  x += dice.w + GAP;
+  const cmd = scaledSize(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
+  boards.command = { x, y: centerY(cmd.h), w: cmd.w, h: cmd.h, path: `../images/dashboards/command-${COLOR}.webp` };
+  x += cmd.w + GAP;
   ["small", "medium", "large"].forEach((size) => {
     const n = VEHICLE_DASH_NATIVE[size];
-    const w = dashWidth(n.w, n.h);
-    boards[size] = { x, y, w, h: DASH_H, path: `../images/dashboards/dashboard-${COLOR}-${size}.webp` };
-    x += w + DASH_GAP;
+    const dim = scaledSize(n.w, n.h);
+    boards[size] = { x, y: centerY(dim.h), w: dim.w, h: dim.h, path: `../images/dashboards/dashboard-${COLOR}-${size}.webp` };
+    x += dim.w + GAP;
   });
   return x;
 }
 
 function render() {
-  document.getElementById("v_diceSize").textContent = val("diceSize").toFixed(2);
-  document.getElementById("v_vehSize").textContent = val("vehSize").toFixed(2);
-  document.getElementById("v_cmdSize").textContent = val("cmdSize").toFixed(2);
-
   const totalW = layoutBoards();
-  svg.setAttribute("viewBox", `0 0 ${totalW} ${DASH_H + 20}`);
+  svg.setAttribute("viewBox", `0 0 ${totalW} ${ROW_H + 20}`);
   svg.innerHTML = "";
 
   Object.values(boards).forEach((b) => {
@@ -148,20 +142,18 @@ function render() {
       <rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="none" stroke="#444" stroke-width="1"/>`);
   });
 
-  // Points déjà posés (carré + croix + étiquette courte)
+  // Points déjà posés (carré taille-dé + croix + étiquette courte)
   TARGETS.forEach((t) => {
     const r = results[key(t)];
     if (!r) return;
     const b = boards[t.board];
-    const sizeFrac = t.board === "command" ? val("cmdSize") : (t.board === "diceboard" ? val("diceSize") : val("vehSize"));
-    const size = b.h * sizeFrac;
     const cx = b.x + r.x * b.w, cy = b.y + r.y * b.h;
     const rotAttr = t.rot ? ` transform="rotate(${t.rot} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
     svg.insertAdjacentHTML("beforeend", `
-      <rect x="${(cx - size / 2).toFixed(1)}" y="${(cy - size / 2).toFixed(1)}" width="${size.toFixed(1)}" height="${size.toFixed(1)}" fill="#b0d458" fill-opacity="0.45" stroke="#b0d458" stroke-width="1.5" pointer-events="none"${rotAttr}/>
+      <rect x="${(cx - DIE_DISPLAY_SIZE / 2).toFixed(1)}" y="${(cy - DIE_DISPLAY_SIZE / 2).toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="#b0d458" fill-opacity="0.45" stroke="#b0d458" stroke-width="1.5" pointer-events="none"${rotAttr}/>
       <line x1="${(cx - 5).toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx + 5).toFixed(1)}" y2="${cy.toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
       <line x1="${cx.toFixed(1)}" y1="${(cy - 5).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${(cy + 5).toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
-      <text x="${cx.toFixed(1)}" y="${(cy - size / 2 - 4).toFixed(1)}" font-size="9" fill="#ffd166" text-anchor="middle" pointer-events="none">${t.slot}</text>
+      <text x="${cx.toFixed(1)}" y="${(cy - DIE_DISPLAY_SIZE / 2 - 4).toFixed(1)}" font-size="9" fill="#ffd166" text-anchor="middle" pointer-events="none">${t.slot}</text>
     `);
   });
 
@@ -178,7 +170,7 @@ function renderPanel() {
   const label = document.getElementById("currentLabel");
   label.textContent = currentIndex < TARGETS.length
     ? "Cliquer : " + TARGETS[currentIndex].label
-    : "Terminé — ajuste la taille si besoin puis copie les réglages.";
+    : "Terminé — clique « Copier les réglages ».";
 
   const list = document.getElementById("targetList");
   list.innerHTML = "";
@@ -209,10 +201,6 @@ svg.addEventListener("click", (evt) => {
   render();
 });
 
-els.diceSize.addEventListener("input", render);
-els.vehSize.addEventListener("input", render);
-els.cmdSize.addEventListener("input", render);
-
 document.getElementById("resetBtn").addEventListener("click", () => {
   results = {};
   currentIndex = 0;
@@ -234,11 +222,8 @@ document.getElementById("copyBtn").addEventListener("click", () => {
   }`;
   const text = [
     "// --- Réglages de calage Dashboards (générés par tools/calage-dashboards.html) ---",
-    "// Remplace directement les 6 constantes correspondantes dans tools/ui-script.js.",
-    "",
-    `const DICEBOARD_SLOT_SIZE_FRACTION = ${val("diceSize").toFixed(2)};`,
-    `const VEHICLE_SLOT_SIZE_FRACTION = ${val("vehSize").toFixed(2)};`,
-    `const COMMAND_SLOT_SIZE_FRACTION = ${val("cmdSize").toFixed(2)};`,
+    "// Remplace directement les 3 constantes correspondantes dans tools/ui-script.js.",
+    "// (Aucune taille à reporter : un seul DASH_SCALE partagé suffit pour tout.)",
     "",
     "const DICEBOARD_SLOT_FRACTION = {",
     `  slot0: { x: ${fmt(results["diceboard:slot0"].x)}, y: ${fmt(results["diceboard:slot0"].y)} },`,
