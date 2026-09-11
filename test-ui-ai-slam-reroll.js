@@ -33,6 +33,15 @@ function clickButtonContaining(dom, text) {
 function panelText(dom) {
   return dom.window.document.getElementById("panel").textContent;
 }
+function boardHtml(dom) {
+  return dom.window.document.getElementById("board").innerHTML;
+}
+function clickBoardMarker(dom, filename) {
+  const board = dom.window.document.getElementById("board");
+  const img = [...board.querySelectorAll("image.clickable")].find((el) => el.getAttribute("href").includes(filename));
+  if (!img) throw new Error(`Marqueur introuvable sur le plateau : "${filename}"`);
+  img.dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+}
 
 // Neutralise le hazard face cachée de (col,row) ET de ses 6 voisins
 // (arc avant + arc arrière) — nécessaire pour rendre déterministe un
@@ -118,18 +127,20 @@ const gen = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, 
 win.driveAiTurnGenerator(gen, "Test — tour IA");
 
 console.log("G.aiPending bien renseigné après la pause (attendu true) :", !!G.aiPending);
-console.log("Le panneau affiche bien le mot SLAM (attendu true) :", panelText(dom).includes("SLAM"));
-console.log("Le panneau affiche bien les deux boutons de choix (attendu true) :",
-  panelText(dom).includes("relancer") && panelText(dom).includes("garder ce résultat"));
+// Texte retiré du panneau (retour de Mayrik, comportement marker-only
+// identique au propre tour du joueur) — vérifié directement sur le
+// plateau désormais.
+console.log("marker-reroll affiché sur la case du Slam (attendu true) :", boardHtml(dom).includes("marker-reroll.webp"));
+console.log("La face du dé Slam est affichée sur la case de destination (attendu true) :", boardHtml(dom).includes("die-fx-slam-"));
 
-// Clique VRAIMENT sur "Non, garder ce résultat".
-clickButtonContaining(dom, "Non, garder ce résultat");
+// Clique VRAIMENT marker-no ("Non, garder ce résultat").
+clickBoardMarker(dom, "marker-no.webp");
 
 console.log("G.aiPending nettoyé après la réponse (attendu true) :", G.aiPending === null);
 console.log("Le tour de l'IA a bien été journalisé (attendu true) :",
   win.eval("fullLog").some((entry) => entry.line && entry.line.includes("END OF TURN")));
-console.log("Panneau revenu à l'état normal, plus de prompt de relance (attendu true) :",
-  !panelText(dom).includes("relancer"));
+console.log("Plus de marker-reroll une fois la pause résolue (attendu true) :",
+  !boardHtml(dom).includes("marker-reroll.webp"));
 
 // -----------------------------------------------------------------
 // TEST 2 — Même scénario, réponse "Oui, relancer" : le log doit bien
@@ -155,7 +166,7 @@ const gen2 = win.executeDecisionGen(G2.progressionState, G2.roundState, G2.allCa
 win.driveAiTurnGenerator(gen2, "Test — tour IA 2");
 console.log("Pause obtenue (attendu true) :", !!G2.aiPending);
 
-clickButtonContaining(dom, "Oui, relancer");
+clickBoardMarker(dom, "marker-reroll.webp");
 
 console.log("G2.aiPending nettoyé après la réponse (attendu true) :", G2.aiPending === null);
 console.log("Le log mentionne bien la demande de relance (attendu true) :",
@@ -224,8 +235,8 @@ const gen5 = win.resolveShootGen(b5, G5.allCars, shooter5, dazedTarget5, {
 win.driveAiTurnGenerator(gen5, "Test — tir + Dazed");
 
 console.log("Pause obtenue (attendu true) :", !!G5.aiPending);
-console.log("Panneau affiche SLAM (attendu true) :", panelText(dom).includes("SLAM"));
-clickButtonContaining(dom, "Non, garder ce résultat");
+console.log("marker-reroll affiché sur le plateau (attendu true) :", boardHtml(dom).includes("marker-reroll.webp"));
+clickBoardMarker(dom, "marker-no.webp");
 console.log("G5.aiPending nettoyé après la réponse (attendu true) :", G5.aiPending === null);
 console.log("Le tir/dégât a bien été journalisé (attendu true) :",
   win.eval("fullLog").some((entry) => entry.line && entry.line.includes("Touché")));

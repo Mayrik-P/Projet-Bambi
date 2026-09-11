@@ -91,11 +91,14 @@ win.pickMoveStep(option);
 win.render();
 
 console.log("Une pause a bien été obtenue, sel.step est passé à slam-reroll-choice (attendu true) :", sel.step === "slam-reroll-choice");
-console.log("Le panneau affiche bien le mot SLAM (attendu true) :", panelText(dom).includes("SLAM"));
-console.log("Le panneau affiche bien les deux boutons de choix (attendu true) :",
-  panelText(dom).includes("relancer") && panelText(dom).includes("garder ce résultat"));
+// Texte retiré du panneau (retour de Mayrik, comportement marker-only
+// identique au tour de l'IA) — on vérifie directement sur le plateau.
+const boardEl1 = dom.window.document.getElementById("board");
+console.log("marker-reroll affiché sur la case du Slam (attendu true) :", boardEl1.innerHTML.includes("marker-reroll.webp"));
+console.log("La face du dé Slam est affichée sur la case de destination (attendu true) :", boardEl1.innerHTML.includes("die-fx-slam-"));
 
-clickButtonContaining(dom, "Non, garder ce résultat");
+const noImg1 = [...boardEl1.querySelectorAll("image.clickable")].find((el) => el.getAttribute("href").includes("marker-no.webp"));
+noImg1.dispatchEvent(new win.Event("click", { bubbles: true }));
 sel = win.eval("sel"); // resetSelection() RÉASSIGNE `sel` — il faut le relire, pas garder l'ancienne référence
 
 console.log("sel.pendingHumanSlam nettoyé après la réponse (attendu true) :", sel.pendingHumanSlam === null || sel.pendingHumanSlam === undefined);
@@ -190,8 +193,10 @@ win.pickMoveStep(option3);
 win.render();
 
 console.log("Une pause a bien été obtenue pour le Wreck (attendu true) :", sel3.step === "slam-reroll-choice");
-console.log("Le panneau affiche bien le mot SLAM (attendu true) :", panelText(dom).includes("SLAM"));
-clickButtonContaining(dom, "Non, garder ce résultat");
+const boardEl3w = dom.window.document.getElementById("board");
+console.log("marker-reroll affiché sur la case du Slam (attendu true) :", boardEl3w.innerHTML.includes("marker-reroll.webp"));
+const noImg3 = [...boardEl3w.querySelectorAll("image.clickable")].find((el) => el.getAttribute("href").includes("marker-no.webp"));
+noImg3.dispatchEvent(new win.Event("click", { bubbles: true }));
 console.log("Épave bien ajoutée à allCars après résolution (attendu true) :", G3.allCars.some((c) => c.isWreck));
 
 console.log("\n=== Fin des tests UI dédiés (nettoyage du hack Wreck, tour humain) ===");

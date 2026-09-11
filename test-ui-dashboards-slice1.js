@@ -442,12 +442,13 @@ const destCol = ctx12.topCar.col + delta12.dCol, destRow = ctx12.topCar.row + de
 
 const boardEl3 = dom.window.document.getElementById("board");
 const rerollImgs = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-reroll.webp"));
-const slamFaceImgs = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes(`die-fx-slam-${ctx12.slamRoll}.webp`));
+const slamFaceImgs = [...boardEl3.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes(`die-fx-slam-${ctx12.slamRoll}.webp`));
 const dirFaceImgs = [...boardEl3.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes("die-fx-direction-"));
 const noImgsSlam = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-no.webp"));
 
 console.log("marker-reroll toujours affiché sur la case du Slam (attendu true) :", rerollImgs.length === 1);
 console.log("La face du dé Slam est affichée UNE FOIS, sur la case de DESTINATION (attendu true) :", slamFaceImgs.length === 1);
+console.log("...et n'est PAS cliquable (retour de Mayrik : marker-reroll suffit) (attendu true) :", slamFaceImgs[0] && slamFaceImgs[0].getAttribute("pointer-events") === "none" && !slamFaceImgs[0].classList.contains("clickable"));
 const slamFaceCenter = win.cellCenter(destCol, destRow);
 const rerollCenter = win.cellCenter(ctx12.topCar.col, ctx12.topCar.row);
 console.log("...et cette case de destination est bien DIFFÉRENTE de la case du Slam (attendu true) :",
@@ -632,5 +633,90 @@ win.pickAirstrikePlacement(5, 2);
 sel = win.eval("sel");
 console.log("Round 1 -> pas d'étape airstrike-shoot-arc, commit direct (attendu true) :", sel.step !== "airstrike-shoot-arc");
 console.log("sel.command.target est bien null (aucun tir tenté) (attendu true) :", sel.command && sel.command.target === null);
+
+section("Test 21 — Bonus Road : marker-road affiché même en bord de plateau (sortie de tuile)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars.length = 0;
+const b21 = win.board();
+// Place le véhicule sur la DERNIÈRE colonne existante -> "devant" est
+// forcément une sortie de tuile (exits-front), jamais une case réelle.
+const lastCol21 = b21.cols - 1;
+const car21 = win.createCar(HUMAN, win.eval("CAR_SIZE").MEDIUM, lastCol21, 3);
+G.allCars.push(car21);
+G.roundState.roadDie = 2;
+sel = win.eval("sel");
+sel.mode = "assign";
+sel.car = car21;
+sel.step = "road-bonus-choice";
+win.render();
+
+const boardHtml21 = dom.window.document.getElementById("board").innerHTML;
+console.log("marker-road-2 est bien affiché même en bord de plateau (attendu true) :", boardHtml21.includes("marker-road-2.webp"));
+console.log("marker-no est aussi affiché (refus) (attendu true) :", boardHtml21.includes("marker-no.webp"));
+
+section("Test 22 — Coast : le dé reste affiché sur son emplacement après la fin du mouvement");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s22 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
+[s22, win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1), win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2)].forEach((c, i) => {
+  if (i > 0) G.allCars.push(c);
+});
+G.allCars.push(s22);
+s22.movedThisRound = true;
+s22.coastCount = 0;
+G.allCars.filter((c) => c.owner === HUMAN && c !== s22).forEach((c) => { c.movedThisRound = true; c.coastCount = 0; });
+G.roundState.dicePool[HUMAN] = [4];
+G.roundState.roundNumber = 1;
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+let clickables22 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables22[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
+win.render();
+clickables22 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables22[0].dispatchEvent(new win.Event("click", { bubbles: true })); // coast slot
+sel = win.eval("sel");
+const opt22 = win.getMovementStepOptions(win.board(), sel.car, sel.remaining, G.allCars)[0];
+win.pickMoveStep(opt22);
+win.render();
+sel = win.eval("sel");
+console.log("Le tour est bien terminé (sel réinitialisé) (attendu true) :", sel.car === undefined);
+const cdState = win.eval("coastDieState");
+console.log("coastDieState contient bien une entrée pour ce véhicule (attendu true) :", !!cdState[s22.id] && cdState[s22.id].slots[0] === 4);
+const dashHtml22 = dom.window.document.getElementById("dashboards").innerHTML;
+console.log("Un dé est bien rendu sur le dashboard après la fin du tour (attendu true) :", dashHtml22.includes("die-move-"));
+
+section("Test 23 — Marqueurs dégât/inopérable calés sur le vrai sommet de la case");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+const dmgCar23 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 4, 3);
+dmgCar23.damageTokens = ["dent"];
+G.allCars.push(dmgCar23);
+win.render();
+const boardEl23 = [...dom.window.document.getElementById("board").querySelectorAll("image")].find((el) => el.getAttribute("href").includes("marker-damaged.webp"));
+const expectedTopY = win.cellPoly(4, 3)[0][1];
+console.log("Le marqueur dégât est bien calé sur le sommet réel de la case (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("y")) - expectedTopY) < 0.5);
+
+section("Test 24 — Bandeau de fin de partie centré sur le plateau (SVG), plus de div externe");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.eval("gameOver = true; gameOverInfo = { winner: 'Vous', reason: 'Finish Line' };");
+win.render();
+const boardHtml24 = dom.window.document.getElementById("board").innerHTML;
+console.log("Le bandeau est bien dessiné DANS le SVG du plateau (attendu true) :", boardHtml24.includes("Partie terminée"));
+console.log("L'ancien bandeau HTML externe reste caché (attendu true) :", dom.window.document.getElementById("winnerBanner").style.display === "none");
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
