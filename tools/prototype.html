@@ -7440,6 +7440,23 @@ function renderDashboards() {
           svg.insertAdjacentHTML("beforeend", dieMarkup(et.dieValue, PLAYER_CAR_COLOR[playerName], etX, etY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION.endTurn));
         }
       }
+
+      // Dé(s) "parqué(s)" sur COAST (voir coastDieState plus haut) —
+      // contrairement à END TURN, reste sur SON propre emplacement
+      // (coast1/coast2), jamais transféré. Indépendant de sel, reste
+      // affiché jusqu'à la fin du round. Jamais cliquable.
+      if (car) {
+        const cd = coastDieState[car.id];
+        if (cd && cd.round === G.roundState.roundNumber) {
+          ["coast1", "coast2"].forEach((slotKey, idx) => {
+            const dieValue = cd.slots[idx];
+            if (dieValue === null || dieValue === undefined) return;
+            const f = VEHICLE_SLOT_FRACTION[size][slotKey];
+            const cdX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, cdY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+            svg.insertAdjacentHTML("beforeend", dieMarkup(dieValue, PLAYER_CAR_COLOR[playerName], cdX, cdY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[slotKey]));
+          });
+        }
+      }
     });
 
     maxRight = Math.max(maxRight, rowOriginX + ROW_BBOX.maxX);
@@ -7478,6 +7495,12 @@ let damageSlotState = {};
 // place jusqu'à la fin du round, voir spec-dashboards.md. Forme :
 // { [car.id]: { round, dieValue } }.
 let endTurnDieState = {};
+// Dés "parqués" sur les emplacements COAST d'un véhicule — retour de
+// Mayrik : contrairement à ANY (qui glisse vers END TURN), un dé posé
+// en Coast reste affiché SUR SON EMPLACEMENT Coast jusqu'à la fin du
+// round, pas de transfert. Forme : { [car.id]: { round, slots: [dé
+// coast1 | null, dé coast2 | null] } }.
+let coastDieState = {};
 let gameOver = false;
 let gameOverInfo = null;
 
@@ -8162,6 +8185,17 @@ function finishHumanTurn() {
   if (sel.car && sel.mode === "assign" && sel.dieValue !== undefined) {
     endTurnDieState[sel.car.id] = { round: G.roundState.roundNumber, dieValue: sel.dieValue };
   }
+  // Dé Coast -> reste sur SON emplacement (coast1 ou coast2, jamais
+  // transféré) — car.coastCount vient déjà d'être incrémenté par le
+  // commit réel (bien avant ce point), donc coastCount-1 identifie
+  // sans ambiguïté lequel des deux emplacements vient d'être utilisé.
+  if (sel.car && sel.mode === "coast" && sel.dieValue !== undefined) {
+    if (!coastDieState[sel.car.id] || coastDieState[sel.car.id].round !== G.roundState.roundNumber) {
+      coastDieState[sel.car.id] = { round: G.roundState.roundNumber, slots: [null, null] };
+    }
+    const idx = Math.max(0, Math.min(1, sel.car.coastCount - 1));
+    coastDieState[sel.car.id].slots[idx] = sel.dieValue;
+  }
   const result = executeEndOfTurn(G.progressionState, G.roundState, G.allCars, G.allChoppers, PLAYER_NAMES, sel.car);
   logTurn(result.log || []);
   if (result.gameOver) {
@@ -8426,6 +8460,11 @@ function renderBoard() {
     const isActive = sel.car === car;
     const imgPath = carImagePath(car);
     const x = cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
+    // Sommet réel de la case (pas le haut de l'image du véhicule, plus
+    // bas) — retour de Mayrik : le marqueur doit coller au bord HAUT
+    // de la case, sans quoi il retombe encore sur le graphisme du
+    // véhicule.
+    const cellTopY = cellPoly(car.col, car.row)[0][1];
     // Voiture inopérable (2 dégâts) : le jeu physique se contente de
     // retourner le véhicule à 180° (il pointe vers l'arrière du
     // plateau, p.8) plutôt que de le retirer — reproduit ici par une
@@ -8453,7 +8492,7 @@ function renderBoard() {
       ${carShadowMarkup(imgPath, x, y, isInoperableVisual)}
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none" ${isInoperableVisual ? 'opacity="0.5"' : ""}/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#b0d458" stroke-width="2.5" pointer-events="none"/>` : ""}
-      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : "")}
+      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${cellTopY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${cellTopY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : "")}
     </g>`);
   });
 
@@ -8571,14 +8610,14 @@ function renderBoard() {
     // sur la case de DESTINATION désignée par le dé Direction — retour
     // de Mayrik : montre où le véhicule finira sans afficher le dé qui
     // l'a déterminé. Vient EN PLUS de marker-reroll ci-dessus, ne le
-    // remplace pas.
+    // remplace pas. Purement informatif, PAS cliquable (retour de
+    // Mayrik : marker-reroll suffit déjà pour relancer).
     const delta = getDirectionDelta(ctx.directionRoll, ctx.topCar.col, ctx.topCar.row);
     const dest = { col: ctx.topCar.col + delta.dCol, row: ctx.topCar.row + delta.dRow };
     if (isOnBoard(board(), dest.col, dest.row)) {
       const dc = cellCenter(dest.col, dest.row);
       const slamPath = `../images/dice/die-fx-slam-${ctx.slamRoll}.webp`;
-      svg.insertAdjacentHTML("beforeend", `<image href="${slamPath}" xlink:href="${slamPath}" x="${(dc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(dc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
-      svg.lastElementChild.addEventListener("click", () => { resume(true); render(); });
+      svg.insertAdjacentHTML("beforeend", `<image href="${slamPath}" xlink:href="${slamPath}" x="${(dc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(dc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>`);
     }
     const rear = getRearArc(ctx.largerCar).find((a) => a.name === "rear");
     if (rear && isOnBoard(board(), rear.col, rear.row)) {
@@ -8596,8 +8635,17 @@ function renderBoard() {
   // directement les cases de destination (road-bonus-step, déjà géré
   // par highlightedCells()) — retour de Mayrik.
   if (sel.step === "road-bonus-choice" && sel.car) {
-    const front = getFrontArc(sel.car).find((a) => a.name === "front");
-    if (front && isOnBoard(board(), front.col, front.row)) {
+    // Retour de Mayrik : la géométrie brute (getFrontArc) ne gère pas
+    // le cas où "devant" est la sortie de tuile (marge réservée
+    // col=b.cols, exactement comme le reste du mouvement) — sans ça,
+    // aucun marker-road ne s'affichait pour un véhicule déjà sur la
+    // dernière colonne, aucun moyen de continuer. On repasse donc par
+    // la même machinerie que le mouvement normal pour localiser LA
+    // case avant, qu'elle soit sur le plateau ou dans la marge.
+    const rbOptions = getMovementStepOptions(board(), sel.car, 1, G.allCars);
+    const rbSplit = splitOnAndOffBoardOptions(board(), rbOptions);
+    const front = [...rbSplit.onBoard, ...rbSplit.offBoard.filter((o) => o.outcome === "exits-front")].find((o) => o.direction === "front");
+    if (front) {
       const fc = cellCenter(front.col, front.row);
       const roadPath = `../images/markers/marker-road-${G.roundState.roadDie}.webp`;
       svg.insertAdjacentHTML("beforeend", `<image href="${roadPath}" xlink:href="${roadPath}" x="${(fc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(fc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
@@ -8610,6 +8658,22 @@ function renderBoard() {
       svg.insertAdjacentHTML("beforeend", `<image href="${noPath2}" xlink:href="${noPath2}" x="${(rc2.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc2.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
       svg.lastElementChild.addEventListener("click", () => { declineRoadBonus(); render(); });
     }
+  }
+
+  // Bandeau de fin de partie — retour de Mayrik : centré sur le
+  // plateau de jeu ASSEMBLÉ (le vrai centre du viewBox, pas un
+  // élément externe sous le plateau comme avant), dessiné en tout
+  // dernier pour rester au-dessus de tout le reste.
+  if (gameOver && gameOverInfo) {
+    const text = gameOverInfo.winner
+      ? `🏁 Partie terminée : victoire de ${gameOverInfo.winner} (${gameOverInfo.reason}).`
+      : "Partie terminée sans vainqueur.";
+    const bx = BOARD_VIEW.w / 2, by = BOARD_VIEW.h / 2;
+    const boxW = Math.min(BOARD_VIEW.w * 0.8, text.length * 9 + 40), boxH = 60;
+    svg.insertAdjacentHTML("beforeend", `<g pointer-events="none">
+      <rect x="${(bx - boxW / 2).toFixed(1)}" y="${(by - boxH / 2).toFixed(1)}" width="${boxW.toFixed(1)}" height="${boxH.toFixed(1)}" rx="10" fill="#ffb347" stroke="#1e1e24" stroke-width="2"/>
+      <text x="${bx.toFixed(1)}" y="${by.toFixed(1)}" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="bold" fill="#1e1e24">${text}</text>
+    </g>`);
   }
 }
 
@@ -8644,17 +8708,11 @@ function renderPanel() {
     if (G.aiPending) {
       // Pause en cours DANS le tour de l'IA (voir driveAiTurnGenerator) :
       // un Slam implique une voiture DU JOUEUR plus grande — c'est à
-      // lui de décider la relance (p.9), exactement comme pour son
-      // propre tour (voir "slam-reroll-choice" plus bas).
-      const ctx = G.aiPending.ctx;
-      const p = document.createElement("div");
-      p.textContent = `SLAM pendant le tour de ${OPPONENT} ! Dé de slam : ${ctx.slamRoll} | Dé de direction : ${ctx.directionRoll}. Votre voiture (${ctx.largerCar.size}) est plus grande — voulez-vous relancer les deux dés (une seule relance possible, p.9) ?`;
-      panel.appendChild(p);
-      const choices = document.createElement("div");
-      choices.className = "choices";
-      choices.appendChild(choiceButton("Oui, relancer", () => { resumeAiSlamRerollChoice(true); render(); }));
-      choices.appendChild(choiceButton("Non, garder ce résultat", () => { resumeAiSlamRerollChoice(false); render(); }));
-      panel.appendChild(choices);
+      // lui de décider la relance (p.9). Texte retiré (retour de
+      // Mayrik : même comportement marker-only que pour son propre
+      // tour, voir le bloc "pendingSlam" dans renderBoard) — le
+      // marker-reroll + la face du dé Slam sur la case de destination
+      // couvrent entièrement cette décision.
       return;
     }
 
@@ -8752,12 +8810,10 @@ function renderPanel() {
     panel.appendChild(p);
     // Même remarque que pour "move-step" ci-dessus.
   } else if (sel.step === "slam-reroll-choice") {
-    const ctx = sel.pendingHumanSlam.ctx;
-    const p = document.createElement("div");
-    p.textContent = `SLAM ! Dé de slam : ${ctx.slamRoll} | Dé de direction : ${ctx.directionRoll}. Votre voiture (${ctx.largerCar.size}) est plus grande — voulez-vous relancer les deux dés (une seule relance possible, p.9) ?`;
-    panel.appendChild(p);
-    choices.appendChild(choiceButton("Oui, relancer", () => { resumeHumanSlamRerollChoice(true); render(); }));
-    choices.appendChild(choiceButton("Non, garder ce résultat", () => { resumeHumanSlamRerollChoice(false); render(); }));
+    // Choix texte retiré (retour de Mayrik) — marker-reroll + la face
+    // du dé Slam sur la case de destination (voir renderBoard) couvrent
+    // entièrement cette étape, même comportement que pendant le tour
+    // de l'IA.
   } else if (sel.step === "road-bonus-choice") {
     // Choix texte retiré (retour de Mayrik) — marker-road-N / marker-no
     // sur le plateau couvrent entièrement cette étape (voir renderBoard).
@@ -8803,15 +8859,10 @@ function render() {
     .map((car) => `<span class="badge">${car.owner} ${car.size} : ${car.damageTokens.length} dégât(s)${car.status === "inoperable" ? " [INOPÉRABLE]" : ""}</span>`)
     .join("");
 
-  const banner = document.getElementById("winnerBanner");
-  if (gameOver) {
-    banner.style.display = "block";
-    banner.textContent = gameOverInfo.winner
-      ? `🏁 Partie terminée : victoire de ${gameOverInfo.winner} (${gameOverInfo.reason}).`
-      : `Partie terminée sans vainqueur.`;
-  } else {
-    banner.style.display = "none";
-  }
+  // Bannière de fin de partie retirée d'ici (retour de Mayrik) — elle
+  // vit désormais dans le SVG du plateau, centrée dessus (voir la fin
+  // de renderBoard()). L'élément #winnerBanner externe reste caché.
+  document.getElementById("winnerBanner").style.display = "none";
 
   const logEl = document.getElementById("log");
   logEl.innerHTML = fullLog.slice().reverse().map((e) => e.sep ? `<div class="turn-sep">${e.sep}</div>` : `<div class="line">${e.line}</div>`).join("");
