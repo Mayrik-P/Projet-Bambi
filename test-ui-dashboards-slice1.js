@@ -98,7 +98,7 @@ console.log("Exactement 3 slots COAST cliquables — jamais de slot ANY en mode 
 click(dom, clickables[0]);
 sel = win.eval("sel");
 console.log("sel.car pointe vers le véhicule small (attendu true) :", sel.car === s2);
-console.log("Coast -> jamais de Command -> étape directement 'commit' (attendu true) :", sel.step === "commit");
+console.log("Coast -> jamais de Command -> commit AUTOMATIQUE, mouvement déjà démarré (attendu true) :", sel.step === "move-step" || sel.step === "entry-row");
 
 win.render();
 const dashboardsHtml = dom.window.document.getElementById("dashboards").innerHTML;
@@ -225,7 +225,7 @@ console.log("Slots Command éligibles pour un dé 3 (nitro+drift+airstrike) + le
 click(dom, clickables[1]); // ordre de rendu : nitro, drift, repair, airstrike -> drift = 2e éligible ici
 sel = win.eval("sel");
 console.log("Type Command choisi = 'drift' (attendu true) :", sel.commandType === "drift");
-console.log("Drift n'a pas de sous-étape -> commit direct (attendu true) :", sel.step === "commit");
+console.log("Drift n'a pas de sous-étape -> commit AUTOMATIQUE, mouvement déjà démarré (attendu true) :", sel.step === "move-step" || sel.step === "entry-row");
 console.log("sel.command bien construit (attendu true) :", sel.command && sel.command.type === "drift" && sel.command.dieValue === 3);
 
 win.render();
@@ -275,7 +275,8 @@ console.log("Un halo vert (#b0d458) est visible derrière le jeton réparable (a
 click(dom, repairClickables[0]);
 sel = win.eval("sel");
 console.log("Repair cible bien le véhicule medium (attendu true) :", sel.command && sel.command.type === "repair" && sel.command.target === m8);
-console.log("Étape passée à 'commit' (attendu true) :", sel.step === "commit");
+console.log("Étape passée à 'move-step'/'entry-row' — commit AUTOMATIQUE (attendu true) :", sel.step === "move-step" || sel.step === "entry-row");
+console.log("La réparation a déjà été appliquée par le commit automatique (attendu true) :", m8.damageTokens.length === 0);
 
 section("Test 9 — Repair : le joueur cible un jeton précis, l'autre garde sa place");
 
@@ -321,7 +322,9 @@ click(dom, repairImgs[1]);
 sel = win.eval("sel");
 console.log("Le jeton ciblé est bien 'shrapnel' (celui de droite) (attendu true) :", sel.command && sel.command.tokenValue === "shrapnel");
 
-win.commitAssignAndCommand();
+// Le clic ci-dessus a déjà déclenché le commit automatiquement (plus
+// de bouton de confirmation, retour de Mayrik) — pas besoin de
+// rappeler commitAssignAndCommand() ici.
 console.log("'dent' (gauche) toujours présent, 'shrapnel' (droite) retiré (attendu true) :", JSON.stringify(m9.damageTokens) === JSON.stringify(["dent"]));
 
 const slots9b = win.eval('damageSlots(G.allCars.find(c => c.id === ' + m9.id + '))');
@@ -390,5 +393,93 @@ console.log("marker-no reste affiché même si les 3 cases de l'arc sont occupé
 click(dom, declineImgs2[0]);
 sel = win.eval("sel");
 console.log("Le refus appelle bien declineAirstrikeShoot (commandType airstrike, target null) (attendu true) :", sel.command && sel.command.type === "airstrike" && sel.command.target === null);
+
+section("Test 12 — Relance de Slam : marker-reroll (case du Slam) + marker-no (derrière le décideur)");
+
+function clearHazardsAround(win, board, col, row) {
+  win.getSpace(board, col, row).hazard = null;
+  const front = win.getFrontArc({ col, row });
+  const rear = win.getRearArc({ col, row });
+  for (const { col: c, row: r } of [...front, ...rear]) {
+    const cell = win.getSpace(board, c, r);
+    if (cell) cell.hazard = null;
+  }
+}
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars.length = 0;
+const b12 = win.board();
+clearHazardsAround(win, b12, 4, 3);
+const humanCar12 = win.createCar(HUMAN, CAR_SIZE.LARGE, 3, 3);
+const aiCar12 = win.createCar(OPPONENT, CAR_SIZE.SMALL, 4, 3);
+G.allCars.push(humanCar12, aiCar12);
+
+sel = win.eval("sel");
+sel.mode = "assign";
+sel.commandAvailable = false;
+sel.car = humanCar12;
+sel.dieValue = 1;
+sel.turnLabel = "Test — tour humain";
+sel.slamOptions = { decideReroll: win.decideSlamRerollDefault };
+sel.remaining = 1;
+sel.roadEligible = true;
+sel.hadSlam = false;
+sel.hadDamage = false;
+sel.roadBonusOffered = false;
+sel.inRoadBonus = false;
+sel.step = "move-step";
+win.pickMoveStep({ direction: "front", col: 4, row: 3, outcome: "slam", cost: 1 });
+win.render();
+
+console.log("Pause de relance bien obtenue (attendu true) :", sel.step === "slam-reroll-choice");
+const boardEl3 = dom.window.document.getElementById("board");
+const rerollImgs = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-reroll.webp"));
+const noImgsSlam = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-no.webp"));
+console.log("marker-reroll affiché sur la case du Slam (attendu true) :", rerollImgs.length === 1);
+console.log("marker-no affiché derrière le véhicule qui décide (attendu true) :", noImgsSlam.length === 1);
+
+click(dom, noImgsSlam[0]);
+sel = win.eval("sel");
+console.log("Cliquer marker-no a bien répondu 'non, pas de relance' (pause terminée) (attendu true) :", !sel.pendingHumanSlam);
+
+section("Test 13 — Airstrike : le chopper s'affiche à sa position choisie pendant l'arc de tir");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+const e1b = win.createCar(OPPONENT, CAR_SIZE.SMALL, 6, 2);
+G.allCars.push(e1b);
+const chopper13 = win.createChopper(HUMAN);
+G.allChoppers.push(chopper13);
+win.resetSelection();
+sel = win.eval("sel");
+sel.car = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 4, 2);
+sel.airstrikePlacement = { col: 5, row: 2 };
+sel.commandDieValue = 4;
+sel.step = "airstrike-shoot-arc";
+win.render();
+
+const boardEl4 = dom.window.document.getElementById("board");
+const chopperImgs = [...boardEl4.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes("chopper-blue.webp"));
+console.log("Le chopper est affiché sur le plateau pendant l'arc de tir (attendu true) :", chopperImgs.length >= 1);
+
+section("Test 14 — Diceboard : halo vert derrière les dés cliquables");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+G.allCars.push(win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0), win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1), win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2));
+G.roundState.dicePool[HUMAN] = [4, 3, 3, 1];
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+const dashHtml14 = dom.window.document.getElementById("dashboards").innerHTML;
+console.log("Un halo vert (#b0d458) est présent sur le diceboard (attendu true) :", dashHtml14.includes('fill="#b0d458"'));
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
