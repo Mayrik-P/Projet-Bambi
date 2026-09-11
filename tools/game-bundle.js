@@ -3209,6 +3209,8 @@ module.exports = {
   advanceTurn,
   rollMovementDie,
   getForwardDelta,
+  getBackwardDelta,
+  getDirectionDelta,
   computeAiStepCost,
   isAiHiddenHazard,
   findAiAirstrikePlacement,

@@ -3264,6 +3264,8 @@ module.exports = {
   advanceTurn,
   rollMovementDie,
   getForwardDelta,
+  getBackwardDelta,
+  getDirectionDelta,
   computeAiStepCost,
   isAiHiddenHazard,
   findAiAirstrikePlacement,
@@ -7277,11 +7279,11 @@ function renderDashboards() {
     // pause de relance de Slam (les marqueurs reroll/no prennent le
     // relais, voir renderBoard) ou une fois la partie terminée.
     if (playerName === OPPONENT && cp === OPPONENT && !gameOver && !G.aiPending) {
-      const btnW = cmd.w * 0.7, btnH = cmd.h * 0.16;
+      const btnW = cmd.w * 0.88, btnH = cmd.h * 0.22;
       const bx = cmd.x + cmd.w / 2 - btnW / 2, by = cmd.y + cmd.h / 2 - btnH / 2;
-      const label = G.aiAnimating ? "L'IA joue..." : "Jouer le tour de l'IA ▶";
+      const label = G.aiAnimating ? "AI is playing…" : "Play the AI's turn ▶";
       svg.insertAdjacentHTML("beforeend", `<foreignObject x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${btnW.toFixed(1)}" height="${btnH.toFixed(1)}">
-        <button xmlns="http://www.w3.org/1999/xhtml" class="primary" style="width:100%;height:100%;font-size:${(btnH * 0.38).toFixed(1)}px;box-sizing:border-box;" ${G.aiAnimating ? "disabled" : ""}>${label}</button>
+        <button xmlns="http://www.w3.org/1999/xhtml" class="primary" style="width:100%;height:100%;font-size:${(btnH * 0.26).toFixed(1)}px;line-height:1.15;white-space:normal;box-sizing:border-box;padding:2px;" ${G.aiAnimating ? "disabled" : ""}>${label}</button>
       </foreignObject>`);
       if (!G.aiAnimating) {
         svg.lastElementChild.querySelector("button").addEventListener("click", playAiTurn);
@@ -7334,16 +7336,15 @@ function renderDashboards() {
       const f = DICEBOARD_SLOT_FRACTION[slotKey];
       const dx = dice.x + f.x * dice.w - DIE_DISPLAY_SIZE / 2, dy = dice.y + f.y * dice.h - DIE_DISPLAY_SIZE / 2;
       const isClickable = playerName === HUMAN && (dieStep || commandDieStep);
-      if (isClickable) {
-        // Halo vert EXACTEMENT à la taille du dé (retour de Mayrik :
-        // trop grand avec une marge) — même taille que les slots
-        // ANY/COAST/Command, pas de padding ici.
-        svg.insertAdjacentHTML("beforeend", `<rect x="${dx.toFixed(1)}" y="${dy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" rx="4" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5" pointer-events="none"/>`);
-      }
       svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
       if (isClickable) {
         const handler = dieStep ? (() => { pickDie(value); render(); }) : (() => { pickCommandDieChoice(value); render(); });
         svg.lastElementChild.addEventListener("click", handler);
+        // Halo vert dessiné APRÈS le dé (premier plan, retour de
+        // Mayrik : il était sous le dé et donc invisible) — contour
+        // seul, sans remplissage, pour ne pas cacher les pips en
+        // dessous. Taille exacte du dé, sans marge.
+        svg.insertAdjacentHTML("beforeend", `<rect x="${dx.toFixed(1)}" y="${dy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" rx="4" fill="none" stroke="#b0d458" stroke-width="3" pointer-events="none"/>`);
       }
     });
 
@@ -7425,6 +7426,20 @@ function renderDashboards() {
           svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
         }
       }
+
+      // Dé "parqué" sur END TURN (voir endTurnDieState plus haut) —
+      // indépendant de sel (qui a déjà été réinitialisé une fois le
+      // tour de ce véhicule terminé), reste affiché jusqu'à la fin du
+      // round. Jamais cliquable/cancelable (retour définitif au-delà
+      // du commit).
+      if (car) {
+        const et = endTurnDieState[car.id];
+        if (et && et.round === G.roundState.roundNumber) {
+          const f = VEHICLE_SLOT_FRACTION[size].endTurn;
+          const etX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, etY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+          svg.insertAdjacentHTML("beforeend", dieMarkup(et.dieValue, PLAYER_CAR_COLOR[playerName], etX, etY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION.endTurn));
+        }
+      }
     });
 
     maxRight = Math.max(maxRight, rowOriginX + ROW_BBOX.maxX);
@@ -7458,6 +7473,11 @@ let diceboardSlotState = {};
 // persistant, face visible en permanence) : il faudra pouvoir cibler
 // un jeton précis plutôt qu'un autre. Forme : { [car.id]: { left, right } }.
 let damageSlotState = {};
+// Dé "parqué" sur l'emplacement END TURN d'un véhicule une fois son
+// tour terminé (retour de Mayrik : n'apparaissait jamais) — reste en
+// place jusqu'à la fin du round, voir spec-dashboards.md. Forme :
+// { [car.id]: { round, dieValue } }.
+let endTurnDieState = {};
 let gameOver = false;
 let gameOverInfo = null;
 
@@ -7788,6 +7808,14 @@ function pickRepairTarget(target, tokenValue) {
 function pickAirstrikePlacement(col, row) {
   sel.airstrikePlacement = { col, row };
   const chopper = G.allChoppers.find((c) => c.owner === HUMAN);
+  if (G.roundState.roundNumber === 1) {
+    // Tir désactivé au round 1 (p.10) — même règle que le tir normal
+    // (voir proceedToShootPhase) : le chopper se pose mais ne peut pas
+    // encore tirer, retour direct au mouvement (retour de Mayrik).
+    sel.command = { type: "airstrike", dieValue: sel.commandDieValue, target: null, placement: { col, row } };
+    commitAssignAndCommand();
+    return;
+  }
   // Chopper HYPOTHÉTIQUE (copie, jamais muté) : juste posé au bon
   // endroit pour calculer son arc avant AVANT le vrai placement, qui
   // n'aura lieu qu'à l'exécution réelle (commitAssignAndCommand).
@@ -7878,14 +7906,12 @@ function checkStuckAtMovementStart() {
   if (sel.step === "entry-row") {
     const options = getEntryRowOptions(board(), sel.remaining, G.allCars);
     if (options.length === 0) {
-      sel.step = "movement-stopped";
-      sel.stopMessage = buildStopMessage([], sel.remaining, "aucune case de la colonne d'entrée n'est accessible (toutes Impassable ou coût de terrain trop élevé)");
+      stopMovementAndContinue(buildStopMessage([], sel.remaining, "aucune case de la colonne d'entrée n'est accessible (toutes Impassable ou coût de terrain trop élevé)"));
     }
   } else if (sel.step === "move-step") {
     const options = getMovementStepOptions(board(), sel.car, sel.remaining, G.allCars);
     if (options.length === 0) {
-      sel.step = "movement-stopped";
-      sel.stopMessage = buildStopMessage([], sel.remaining, "aucune case de l'arc avant n'est accessible depuis la position actuelle (toutes Impassable ou coût de terrain trop élevé)");
+      stopMovementAndContinue(buildStopMessage([], sel.remaining, "aucune case de l'arc avant n'est accessible depuis la position actuelle (toutes Impassable ou coût de terrain trop élevé)"));
     }
   }
 }
@@ -7912,6 +7938,15 @@ function buildStopMessage(log, pointsLost, fallbackReason) {
   const tail = log.length > 0 ? log.slice(-3).join(" — ") : fallbackReason;
   const pointsLabel = pointsLost === 1 ? "1 mouvement perdu" : `${pointsLost} mouvements perdus`;
   return `${pointsLabel} — ${tail}`;
+}
+
+// Remplace l'ancien popup "movement-stopped" + bouton "Continuer"
+// (retour de Mayrik : plus utile désormais que le tour s'enchaîne
+// visuellement) — le message reste visible dans le journal (logTurn),
+// mais le tour continue immédiatement sans clic supplémentaire.
+function stopMovementAndContinue(message) {
+  logTurn([message]);
+  continueAfterStop();
 }
 
 // Point d'entrée commun après CHAQUE pas (entrée en jeu, mouvement
@@ -7943,8 +7978,7 @@ function handleStepResult(remainingBefore, option, result, isEntryStep) {
   const pointsLost = computePointsLost(remainingBefore, option, remainingAfter);
 
   if (car.status === CAR_STATUS.ELIMINATED || pointsLost > 0) {
-    sel.step = "movement-stopped";
-    sel.stopMessage = buildStopMessage(result.log || [], pointsLost > 0 ? pointsLost : remainingBefore);
+    stopMovementAndContinue(buildStopMessage(result.log || [], pointsLost > 0 ? pointsLost : remainingBefore));
     return;
   }
 
@@ -7966,8 +8000,7 @@ function handleStepResult(remainingBefore, option, result, isEntryStep) {
 function resumeMovementLoopOrStop(remainingAfter) {
   const nextOptions = getMovementStepOptions(board(), sel.car, remainingAfter, G.allCars);
   if (nextOptions.length === 0) {
-    sel.step = "movement-stopped";
-    sel.stopMessage = buildStopMessage([], remainingAfter, "plus aucune case accessible depuis la position actuelle");
+    stopMovementAndContinue(buildStopMessage([], remainingAfter, "plus aucune case accessible depuis la position actuelle"));
     return;
   }
   sel.step = sel.inRoadBonus ? "road-bonus-step" : "move-step";
@@ -8122,6 +8155,13 @@ function pickShootTarget(target) {
 }
 
 function finishHumanTurn() {
+  // Dé ANY -> emplacement END TURN (retour de Mayrik) : capturé AVANT
+  // resetSelection() (qui vide sel.car/sel.dieValue) — sel.mode==="coast"
+  // n'a pas d'emplacement END TURN dédié (spec section 2), seul le cas
+  // ANY est concerné ici.
+  if (sel.car && sel.mode === "assign" && sel.dieValue !== undefined) {
+    endTurnDieState[sel.car.id] = { round: G.roundState.roundNumber, dieValue: sel.dieValue };
+  }
   const result = executeEndOfTurn(G.progressionState, G.roundState, G.allCars, G.allChoppers, PLAYER_NAMES, sel.car);
   logTurn(result.log || []);
   if (result.gameOver) {
@@ -8170,6 +8210,28 @@ function offBoardOptionLabel(option) {
 function highlightedCells() {
   if (!sel.step) return [];
   const b = board();
+  // Retour de Mayrik : dès qu'un dé est posé sur ANY (étape
+  // "command-die", avant même un choix de Command), les cases de
+  // destination doivent DÉJÀ être cliquables — pas besoin d'attendre
+  // un aller-retour supplémentaire. sel.remaining n'existe pas encore
+  // à ce stade (posé seulement au commit, voir commitAssignAndCommand)
+  // donc on le calcule ici À L'IDENTIQUE, en pur aperçu — jamais écrit
+  // dans sel tant que le joueur n'a pas réellement cliqué une case.
+  // Un clic ici committe directement SANS Command (comme "Aucune
+  // Command") puis rejoue l'option — même résultat que déjà cliquer
+  // sur un dé de Command, en un clic de moins.
+  if (sel.step === "command-die" && sel.car) {
+    const previewRemaining = sel.mode === "coast" ? 1 : sel.dieValue;
+    if (sel.car.col === null) {
+      const options = getEntryRowOptions(b, previewRemaining, G.allCars);
+      const { onBoard } = splitOnAndOffBoardOptions(b, options);
+      return onBoard.map((o) => ({ col: 0, row: o.entryRow, onClick: () => { sel.command = null; commitAssignAndCommand(); pickEntryRow(o); render(); } }));
+    }
+    const options = getMovementStepOptions(b, sel.car, previewRemaining, G.allCars);
+    const { onBoard, offBoard } = splitOnAndOffBoardOptions(b, options);
+    const exitsFront = offBoard.filter((o) => o.outcome === "exits-front");
+    return [...onBoard, ...exitsFront].map((o) => ({ col: o.col, row: o.row, onClick: () => { sel.command = null; commitAssignAndCommand(); pickMoveStep(o); render(); } }));
+  }
   if (sel.step === "entry-row") {
     const options = getEntryRowOptions(b, sel.remaining, G.allCars);
     const { onBoard } = splitOnAndOffBoardOptions(b, options);
@@ -8193,10 +8255,10 @@ function highlightedCells() {
     return placements.map((p) => ({ col: p.col, row: p.row, onClick: () => { pickAirstrikePlacement(p.col, p.row); render(); } }));
   }
   if (sel.step === "airstrike-shoot-arc") {
-    const chopper = G.allChoppers.find((c) => c.owner === HUMAN);
-    const hypotheticalChopper = { ...chopper, ...sel.airstrikePlacement };
-    const arc = getFrontArc(hypotheticalChopper).filter((a) => isOnBoard(b, a.col, a.row));
-    return arc.map((a) => ({ col: a.col, row: a.row, onClick: () => { pickAirstrikeShootCell(a.col, a.row); render(); } }));
+    // Plus de cases vides cliquables ici (retour de Mayrik) : les
+    // marqueurs de cible (taille) + marker-no couvrent déjà tout —
+    // voir le bloc dédié dans renderBoard.
+    return [];
   }
   return [];
 }
@@ -8391,7 +8453,7 @@ function renderBoard() {
       ${carShadowMarkup(imgPath, x, y, isInoperableVisual)}
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none" ${isInoperableVisual ? 'opacity="0.5"' : ""}/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#b0d458" stroke-width="2.5" pointer-events="none"/>` : ""}
-      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : "")}
+      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : "")}
     </g>`);
   });
 
@@ -8505,12 +8567,48 @@ function renderBoard() {
     const rerollPath = "../images/markers/marker-reroll.webp";
     svg.insertAdjacentHTML("beforeend", `<image href="${rerollPath}" xlink:href="${rerollPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
     svg.lastElementChild.addEventListener("click", () => { resume(true); render(); });
+    // Face du dé Slam SEULE (pas le dé Direction, qui reste invisible)
+    // sur la case de DESTINATION désignée par le dé Direction — retour
+    // de Mayrik : montre où le véhicule finira sans afficher le dé qui
+    // l'a déterminé. Vient EN PLUS de marker-reroll ci-dessus, ne le
+    // remplace pas.
+    const delta = getDirectionDelta(ctx.directionRoll, ctx.topCar.col, ctx.topCar.row);
+    const dest = { col: ctx.topCar.col + delta.dCol, row: ctx.topCar.row + delta.dRow };
+    if (isOnBoard(board(), dest.col, dest.row)) {
+      const dc = cellCenter(dest.col, dest.row);
+      const slamPath = `../images/dice/die-fx-slam-${ctx.slamRoll}.webp`;
+      svg.insertAdjacentHTML("beforeend", `<image href="${slamPath}" xlink:href="${slamPath}" x="${(dc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(dc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      svg.lastElementChild.addEventListener("click", () => { resume(true); render(); });
+    }
     const rear = getRearArc(ctx.largerCar).find((a) => a.name === "rear");
     if (rear && isOnBoard(board(), rear.col, rear.row)) {
       const rc = cellCenter(rear.col, rear.row);
       const noPath = "../images/markers/marker-no.webp";
       svg.insertAdjacentHTML("beforeend", `<image href="${noPath}" xlink:href="${noPath}" x="${(rc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
       svg.lastElementChild.addEventListener("click", () => { resume(false); render(); });
+    }
+  }
+
+  // Bonus Road (p.11) : plus de choix textuel Oui/Non — marker-road-N
+  // (N = valeur du dé Road de ce round) sur la case juste DEVANT le
+  // véhicule (accepter), marker-no derrière (refuser) — même
+  // convention que partout ailleurs. Accepter affiche ensuite
+  // directement les cases de destination (road-bonus-step, déjà géré
+  // par highlightedCells()) — retour de Mayrik.
+  if (sel.step === "road-bonus-choice" && sel.car) {
+    const front = getFrontArc(sel.car).find((a) => a.name === "front");
+    if (front && isOnBoard(board(), front.col, front.row)) {
+      const fc = cellCenter(front.col, front.row);
+      const roadPath = `../images/markers/marker-road-${G.roundState.roadDie}.webp`;
+      svg.insertAdjacentHTML("beforeend", `<image href="${roadPath}" xlink:href="${roadPath}" x="${(fc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(fc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      svg.lastElementChild.addEventListener("click", () => { acceptRoadBonus(); render(); });
+    }
+    const rearRB = getRearArc(sel.car).find((a) => a.name === "rear");
+    if (rearRB && isOnBoard(board(), rearRB.col, rearRB.row)) {
+      const rc2 = cellCenter(rearRB.col, rearRB.row);
+      const noPath2 = "../images/markers/marker-no.webp";
+      svg.insertAdjacentHTML("beforeend", `<image href="${noPath2}" xlink:href="${noPath2}" x="${(rc2.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc2.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      svg.lastElementChild.addEventListener("click", () => { declineRoadBonus(); render(); });
     }
   }
 }
@@ -8660,22 +8758,9 @@ function renderPanel() {
     panel.appendChild(p);
     choices.appendChild(choiceButton("Oui, relancer", () => { resumeHumanSlamRerollChoice(true); render(); }));
     choices.appendChild(choiceButton("Non, garder ce résultat", () => { resumeHumanSlamRerollChoice(false); render(); }));
-  } else if (sel.step === "movement-stopped") {
-    const msg = document.createElement("div");
-    msg.className = "stop-message";
-    msg.textContent = sel.stopMessage;
-    panel.appendChild(msg);
-    const btn = document.createElement("button");
-    btn.className = "primary";
-    btn.textContent = "Continuer";
-    btn.addEventListener("click", () => { continueAfterStop(); render(); });
-    panel.appendChild(btn);
   } else if (sel.step === "road-bonus-choice") {
-    const p = document.createElement("div");
-    p.textContent = `Trajet resté 100% sur route ! Voulez-vous utiliser le bonus Road (+${G.roundState.roadDie} cases, montant fixe, non modifiable) ?`;
-    panel.appendChild(p);
-    choices.appendChild(choiceButton(`Oui, +${G.roundState.roadDie}`, () => { acceptRoadBonus(); render(); }));
-    choices.appendChild(choiceButton("Non merci", () => { declineRoadBonus(); render(); }));
+    // Choix texte retiré (retour de Mayrik) — marker-road-N / marker-no
+    // sur le plateau couvrent entièrement cette étape (voir renderBoard).
   } else if (sel.step === "shoot") {
     const p = document.createElement("div");
     p.textContent = "Mouvement terminé — choisissez une cible pour le tir, ou ne tirez pas :";
