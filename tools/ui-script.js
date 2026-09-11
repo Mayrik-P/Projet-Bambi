@@ -472,17 +472,28 @@ function diePipLayout(value) {
 // un vrai dé physique) autour de son propre centre — nécessaire pour
 // les slots COAST/Command, imprimés en losange (voir SLOT_ROTATION).
 function dieMarkup(value, color, x, y, size, extraAttrs, rotationDeg) {
+  // BUG RÉEL trouvé par Mayrik (le diceboard ne répondait à aucun
+  // clic réel) : un <g> ne dessine jamais rien par lui-même — si TOUTES
+  // ses images enfants ont pointer-events="none", il n'existe plus
+  // AUCUNE surface cliquable dans toute la zone, malgré le
+  // class="clickable" posé sur le <g>. Invisible en test jsdom, qui
+  // déclenche l'écouteur directement sans passer par un vrai hit-test
+  // respectant pointer-events. Corrigé : on ne désactive les
+  // pointer-events des enfants QUE si le dé n'est PAS cliquable
+  // (purement décoratif, où ça n'a de toute façon aucun effet).
+  const isClickable = (extraAttrs || "").includes("clickable");
+  const pe = isClickable ? "" : ' pointer-events="none"';
   const pipCell = size / 3;
   const facePath = `../images/dice/die-move-${color}.webp`;
   const pipPath = `../images/dice/die-move-pip.webp`;
   const pips = diePipLayout(value).map(([col, row]) => {
     const px = x + col * pipCell, py = y + row * pipCell;
-    return `<image href="${pipPath}" xlink:href="${pipPath}" x="${px.toFixed(1)}" y="${py.toFixed(1)}" width="${pipCell.toFixed(1)}" height="${pipCell.toFixed(1)}" pointer-events="none"/>`;
+    return `<image href="${pipPath}" xlink:href="${pipPath}" x="${px.toFixed(1)}" y="${py.toFixed(1)}" width="${pipCell.toFixed(1)}" height="${pipCell.toFixed(1)}"${pe}/>`;
   }).join("");
   const cx = x + size / 2, cy = y + size / 2;
   const rot = rotationDeg ? `transform="rotate(${rotationDeg} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
   return `<g ${extraAttrs || ""} ${rot}>
-    <image href="${facePath}" xlink:href="${facePath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${size.toFixed(1)}" height="${size.toFixed(1)}" pointer-events="none"/>
+    <image href="${facePath}" xlink:href="${facePath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${size.toFixed(1)}" height="${size.toFixed(1)}"${pe}/>
     ${pips}
   </g>`;
 }
@@ -661,6 +672,26 @@ function renderDashboards() {
     const cmdPath = dashboardImagePath(playerName, "command");
     svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${cmd.x.toFixed(1)}" y="${cmd.y.toFixed(1)}" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" pointer-events="none"/>`);
 
+    // Bouton "Jouer le tour de l'IA" — retour de Mayrik : plus de
+    // question texte séparée dans le panneau, le bouton remonte ici,
+    // au centre du command board de l'IA (le plus près possible du
+    // plateau). Provisoire (bouton HTML réel via foreignObject) en
+    // attendant qu'il crée un marker dédié à remplacer ceci par une
+    // simple image cliquable, comme les autres. Absent pendant une
+    // pause de relance de Slam (les marqueurs reroll/no prennent le
+    // relais, voir renderBoard) ou une fois la partie terminée.
+    if (playerName === OPPONENT && cp === OPPONENT && !gameOver && !G.aiPending) {
+      const btnW = cmd.w * 0.7, btnH = cmd.h * 0.16;
+      const bx = cmd.x + cmd.w / 2 - btnW / 2, by = cmd.y + cmd.h / 2 - btnH / 2;
+      const label = G.aiAnimating ? "L'IA joue..." : "Jouer le tour de l'IA ▶";
+      svg.insertAdjacentHTML("beforeend", `<foreignObject x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${btnW.toFixed(1)}" height="${btnH.toFixed(1)}">
+        <button xmlns="http://www.w3.org/1999/xhtml" class="primary" style="width:100%;height:100%;font-size:${(btnH * 0.38).toFixed(1)}px;box-sizing:border-box;" ${G.aiAnimating ? "disabled" : ""}>${label}</button>
+      </foreignObject>`);
+      if (!G.aiAnimating) {
+        svg.lastElementChild.querySelector("button").addEventListener("click", playAiTurn);
+      }
+    }
+
     // Slots Command (Nitro/Drift/Repair/Airstrike) : cliquables
     // uniquement à l'étape "command", et seulement ceux compatibles
     // avec le dé déjà choisi (eligibleCommandTypes, calculé plus haut
@@ -708,12 +739,10 @@ function renderDashboards() {
       const dx = dice.x + f.x * dice.w - DIE_DISPLAY_SIZE / 2, dy = dice.y + f.y * dice.h - DIE_DISPLAY_SIZE / 2;
       const isClickable = playerName === HUMAN && (dieStep || commandDieStep);
       if (isClickable) {
-        // Halo vert (même convention que les slots ANY/COAST/Command et
-        // les jetons dégât réparables) : sans lui, rien ne distinguait
-        // visuellement un dé sélectionnable d'un dé juste affiché,
-        // retour de Mayrik.
-        const pad = DIE_DISPLAY_SIZE * 0.18;
-        svg.insertAdjacentHTML("beforeend", `<rect x="${(dx - pad).toFixed(1)}" y="${(dy - pad).toFixed(1)}" width="${(DIE_DISPLAY_SIZE + pad * 2).toFixed(1)}" height="${(DIE_DISPLAY_SIZE + pad * 2).toFixed(1)}" rx="4" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"/>`);
+        // Halo vert EXACTEMENT à la taille du dé (retour de Mayrik :
+        // trop grand avec une marge) — même taille que les slots
+        // ANY/COAST/Command, pas de padding ici.
+        svg.insertAdjacentHTML("beforeend", `<rect x="${dx.toFixed(1)}" y="${dy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" rx="4" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5" pointer-events="none"/>`);
       }
       svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
       if (isClickable) {
@@ -1935,21 +1964,9 @@ function renderPanel() {
       return;
     }
 
-    const btn = document.createElement("button");
-    btn.className = "primary";
-    btn.textContent = "Jouer le tour de l'IA ▶";
-    btn.addEventListener("click", playAiTurn);
-    if (G.aiAnimating) {
-      // Anti double-clic (voir playAiTurn) : le tour est en cours
-      // d'animation case par case (setTimeout), pas de nouvelle
-      // décision à lancer par-dessus tant que celle-ci n'est pas
-      // terminée.
-      btn.disabled = true;
-      btn.textContent = "L'IA joue... ▶";
-      panel.appendChild(btn);
-      return;
-    }
-    panel.appendChild(btn);
+    // Bouton "Jouer le tour de l'IA" retiré d'ici (retour de Mayrik) —
+    // il vit désormais sur le command board de l'IA (voir
+    // renderDashboards), plus près du plateau.
     return;
   }
 
@@ -1971,12 +1988,10 @@ function renderPanel() {
   if (!sel.step) sel.step = "die";
 
   if (sel.step === "die") {
-    const p = document.createElement("div");
-    p.textContent = ctx.mode === "coast" ? "Choisissez un dé à assigner en Coast (comptera comme 1 quelle que soit sa valeur) :" : "Choisissez un dé pour le mouvement :";
-    panel.appendChild(p);
-    ctx.pool.forEach((d) => {
-      choices.appendChild(choiceButton(String(d), () => { pickDie(d); render(); }));
-    });
+    // Ancienne liste de boutons retirée (retour de Mayrik : faisait
+    // doublon avec le diceboard, désormais entièrement fonctionnel).
+    // Rien à afficher ici — le joueur clique directement un dé sur son
+    // diceboard (halo vert).
   } else if (sel.step === "car") {
     const p = document.createElement("div");
     p.textContent = `Dé choisi : ${sel.dieValue}. ` + (ctx.mode === "coast" ? "Choisissez la voiture à faire avancer d'une case (Coast) :" : "Choisissez la voiture à activer :");
