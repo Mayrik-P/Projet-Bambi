@@ -376,19 +376,25 @@ const VEHICLE_SLOT_FRACTION = {
     any: { x: 0.498, y: 0.452 },
     endTurn: { x: 0.499, y: 0.742 }, // pas encore câblé (S8, prochaine tranche)
     coast1: { x: 0.805, y: 0.513 },
-    coast2: { x: 0.694, y: 0.720 } // arbitraire (aucun repère visuel imprimé, voir spec section 6)
+    coast2: { x: 0.694, y: 0.720 }, // arbitraire (aucun repère visuel imprimé, voir spec section 6)
+    damage1: { x: 0.30, y: 1.15 }, // sous le dashboard, priorité gauche (voir spec section 2) — placeholder, pas encore calé
+    damage2: { x: 0.70, y: 1.15 } // placeholder, pas encore calé
   },
   medium: {
     any: { x: 0.498, y: 0.451 },
     endTurn: { x: 0.498, y: 0.739 },
     coast1: { x: 0.809, y: 0.512 },
-    coast2: { x: 0.707, y: 0.720 }
+    coast2: { x: 0.707, y: 0.720 },
+    damage1: { x: 0.30, y: 1.15 },
+    damage2: { x: 0.70, y: 1.15 }
   },
   large: {
     any: { x: 0.499, y: 0.451 },
     endTurn: { x: 0.499, y: 0.739 },
     coast1: { x: 0.848, y: 0.511 },
-    coast2: { x: 0.735, y: 0.721 }
+    coast2: { x: 0.735, y: 0.721 },
+    damage1: { x: 0.30, y: 1.15 },
+    damage2: { x: 0.70, y: 1.15 }
   }
 };
 const COMMAND_SLOT_FRACTION = {
@@ -407,7 +413,8 @@ const COMMAND_SLOT_FRACTION = {
 const SLOT_ROTATION = {
   any: 0, endTurn: 0, coast1: 45, coast2: 45,
   nitro: 45, drift: 45, repair: 45, airstrike: 45,
-  slot0: 0, slot1: 0, slot2: 0, slot3: 0
+  slot0: 0, slot1: 0, slot2: 0, slot3: 0,
+  damage1: 0, damage2: 0
 };
 // 4 emplacements DROITS (retour de Mayrik) — calés par Mayrik dans son
 // navigateur via tools/calage-dashboards.html.

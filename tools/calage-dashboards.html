@@ -38,7 +38,7 @@
 <body>
 
 <h1>Outil de calage — slots des Dashboards</h1>
-<p class="sub">Pour chaque cible : clique une première fois sur le plateau pour caler grossièrement (le carré apparaît en orange), affine avec les flèches du clavier ou le pavé ci-contre (Maj+flèche = pas plus large), puis valide (bouton ou touche Entrée) pour passer à la cible suivante. Reclique n'importe où sur le plateau pour repartir d'un calage grossier. Clique un élément de la liste pour revenir corriger un point déjà validé — son réglage fin reprend là où tu l'avais laissé. Une fois les 20 cibles validées, « Copier les réglages » remplace directement <code>DICEBOARD_SLOT_FRACTION</code> / <code>VEHICLE_SLOT_FRACTION</code> / <code>COMMAND_SLOT_FRACTION</code> dans <code>tools/ui-script.js</code>.</p>
+<p class="sub">Pour chaque cible : clique une première fois sur le plateau pour caler grossièrement (le carré apparaît en orange), affine avec les flèches du clavier ou le pavé ci-contre (Maj+flèche = pas plus large), puis valide (bouton ou touche Entrée) pour passer à la cible suivante. Reclique n'importe où sur le plateau pour repartir d'un calage grossier. Clique un élément de la liste pour revenir corriger un point déjà validé — son réglage fin reprend là où tu l'avais laissé. Une fois les 26 cibles validées, « Copier les réglages » remplace directement <code>DICEBOARD_SLOT_FRACTION</code> / <code>VEHICLE_SLOT_FRACTION</code> / <code>COMMAND_SLOT_FRACTION</code> dans <code>tools/ui-script.js</code>. Pour les 6 cibles "dégât" (sous chaque dashboard) : le carré ne marque que la position du centre, pas la taille ni la forme finale du jeton — ça sera réglé séparément une fois le rendu des jetons câblé.</p>
 
 <div class="layout">
   <div class="board-wrap">
@@ -68,7 +68,7 @@
 
     <button id="resetBtn">Tout recommencer</button>
     <button id="copyBtn">Copier les réglages</button>
-    <textarea id="out" readonly placeholder="Les valeurs copiées apparaîtront ici une fois les 20 cibles validées..."></textarea>
+    <textarea id="out" readonly placeholder="Les valeurs copiées apparaîtront ici une fois les 26 cibles validées..."></textarea>
   </div>
 </div>
 
@@ -122,14 +122,20 @@ const TARGETS = [
   { board: "small",  slot: "endTurn",label: "SMALL — END TURN",                  rot: 0 },
   { board: "small",  slot: "coast1", label: "SMALL — COAST (1er, dessiné)",      rot: 45 },
   { board: "small",  slot: "coast2", label: "SMALL — COAST (2e, arbitraire)",    rot: 45 },
+  { board: "small",  slot: "damage1", label: "SMALL — dégât (gauche, priorité)", rot: 0 },
+  { board: "small",  slot: "damage2", label: "SMALL — dégât (droite)",           rot: 0 },
   { board: "medium", slot: "any",     label: "MEDIUM — ANY",                     rot: 0 },
   { board: "medium", slot: "endTurn",label: "MEDIUM — END TURN",                 rot: 0 },
   { board: "medium", slot: "coast1", label: "MEDIUM — COAST (1er, dessiné)",     rot: 45 },
   { board: "medium", slot: "coast2", label: "MEDIUM — COAST (2e, arbitraire)",   rot: 45 },
+  { board: "medium", slot: "damage1", label: "MEDIUM — dégât (gauche, priorité)", rot: 0 },
+  { board: "medium", slot: "damage2", label: "MEDIUM — dégât (droite)",           rot: 0 },
   { board: "large",  slot: "any",     label: "LARGE — ANY",                      rot: 0 },
   { board: "large",  slot: "endTurn",label: "LARGE — END TURN",                  rot: 0 },
   { board: "large",  slot: "coast1", label: "LARGE — COAST (1er, dessiné)",      rot: 45 },
-  { board: "large",  slot: "coast2", label: "LARGE — COAST (2e, arbitraire)",    rot: 45 }
+  { board: "large",  slot: "coast2", label: "LARGE — COAST (2e, arbitraire)",    rot: 45 },
+  { board: "large",  slot: "damage1", label: "LARGE — dégât (gauche, priorité)", rot: 0 },
+  { board: "large",  slot: "damage2", label: "LARGE — dégât (droite)",           rot: 0 }
 ];
 
 let results = {}; // clé "board:slot" -> {x,y} fraction, VALIDÉ
@@ -306,7 +312,9 @@ document.getElementById("copyBtn").addEventListener("click", () => {
     any: { x: ${fmt(results[size + ":any"].x)}, y: ${fmt(results[size + ":any"].y)} },
     endTurn: { x: ${fmt(results[size + ":endTurn"].x)}, y: ${fmt(results[size + ":endTurn"].y)} },
     coast1: { x: ${fmt(results[size + ":coast1"].x)}, y: ${fmt(results[size + ":coast1"].y)} },
-    coast2: { x: ${fmt(results[size + ":coast2"].x)}, y: ${fmt(results[size + ":coast2"].y)} }
+    coast2: { x: ${fmt(results[size + ":coast2"].x)}, y: ${fmt(results[size + ":coast2"].y)} },
+    damage1: { x: ${fmt(results[size + ":damage1"].x)}, y: ${fmt(results[size + ":damage1"].y)} },
+    damage2: { x: ${fmt(results[size + ":damage2"].x)}, y: ${fmt(results[size + ":damage2"].y)} }
   }`;
   const text = [
     "// --- Réglages de calage Dashboards (générés par tools/calage-dashboards.html) ---",
