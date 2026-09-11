@@ -112,7 +112,7 @@ win.render();
 clickButtonContaining(dom, "Aucune Command");
 sel = win.eval("sel");
 
-console.log("Étape (attendu 'commit') :", sel.step);
+console.log("Étape (attendu 'move-step'/'entry-row' — commit AUTOMATIQUE, retour de Mayrik) :", sel.step);
 console.log("sel.command bien à null (attendu true) :", sel.command === null);
 
 section("Test 5 — Bout en bout via de vrais clics : dé -> voiture -> dé de Command (6) -> clic sur 'repair' -> cible");
@@ -131,7 +131,10 @@ sel.mode = "assign";
 sel.commandAvailable = true;
 sel.step = "die";
 win.render();
-clickButtonContaining(dom, "4");
+// Le bouton texte de choix de dé a été retiré (retour de Mayrik : le
+// diceboard visuel couvre entièrement cette étape) — même méthode que
+// les Tests 1-3 ci-dessus, qui appellent déjà pickDie directement.
+win.pickDie(4);
 win.render();
 clickButtonContaining(dom, "medium");
 win.render();
@@ -144,6 +147,6 @@ console.log("Étape après clic sur 'repair' (attendu 'repair-target') :", sel.s
 clickButtonContaining(dom, "medium");
 sel = win.eval("sel");
 console.log("Commande finale bien enregistrée (attendu true) :", sel.command && sel.command.type === "repair" && sel.command.dieValue === 6 && sel.command.target === myCar5);
-console.log("Étape finale (attendu 'commit') :", sel.step);
+console.log("Étape finale (attendu 'move-step'/'entry-row' — commit AUTOMATIQUE) :", sel.step);
 
 console.log("\n=== Fin des tests dédiés (réordonnancement du choix de Command) ===");

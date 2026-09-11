@@ -15,6 +15,7 @@ const html = fs.readFileSync(path.join(__dirname, "tools", "prototype.html"), "u
 function section(title) { console.log("\n=== " + title + " ==="); }
 function makeDom() { return new JSDOM(html, { runScripts: "dangerously", resources: "usable", pretendToBeVisual: true }); }
 function panelText(dom) { return dom.window.document.getElementById("panel").textContent; }
+function dashboardsText(dom) { return dom.window.document.getElementById("dashboards").textContent; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function clearHazardsAround(win, board, cells) {
@@ -65,7 +66,7 @@ async function main() {
   win.driveAiTurnGenerator(gen, "Test animation");
 
   console.log("G.aiAnimating est bien passé à true dès le lancement (attendu true) :", win.eval("G").aiAnimating === true);
-  console.log("Le bouton IA est désactivé pendant l'animation (attendu true) :", panelText(dom).includes("L'IA joue..."));
+  console.log("Le bouton IA est désactivé pendant l'animation (attendu true) :", dashboardsText(dom).includes("L'IA joue..."));
   console.log("La voiture n'a pas encore atteint sa destination finale (attendu true, col 3 ou 4 ou 5, pas 6) :", aiCar.col < 6);
 
   // Laisse le temps aux 3 pauses (30ms chacune) de s'écouler.
@@ -74,7 +75,7 @@ async function main() {
   console.log("\nAprès l'animation complète :");
   console.log("La voiture est bien arrivée en (col 6, row 3) (attendu true) :", aiCar.col === 6 && aiCar.row === 3);
   console.log("G.aiAnimating est repassé à false (attendu true) :", win.eval("G").aiAnimating === false);
-  console.log("Le bouton redevient cliquable, plus de 'L'IA joue...' (attendu true) :", !panelText(dom).includes("L'IA joue..."));
+  console.log("Le bouton redevient cliquable, plus de 'L'IA joue...' (attendu true) :", !dashboardsText(dom).includes("L'IA joue..."));
 
   section("Test 2 — Non-régression : sans emitSteps (via executeDecisionGen direct, comme avant), aucun setTimeout, résolution immédiate");
 

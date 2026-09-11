@@ -482,4 +482,55 @@ win.render();
 const dashHtml14 = dom.window.document.getElementById("dashboards").innerHTML;
 console.log("Un halo vert (#b0d458) est présent sur le diceboard (attendu true) :", dashHtml14.includes('fill="#b0d458"'));
 
+section("Test 15 — Bug réel trouvé par Mayrik : un dé cliquable ne doit JAMAIS avoir pointer-events=none sur ses images internes");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+G.allCars.push(win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0), win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1), win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2));
+G.roundState.dicePool[HUMAN] = [4, 3, 3, 1];
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+const clickableDieGroup = [...dom.window.document.querySelectorAll("#dashboards g.clickable")][0];
+const innerImgsWithPE = [...clickableDieGroup.querySelectorAll("image")].filter((img) => img.getAttribute("pointer-events") === "none");
+console.log("Aucune image interne du dé cliquable n'a pointer-events=none (attendu true) :", innerImgsWithPE.length === 0);
+console.log("Le halo vert du diceboard fait EXACTEMENT la taille d'un dé, sans marge (attendu true) :",
+  (() => {
+    const halo = [...dom.window.document.querySelectorAll("#dashboards rect")].find((r) => r.getAttribute("fill") === "#b0d458" && parseFloat(r.getAttribute("width")).toFixed(1) === win.eval("DIE_DISPLAY_SIZE").toFixed(1));
+    return !!halo;
+  })());
+
+section("Test 16 — Airstrike : une case avec un hazard RÉVÉLÉ (face visible, ex. Oil Slick) est exclue du placement");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+const b16 = win.board();
+const cell16 = win.getSpace(b16, 5, 2);
+cell16.hazard = null;
+cell16.revealedHazard = "oil_slick"; // hazard "persist" déjà résolu, face visible
+const chopper16 = win.createChopper(HUMAN);
+G.allChoppers.push(chopper16);
+const placements16 = win.listValidAirstrikePlacements(b16, G.allCars, G.allChoppers, chopper16);
+console.log("La case avec un hazard révélé n'est PAS dans les placements valides (attendu true) :",
+  !placements16.some((p) => p.col === 5 && p.row === 2));
+
+section("Test 17 — Bouton 'Jouer le tour de l'IA' déplacé sur le command board de l'IA (plus dans le panneau texte)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
+win.render();
+const panelHtml17 = dom.window.document.getElementById("panel").innerHTML;
+const dashHtml17 = dom.window.document.getElementById("dashboards").innerHTML;
+console.log("Le panneau texte ne contient plus le bouton (attendu true) :", !panelHtml17.includes("Jouer le tour de l'IA"));
+console.log("Le bouton est bien présent sur les dashboards, dans un foreignObject (attendu true) :",
+  dashHtml17.includes("Jouer le tour de l'IA") && dashHtml17.includes("foreignObject"));
+
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
