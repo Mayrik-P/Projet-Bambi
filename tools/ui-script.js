@@ -291,6 +291,10 @@ const VEHICLE_DASH_NATIVE = {
 // die-move-pip.webp fait exactement 63px = 189/3 : la grille de pips
 // 3x3 tombe pile sur les tiers de la face, aucune approximation.
 const DIE_IMG_NATIVE = 189;
+// damage-front.webp — image générique utilisée pour TOUT jeton dégât
+// une fois stocké face cachée sous un dashboard (voir spec section 2 :
+// "on ne voit plus quel dommage c'était"), quel que soit son type réel.
+const DAMAGE_TOKEN_NATIVE_W = 519, DAMAGE_TOKEN_NATIVE_H = 487;
 
 // Échelle UNIQUE appliquée aux pixels natifs de TOUTES les images de
 // cette zone (dashboards ET dés) — retour de Mayrik : tous ces
@@ -340,20 +344,9 @@ function boardBox(kind) {
   const off = BOARD_LAYOUT[kind];
   return { x: off.x * DASH_SCALE, y: off.y * DASH_SCALE, w: s.w, h: s.h };
 }
-// Boîte englobante de TOUS les boards d'un même joueur (repère local
-// ci-dessus) — sert à empiler les lignes des différents joueurs sans
-// chevauchement entre joueurs, quelle que soit la géométrie exacte
-// une fois calée (y compris si un board déborde légèrement à gauche
-// ou au-dessus du command board).
-const ROW_BBOX = (() => {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  ["command", "diceboard", "small", "medium", "large"].forEach((k) => {
-    const b = boardBox(k);
-    minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
-    maxX = Math.max(maxX, b.x + b.w); maxY = Math.max(maxY, b.y + b.h);
-  });
-  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
-})();
+// Boîte englobante de TOUS les boards d'un même joueur — voir version
+// complète (incluant les jetons dégât) juste après VEHICLE_SLOT_FRACTION
+// ci-dessous, dont ce calcul a besoin.
 
 function dashboardImagePath(playerName, kind) {
   // kind: "command" | "diceboard" | "small" | "medium" | "large" | "<size>-inoperable"
@@ -397,6 +390,37 @@ const VEHICLE_SLOT_FRACTION = {
     damage2: { x: 0.714, y: 1.267 }
   }
 };
+
+// Rectangle affiché (même repère local que boardBox) d'un jeton dégât
+// pour une taille de véhicule et un slot ("damage1"/"damage2") donnés
+// — même échelle DASH_SCALE que tout le reste (retour de Mayrik :
+// aucun coefficient séparé), centré sur la fraction calée.
+function damageTokenBox(size, slotKey) {
+  const board = boardBox(size);
+  const f = VEHICLE_SLOT_FRACTION[size][slotKey];
+  const s = scaledSize(DAMAGE_TOKEN_NATIVE_W, DAMAGE_TOKEN_NATIVE_H);
+  return { x: board.x + f.x * board.w - s.w / 2, y: board.y + f.y * board.h - s.h / 2, w: s.w, h: s.h };
+}
+// Boîte englobante de TOUS les boards d'un même joueur, jetons dégât
+// compris (repère local ci-dessus) — sert à empiler les lignes des
+// différents joueurs sans chevauchement, quelle que soit la géométrie
+// exacte une fois calée. Les 2 emplacements dégât de chaque véhicule
+// sont TOUJOURS comptés (même si le véhicule n'a aucun dégât en ce
+// moment) pour que la hauteur de ligne reste stable pendant la partie
+// plutôt que de sauter quand un dégât apparaît/disparaît.
+const ROW_BBOX = (() => {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const grow = (b) => {
+    minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.w); maxY = Math.max(maxY, b.y + b.h);
+  };
+  ["command", "diceboard", "small", "medium", "large"].forEach((k) => grow(boardBox(k)));
+  ["small", "medium", "large"].forEach((size) => {
+    grow(damageTokenBox(size, "damage1"));
+    grow(damageTokenBox(size, "damage2"));
+  });
+  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+})();
 const COMMAND_SLOT_FRACTION = {
   // Pas encore câblés cette tranche (Command reste sur le panneau
   // texte) — géométrie calée par anticipation pour la prochaine.
@@ -474,8 +498,41 @@ function dieMarkup(value, color, x, y, size, extraAttrs, rotationDeg) {
 // Les valeurs en double (ex. deux 4) sont réconciliées par comptage,
 // pas par égalité stricte — un slot n'est vidé que si le pool a
 // réellement moins d'occurrences de sa valeur qu'avant.
+// Pool "visuel" d'un joueur : identique au vrai pool
+// (G.roundState.dicePool) tant que rien n'est encore posé, MAIS avec
+// les dés déjà posés sur un dashboard (ANY/COAST/Command — sel.dieValue
+// une fois sel.car choisi, sel.commandDieValue une fois choisi) retirés
+// visuellement, même si le moteur ne les retire réellement du pool
+// qu'au commit. Sans ça, un dé posé restait dupliqué : visible à la
+// fois sur le diceboard ET sur le dashboard où il vient d'être posé.
+function visualDicePool(playerName) {
+  const pool = [...(G.roundState.dicePool[playerName] || [])];
+  if (playerName === HUMAN) {
+    if (sel.car) {
+      const i = pool.indexOf(sel.dieValue);
+      if (i !== -1) pool.splice(i, 1);
+    }
+    if (sel.commandDieValue !== undefined && sel.commandDieValue !== null) {
+      const i = pool.indexOf(sel.commandDieValue);
+      if (i !== -1) pool.splice(i, 1);
+    }
+  }
+  return pool;
+}
+
+// Réconcilie l'état visuel des 4 emplacements du diceboard d'un
+// joueur avec son pool VISUEL (voir visualDicePool ci-dessus) pour CE
+// round. Ré-initialisé au changement de round (les 4 dés fraîchement
+// lancés reprennent l'ordre du tableau, gauche à droite). Dans le
+// même round, un slot ne bouge JAMAIS tant que sa valeur reste dans
+// le pool — seul un dé réellement assigné (retiré du pool, réellement
+// ou visuellement) vide son emplacement, plutôt que de faire glisser
+// visuellement les autres dés vers la gauche à chaque pose.
+// Les valeurs en double (ex. deux 4) sont réconciliées par comptage,
+// pas par égalité stricte — un slot n'est vidé que si le pool a
+// réellement moins d'occurrences de sa valeur qu'avant.
 function diceboardSlots(playerName) {
-  const pool = G.roundState.dicePool[playerName] || [];
+  const pool = visualDicePool(playerName);
   const state = diceboardSlotState[playerName];
   const remaining = new Map(); // valeur -> nombre d'occurrences dans le pool actuel
   pool.forEach((v) => remaining.set(v, (remaining.get(v) || 0) + 1));
@@ -530,6 +587,24 @@ function renderDashboards() {
   const clickableCars = carStep ? (ctx.mode === "coast" ? ctx.coastableCars : ctx.activatableCars) : [];
   const clickableCarSet = new Set(clickableCars);
 
+  const commandDieStep = !!(ctx && ctx.canPlay && sel.step === "command-die");
+  const commandTypeStep = !!(ctx && ctx.canPlay && sel.step === "command");
+  const repairTargetStep = !!(ctx && ctx.canPlay && sel.step === "repair-target");
+  // Types de Command éligibles pour le dé déjà choisi (sel.commandDieValue)
+  // — EXACTEMENT le même appel que le panneau texte (voir renderPanel,
+  // step "command"), jamais une règle recalculée ici.
+  const eligibleCommandTypes = commandTypeStep
+    ? new Set(getAvailableCommands(
+        [sel.commandDieValue],
+        G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0)
+      ).map((c) => c.type))
+    : new Set();
+  // Véhicules réparables du joueur (Repair) — même filtre que le
+  // panneau texte (voir renderPanel, step "repair-target").
+  const myRepairable = repairTargetStep
+    ? new Set(G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0))
+    : new Set();
+
   const order = cp ? [cp, ...PLAYER_NAMES.filter((p) => p !== cp)] : PLAYER_NAMES;
 
   let maxRight = 0;
@@ -542,13 +617,46 @@ function renderDashboards() {
     const rowOriginX = -ROW_BBOX.minX;
     const rowOriginY = rowIndex * (ROW_BBOX.h + PLAYER_ROW_GAP) - ROW_BBOX.minY;
     const at = (kind) => { const b = boardBox(kind); return { x: rowOriginX + b.x, y: rowOriginY + b.y, w: b.w, h: b.h }; };
+    const atDamage = (size, slotKey) => { const b = damageTokenBox(size, slotKey); return { x: rowOriginX + b.x, y: rowOriginY + b.y, w: b.w, h: b.h }; };
 
     // --- Command board : ancre de la ligne, dessiné en premier (en
-    // dessous des autres à l'emboîtement) — slots pas encore câblés
-    // cette tranche ---
+    // dessous des autres à l'emboîtement) ---
     const cmd = at("command");
     const cmdPath = dashboardImagePath(playerName, "command");
     svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${cmd.x.toFixed(1)}" y="${cmd.y.toFixed(1)}" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" pointer-events="none"/>`);
+
+    // Slots Command (Nitro/Drift/Repair/Airstrike) : cliquables
+    // uniquement à l'étape "command", et seulement ceux compatibles
+    // avec le dé déjà choisi (eligibleCommandTypes, calculé plus haut
+    // via la même fonction que le panneau texte).
+    if (playerName === HUMAN && commandTypeStep) {
+      ["nitro", "drift", "repair", "airstrike"].forEach((type) => {
+        if (!eligibleCommandTypes.has(type)) return;
+        const f = COMMAND_SLOT_FRACTION[type];
+        const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
+        const sx = cx - DIE_DISPLAY_SIZE / 2, sy = cy - DIE_DISPLAY_SIZE / 2;
+        const rotAttr = SLOT_ROTATION[type] ? ` transform="rotate(${SLOT_ROTATION[type]} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
+        svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
+        svg.lastElementChild.addEventListener("click", () => { pickCommandChoice(type); render(); });
+      });
+    }
+
+    // Dé de Command déjà posé (couche de présentation, comme pour
+    // ANY/COAST — voir spec-dashboards.md section 1). Visible dès que
+    // le type est choisi (repair-target/airstrike-placement/
+    // airstrike-shoot-arc/commit), reclic dessus = annuler (même
+    // cancelSelection() que partout ailleurs, reset complet du tour —
+    // comportement déjà existant, pas nouveau).
+    if (playerName === HUMAN && ctx && sel.commandType) {
+      const f = COMMAND_SLOT_FRACTION[sel.commandType];
+      const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
+      const dieX = cx - DIE_DISPLAY_SIZE / 2, dieY = cy - DIE_DISPLAY_SIZE / 2;
+      const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
+      svg.insertAdjacentHTML("beforeend", dieMarkup(sel.commandDieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[sel.commandType]));
+      if (isCancelable) {
+        svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
+      }
+    }
 
     // --- Diceboard : juste en dessous du command board (retour de
     // Mayrik) — vraie image, 4 emplacements droits. Réconcilié avec le
@@ -562,10 +670,11 @@ function renderDashboards() {
       const slotKey = "slot" + i;
       const f = DICEBOARD_SLOT_FRACTION[slotKey];
       const dx = dice.x + f.x * dice.w - DIE_DISPLAY_SIZE / 2, dy = dice.y + f.y * dice.h - DIE_DISPLAY_SIZE / 2;
-      const isClickable = playerName === HUMAN && dieStep;
+      const isClickable = playerName === HUMAN && (dieStep || commandDieStep);
       svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
       if (isClickable) {
-        svg.lastElementChild.addEventListener("click", () => { pickDie(value); render(); });
+        const handler = dieStep ? (() => { pickDie(value); render(); }) : (() => { pickCommandDieChoice(value); render(); });
+        svg.lastElementChild.addEventListener("click", handler);
       }
     });
 
@@ -585,6 +694,29 @@ function renderDashboards() {
       }
       // Véhicule éliminé (car === undefined ici) -> emplacement laissé
       // vide, voir spec-dashboards.md section 2.
+
+      // Jetons dégât stockés sous le dashboard — priorité gauche
+      // (damage1), toujours face cachée (damage-front.webp, générique
+      // quel que soit le type réel, voir spec section 2). Cliquables
+      // pendant l'étape Repair (repair-target) : cible = le VÉHICULE,
+      // pas le jeton précis (voir pickRepairTarget dans renderPanel —
+      // même comportement, un clic sur l'un ou l'autre des deux jetons
+      // d'un même véhicule répare ce véhicule).
+      if (car) {
+        const damagePath = "../images/damage/damage-front.webp";
+        const isRepairable = playerName === HUMAN && repairTargetStep && myRepairable.has(car);
+        const attachRepairClick = (el) => { if (isRepairable) el.addEventListener("click", () => { pickRepairTarget(car); render(); }); };
+        if (car.damageTokens.length >= 1) {
+          const d1 = atDamage(size, "damage1");
+          svg.insertAdjacentHTML("beforeend", `<image href="${damagePath}" xlink:href="${damagePath}" x="${d1.x.toFixed(1)}" y="${d1.y.toFixed(1)}" width="${d1.w.toFixed(1)}" height="${d1.h.toFixed(1)}" class="${isRepairable ? "clickable" : ""}" ${isRepairable ? "" : 'pointer-events="none"'}/>`);
+          attachRepairClick(svg.lastElementChild);
+        }
+        if (car.damageTokens.length >= 2) {
+          const d2 = atDamage(size, "damage2");
+          svg.insertAdjacentHTML("beforeend", `<image href="${damagePath}" xlink:href="${damagePath}" x="${d2.x.toFixed(1)}" y="${d2.y.toFixed(1)}" width="${d2.w.toFixed(1)}" height="${d2.h.toFixed(1)}" class="${isRepairable ? "clickable" : ""}" ${isRepairable ? "" : 'pointer-events="none"'}/>`);
+          attachRepairClick(svg.lastElementChild);
+        }
+      }
 
       if (car && !isInoperable && playerName === HUMAN && clickableCarSet.has(car)) {
         const slotKey = ctx.mode === "coast" ? (car.coastCount === 0 ? "coast1" : "coast2") : "any";
