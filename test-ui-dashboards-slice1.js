@@ -58,9 +58,13 @@ console.log("Command disponible -> étape 'command-die' (attendu true) :", sel.s
 
 win.render();
 clickables = dashboardClickables(dom);
-console.log("Le dé posé sur le dashboard medium reste cliquable pour annuler (attendu true) :", clickables.length === 1);
+console.log("4 éléments cliquables : 3 dés restants (Command) + le dé posé (annulation) (attendu true) :", clickables.length === 4);
 
-click(dom, clickables[0]);
+// Le dé posé (cancelable) est inséré APRÈS les dés du diceboard dans
+// l'ordre du DOM (diceboard dessiné avant la boucle des véhicules) —
+// donc le dernier élément cliquable de la liste.
+const posedDie = clickables[clickables.length - 1];
+click(dom, posedDie);
 sel = win.eval("sel");
 console.log("Annulation : retour à l'étape 'die', sel.car vidé (attendu true) :", sel.step === "die" && !sel.car);
 
@@ -162,5 +166,114 @@ console.log("Les 3 positions des dés restants n'ont PAS bougé (attendu true) :
   slots.map((v, i) => (v === 3 ? true : v === slots2[i])).every(Boolean));
 console.log("Exactement un emplacement est maintenant vide (attendu true) :",
   slots2.filter((v) => v === null).length === 1);
+
+section("Test 6 — Jetons dégât : rendu sous le dashboard, priorité gauche, face générique");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const noDmg = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
+const oneDmg = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
+oneDmg.damageTokens = ["dent"];
+const twoDmg = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2);
+twoDmg.damageTokens = ["dent", "shrapnel"];
+G.allCars.push(noDmg, oneDmg, twoDmg);
+win.render();
+
+const dashboardsEl = dom.window.document.getElementById("dashboards");
+const dmgCount = [...dashboardsEl.querySelectorAll("image")].filter((img) => img.getAttribute("href").includes("damage-front.webp")).length;
+console.log("Exactement 3 images damage-front.webp au total (0 pour SMALL + 1 pour MEDIUM + 2 pour LARGE) (attendu true) :", dmgCount === 3);
+console.log("Aucun type de dégât révélé dans le rendu (dent/shrapnel) (attendu true) :", !dashboardsEl.innerHTML.includes("damage-dent") && !dashboardsEl.innerHTML.includes("damage-shrapnel"));
+
+section("Test 7 — Command board : Drift (die 3, pas de sous-étape) jusqu'au commit");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s7 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
+const m7 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
+const l7 = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2);
+G.allCars.push(s7, m7, l7);
+G.roundState.dicePool[HUMAN] = [4, 3, 3, 1];
+G.roundState.commandUsedThisRound[HUMAN] = false;
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+
+win.pickDie(4);
+win.render();
+win.pickCar(m7); // dé 4 posé sur medium (ANY)
+win.render();
+clickables = dashboardClickables(dom);
+console.log("3 dés restants cliquables pour Command après pose ANY (attendu true) :", clickables.length - 1 === 3);
+
+// Clique le dé "3" restant (pip count = 3) pour le consacrer à une Command.
+const dieByPips = (n) => clickables.find((el) => el.querySelectorAll("image").length - 1 === n);
+click(dom, dieByPips(3));
+sel = win.eval("sel");
+console.log("Étape passée à 'command' (attendu true) :", sel.step === "command");
+console.log("commandDieValue = 3 (attendu true) :", sel.commandDieValue === 3);
+
+win.render();
+clickables = dashboardClickables(dom);
+console.log("Slots Command éligibles pour un dé 3 (nitro+drift+airstrike) + le dé ANY posé (toujours annulable) (attendu true) :", clickables.length === 4);
+
+click(dom, clickables[1]); // ordre de rendu : nitro, drift, repair, airstrike -> drift = 2e éligible ici
+sel = win.eval("sel");
+console.log("Type Command choisi = 'drift' (attendu true) :", sel.commandType === "drift");
+console.log("Drift n'a pas de sous-étape -> commit direct (attendu true) :", sel.step === "commit");
+console.log("sel.command bien construit (attendu true) :", sel.command && sel.command.type === "drift" && sel.command.dieValue === 3);
+
+win.render();
+const dashHtml7 = dom.window.document.getElementById("dashboards").innerHTML;
+console.log("Le dé de Command (tourné 45°) est visible sur le command board (attendu true) :", dashHtml7.includes("rotate(45"));
+
+section("Test 8 — Command board : Repair (die 6) — clic sur un jeton dégât visible");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s8 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
+const m8 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
+m8.damageTokens = ["dent"]; // réparable
+const l8 = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2);
+G.allCars.push(s8, m8, l8);
+G.roundState.dicePool[HUMAN] = [6, 3, 1, 1];
+G.roundState.commandUsedThisRound[HUMAN] = false;
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+
+win.pickDie(3);
+win.render();
+win.pickCar(s8); // active un AUTRE véhicule (small) que celui endommagé (medium)
+win.render();
+clickables = dashboardClickables(dom);
+const dieByPips8 = (n) => clickables.find((el) => el.querySelectorAll && el.tagName === "g" && el.querySelectorAll("image").length - 1 === n);
+click(dom, dieByPips8(6)); // consacre le dé 6 à une Command
+sel = win.eval("sel");
+console.log("commandDieValue = 6 (attendu true) :", sel.commandDieValue === 6);
+
+win.render();
+clickables = dashboardClickables(dom);
+console.log("2 slots Command éligibles (repair + airstrike) + le dé ANY posé (attendu true) :", clickables.length === 3);
+click(dom, clickables[0]); // ordre de rendu : nitro, drift, repair, airstrike -> repair = 1er éligible ici
+sel = win.eval("sel");
+console.log("Étape passée à 'repair-target' (attendu true) :", sel.step === "repair-target");
+
+win.render();
+const repairClickables = [...dom.window.document.querySelectorAll("#dashboards .clickable")].filter((el) => el.tagName === "image");
+console.log("1 jeton dégât cliquable (celui du véhicule medium) (attendu true) :", repairClickables.length === 1);
+
+click(dom, repairClickables[0]);
+sel = win.eval("sel");
+console.log("Repair cible bien le véhicule medium (attendu true) :", sel.command && sel.command.type === "repair" && sel.command.target === m8);
+console.log("Étape passée à 'commit' (attendu true) :", sel.step === "commit");
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
