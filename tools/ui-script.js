@@ -707,6 +707,14 @@ function renderDashboards() {
       const f = DICEBOARD_SLOT_FRACTION[slotKey];
       const dx = dice.x + f.x * dice.w - DIE_DISPLAY_SIZE / 2, dy = dice.y + f.y * dice.h - DIE_DISPLAY_SIZE / 2;
       const isClickable = playerName === HUMAN && (dieStep || commandDieStep);
+      if (isClickable) {
+        // Halo vert (même convention que les slots ANY/COAST/Command et
+        // les jetons dégât réparables) : sans lui, rien ne distinguait
+        // visuellement un dé sélectionnable d'un dé juste affiché,
+        // retour de Mayrik.
+        const pad = DIE_DISPLAY_SIZE * 0.18;
+        svg.insertAdjacentHTML("beforeend", `<rect x="${(dx - pad).toFixed(1)}" y="${(dy - pad).toFixed(1)}" width="${(DIE_DISPLAY_SIZE + pad * 2).toFixed(1)}" height="${(DIE_DISPLAY_SIZE + pad * 2).toFixed(1)}" rx="4" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"/>`);
+      }
       svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
       if (isClickable) {
         const handler = dieStep ? (() => { pickDie(value); render(); }) : (() => { pickCommandDieChoice(value); render(); });
@@ -778,7 +786,12 @@ function renderDashboards() {
       // exactement comme le bouton "Annuler" déjà utilisé par le
       // panneau texte (cancelSelection() gère déjà son propre render()).
       if (car && ctx && sel.car === car) {
-        const slotKey = ctx.mode === "coast" ? "coast1" : "any";
+        // sel.mode (pas ctx.mode) : ctx est recalculé à chaque rendu à
+        // partir du pool RÉEL, qui a déjà changé une fois le commit
+        // automatique passé (retour de Mayrik, plus de confirmation) —
+        // sel.mode, lui, reste fidèle à la décision effectivement
+        // prise, quel que soit l'état du pool au moment du rendu.
+        const slotKey = sel.mode === "coast" ? "coast1" : "any";
         const f = VEHICLE_SLOT_FRACTION[size][slotKey];
         const dieX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
         const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
@@ -1087,7 +1100,14 @@ function pickDie(dieValue) {
 
 function pickCar(car) {
   sel.car = car;
-  sel.step = (sel.mode === "assign" && sel.commandAvailable) ? "command-die" : "commit";
+  // Retour de Mayrik : plus de confirmation "Commencer le mouvement" —
+  // si aucune Command n'est possible, on committe directement (les
+  // cases de destination apparaissent tout de suite).
+  if (sel.mode === "assign" && sel.commandAvailable) {
+    sel.step = "command-die";
+  } else {
+    commitAssignAndCommand();
+  }
 }
 
 // ===================================================================
@@ -1103,7 +1123,7 @@ function pickCar(car) {
 function pickCommandDieChoice(dieValue) {
   if (dieValue === null) {
     sel.command = null;
-    sel.step = "commit";
+    commitAssignAndCommand();
     return;
   }
   sel.commandDieValue = dieValue;
@@ -1122,7 +1142,7 @@ function pickCommandChoice(type) {
     sel.step = "airstrike-placement"; // plus d'étape de "cible visée" séparée (retour de Mayrik) — la cible se choisit directement en désignant une case de l'arc avant du chopper, une fois posé
   } else {
     sel.command = { type, dieValue: sel.commandDieValue };
-    sel.step = "commit";
+    commitAssignAndCommand();
   }
 }
 
@@ -1132,7 +1152,7 @@ function pickCommandChoice(type) {
 // texte, retire un jeton quelconque) — voir engine.js:repairCar.
 function pickRepairTarget(target, tokenValue) {
   sel.command = { type: "repair", dieValue: 6, target, tokenValue };
-  sel.step = "commit";
+  commitAssignAndCommand();
 }
 
 // Airstrike (p.8) — nouveau flux en 2 étapes au lieu de 3 (retour de
@@ -1152,7 +1172,7 @@ function pickAirstrikePlacement(col, row) {
     // Rien à viser depuis cette case -> aucune raison de demander quoi
     // que ce soit (même logique que le tir normal sans cible).
     sel.command = { type: "airstrike", dieValue: sel.commandDieValue, target: null, placement: { col, row } };
-    sel.step = "commit";
+    commitAssignAndCommand();
     return;
   }
   sel.step = "airstrike-shoot-arc";
@@ -1163,12 +1183,12 @@ function pickAirstrikeShootCell(col, row) {
     (c) => c.col === col && c.row === row && c.owner !== HUMAN && c.status !== CAR_STATUS.ELIMINATED && !c.isChopper
   ) || null; // case vide cliquée -> null -> pas de tir
   sel.command = { type: "airstrike", dieValue: sel.commandDieValue, target, placement: sel.airstrikePlacement };
-  sel.step = "commit";
+  commitAssignAndCommand();
 }
 
 function declineAirstrikeShoot() {
   sel.command = { type: "airstrike", dieValue: sel.commandDieValue, target: null, placement: sel.airstrikePlacement };
-  sel.step = "commit";
+  commitAssignAndCommand();
 }
 
 // ===================================================================
@@ -1821,6 +1841,18 @@ function renderBoard() {
     // la voiture du joueur.
     const chopper = G.allChoppers.find((c) => c.owner === HUMAN);
     const hypotheticalChopper = { ...chopper, ...sel.airstrikePlacement };
+    // Affiche le chopper à sa position choisie (retour de Mayrik :
+    // manquait totalement — le vrai placement n'a lieu qu'au commit,
+    // donc rien ne le montrait avant). Purement visuel, jamais mutée
+    // ici (voir hypotheticalChopper ci-dessus, déjà utilisé pour le
+    // calcul des cibles sans muter le vrai chopper).
+    const chX = cellCenter(sel.airstrikePlacement.col, sel.airstrikePlacement.row);
+    const chImgPath = chopperImagePath(hypotheticalChopper);
+    const chx = chX.cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, chy = chX.cy - CAR_IMG_H / 2;
+    svg.insertAdjacentHTML("beforeend", `<g>
+      ${carShadowMarkup(chImgPath, chx, chy, false)}
+      <image href="${chImgPath}" xlink:href="${chImgPath}" x="${chx.toFixed(1)}" y="${chy.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" pointer-events="none"/>
+    </g>`);
     const targets = getShootTargetOptions(hypotheticalChopper, G.allCars);
     drawShootMarkers(
       targets,
@@ -1828,6 +1860,33 @@ function renderBoard() {
       (t) => pickAirstrikeShootCell(t.col, t.row),
       () => declineAirstrikeShoot()
     );
+  }
+
+  // Décision de relance de Slam (p.9) : marker-reroll au centre de la
+  // case où le Slam a lieu (topCar/bottomCar partagent réellement
+  // cette case pendant la pause, voir plus haut), marker-no derrière
+  // le véhicule qui décide (largerCar) — même convention que partout
+  // ailleurs. Couvre les deux mécanismes de pause existants (pendant
+  // le propre tour du joueur, ou pendant celui de l'IA quand une
+  // voiture du joueur plus grande est impliquée) — jamais réécrits
+  // ici, juste câblés visuellement (retour de Mayrik : objectif à
+  // terme de retirer une bonne partie des textes de l'UI).
+  const pendingSlam = (sel.pendingHumanSlam && sel.pendingHumanSlam.ctx) ? { ctx: sel.pendingHumanSlam.ctx, resume: resumeHumanSlamRerollChoice }
+    : (G.aiPending && G.aiPending.ctx) ? { ctx: G.aiPending.ctx, resume: resumeAiSlamRerollChoice }
+    : null;
+  if (pendingSlam) {
+    const { ctx, resume } = pendingSlam;
+    const { cx, cy } = cellCenter(ctx.topCar.col, ctx.topCar.row);
+    const rerollPath = "../images/markers/marker-reroll.webp";
+    svg.insertAdjacentHTML("beforeend", `<image href="${rerollPath}" xlink:href="${rerollPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+    svg.lastElementChild.addEventListener("click", () => { resume(true); render(); });
+    const rear = getRearArc(ctx.largerCar).find((a) => a.name === "rear");
+    if (rear && isOnBoard(board(), rear.col, rear.row)) {
+      const rc = cellCenter(rear.col, rear.row);
+      const noPath = "../images/markers/marker-no.webp";
+      svg.insertAdjacentHTML("beforeend", `<image href="${noPath}" xlink:href="${noPath}" x="${(rc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      svg.lastElementChild.addEventListener("click", () => { resume(false); render(); });
+    }
   }
 }
 
@@ -1959,15 +2018,6 @@ function renderPanel() {
     p.textContent = "Chopper placé — cliquez une case surlignée (son arc avant) pour tirer dessus si elle est occupée, ou :";
     panel.appendChild(p);
     choices.appendChild(choiceButton("Ne pas tirer", () => { declineAirstrikeShoot(); render(); }));
-  } else if (sel.step === "commit") {
-    const p = document.createElement("div");
-    p.textContent = `Prêt : ${sel.car.size}, dé ${sel.dieValue}${sel.command ? ", Command " + sel.command.type + " (dé " + sel.command.dieValue + ")" : ""}. Le tour va commencer — plus d'annulation possible au-delà.`;
-    panel.appendChild(p);
-    const btn = document.createElement("button");
-    btn.className = "primary";
-    btn.textContent = "Commencer le mouvement";
-    btn.addEventListener("click", () => { commitAssignAndCommand(); render(); });
-    panel.appendChild(btn);
   } else if (sel.step === "entry-row") {
     const p = document.createElement("div");
     p.textContent = `Entrée en jeu — cliquez une case surlignée de la colonne d'entrée (${sel.remaining} point(s) de mouvement disponibles).`;
