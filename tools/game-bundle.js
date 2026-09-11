@@ -2399,8 +2399,12 @@ function resolveShoot(tile, allCars, shooter, target, options = {}) {
 }
 
 // Commande Repair (p.8, dé = 6) : retire un dégât et rend
-// l'opérabilité si la voiture était inopérable.
-function repairCar(car) {
+// l'opérabilité si la voiture était inopérable. tokenValue (optionnel)
+// = valeur précise du jeton à retirer, choisie par le JOUEUR humain
+// (voir tools/ui-script.js, clic direct sur un jeton visible) — l'IA
+// et le vieux panneau texte n'en passent pas, comportement inchangé
+// (retire le dernier jeton du tableau) dans ce cas.
+function repairCar(car, tokenValue) {
   const log = [];
 
   if (car.status === CAR_STATUS.ELIMINATED) {
@@ -2413,7 +2417,13 @@ function repairCar(car) {
     return { log, repaired: false };
   }
 
-  car.damageTokens.pop(); // remis dans la pile de jetons — pas modélisé ici (pas encore de pile globale)
+  if (tokenValue !== undefined) {
+    const idx = car.damageTokens.indexOf(tokenValue);
+    if (idx !== -1) car.damageTokens.splice(idx, 1);
+    else car.damageTokens.pop(); // filet de sécurité si jamais la valeur ne correspond à rien (ne devrait pas arriver)
+  } else {
+    car.damageTokens.pop(); // remis dans la pile de jetons — pas modélisé ici (pas encore de pile globale)
+  }
   log.push(`${car.id} répare un dégât (reste : ${car.damageTokens.length}/2)`);
 
   if (car.status === CAR_STATUS.INOPERABLE && car.damageTokens.length < 2) {
@@ -2507,11 +2517,11 @@ function resolveDriftCommand(dieValue) {
 
 // REPAIR (dé 6, p.8) : valide le dé, puis délègue à repairCar() déjà
 // existant et testé.
-function resolveRepairCommand(dieValue, car) {
+function resolveRepairCommand(dieValue, car, tokenValue) {
   if (dieValue !== 6) {
     return { ok: false, reason: "Repair nécessite un dé de valeur 6." };
   }
-  return { ok: true, ...repairCar(car) };
+  return { ok: true, ...repairCar(car, tokenValue) };
 }
 
 // -----------------------------------------------------------------
@@ -5930,7 +5940,7 @@ function executeDecision(progressionState, roundState, allCars, allChoppers, pla
       const r = resolveNitroCommand(command.dieValue);
       if (r.ok) effectiveDieValue += r.bonus;
     } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target);
+      resolveRepairCommand(command.dieValue, command.target, command.tokenValue);
     } else if (command.type === "drift") {
       const r = resolveDriftCommand(command.dieValue);
       if (r.ok) slamOptions.driftAvailable = true;
@@ -6023,7 +6033,7 @@ function* executeDecisionGen(progressionState, roundState, allCars, allChoppers,
       const r = resolveNitroCommand(command.dieValue);
       if (r.ok) effectiveDieValue += r.bonus;
     } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target);
+      resolveRepairCommand(command.dieValue, command.target, command.tokenValue);
     } else if (command.type === "drift") {
       const r = resolveDriftCommand(command.dieValue);
       if (r.ok) slamOptions.driftAvailable = true;
@@ -6111,7 +6121,7 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
       const r = resolveNitroCommand(command.dieValue);
       if (r.ok) effectiveDieValue += r.bonus;
     } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target);
+      resolveRepairCommand(command.dieValue, command.target, command.tokenValue);
     } else if (command.type === "drift") {
       const r = resolveDriftCommand(command.dieValue);
       if (r.ok) slamOptions.driftAvailable = true;

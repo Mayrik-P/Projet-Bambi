@@ -520,6 +520,42 @@ function visualDicePool(playerName) {
   return pool;
 }
 
+// Réconcilie les 2 emplacements dégât (gauche/droite) d'UN véhicule
+// avec son car.damageTokens réel. Règle : un jeton déjà en place (côté
+// gauche ou droit) y reste tant qu'il est toujours dans
+// car.damageTokens — retiré uniquement s'il en a réellement disparu
+// (Repair). Un jeton NOUVEAU (acquisition) va dans le 1er emplacement
+// libre, gauche en priorité — jamais l'inverse. Réconciliation par
+// comptage (comme diceboardSlots) pour bien gérer deux jetons de même
+// valeur (ex. deux "dent") sans ambiguïté.
+function damageSlots(car) {
+  const tokens = car.damageTokens || [];
+  if (!damageSlotState[car.id]) damageSlotState[car.id] = { left: null, right: null };
+  const state = damageSlotState[car.id];
+
+  const remaining = new Map();
+  tokens.forEach((v) => remaining.set(v, (remaining.get(v) || 0) + 1));
+
+  ["left", "right"].forEach((side) => {
+    const v = state[side];
+    if (v === null) return;
+    const left = remaining.get(v) || 0;
+    if (left <= 0) { state[side] = null; return; } // retiré depuis le dernier rendu (Repair)
+    remaining.set(v, left - 1); // toujours présent -> garde sa place
+  });
+
+  remaining.forEach((count, value) => {
+    for (let i = 0; i < count; i++) {
+      if (state.left === null) state.left = value;
+      else if (state.right === null) state.right = value;
+      // les deux emplacements sont pleins : ne devrait pas arriver
+      // (2 jetons = inopérable, jamais 3), ignoré par sécurité.
+    }
+  });
+
+  return state;
+}
+
 // Réconcilie l'état visuel des 4 emplacements du diceboard d'un
 // joueur avec son pool VISUEL (voir visualDicePool ci-dessus) pour CE
 // round. Ré-initialisé au changement de round (les 4 dés fraîchement
@@ -695,30 +731,31 @@ function renderDashboards() {
       // Véhicule éliminé (car === undefined ici) -> emplacement laissé
       // vide, voir spec-dashboards.md section 2.
 
-      // Jetons dégât stockés sous le dashboard — priorité gauche
-      // (damage1), toujours face cachée (damage-front.webp, générique
-      // quel que soit le type réel, voir spec section 2). Cliquables
-      // pendant l'étape Repair (repair-target) : cible = le VÉHICULE,
-      // pas le jeton précis (voir pickRepairTarget dans renderPanel —
-      // même comportement, un clic sur l'un ou l'autre des deux jetons
-      // d'un même véhicule répare ce véhicule). Halo vert derrière
-      // (même couleur que les slots ANY/COAST/Command) quand cliquable
-      // — sans ça, rien ne distingue visuellement un jeton réparable
-      // d'un jeton juste affiché, retour de Mayrik.
+      // Jetons dégât stockés sous le dashboard — 2 emplacements STABLES
+      // (gauche/droite, voir damageSlots() plus haut) : la priorité
+      // gauche ne joue qu'à l'obtention d'un nouveau jeton ; au Repair,
+      // le joueur choisit LEQUEL il retire et l'autre garde sa place
+      // (retour de Mayrik — prépare l'extension à dégâts à effet
+      // persistant, où il faudra cibler un jeton précis). Toujours
+      // face cachée (damage-front.webp, générique quel que soit le
+      // type réel, voir spec section 2). Halo vert (même couleur que
+      // les slots ANY/COAST/Command) quand cliquable, sans quoi rien
+      // ne distingue visuellement un jeton réparable d'un jeton juste
+      // affiché (autre retour de Mayrik).
       if (car) {
         const damagePath = "../images/damage/damage-front.webp";
         const isRepairable = playerName === HUMAN && repairTargetStep && myRepairable.has(car);
-        const attachRepairClick = (el) => { if (isRepairable) el.addEventListener("click", () => { pickRepairTarget(car); render(); }); };
-        const drawToken = (box) => {
+        const drawToken = (box, tokenValue) => {
           if (isRepairable) {
             const pad = box.w * 0.18;
             svg.insertAdjacentHTML("beforeend", `<rect x="${(box.x - pad).toFixed(1)}" y="${(box.y - pad).toFixed(1)}" width="${(box.w + pad * 2).toFixed(1)}" height="${(box.h + pad * 2).toFixed(1)}" rx="6" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="2"/>`);
           }
           svg.insertAdjacentHTML("beforeend", `<image href="${damagePath}" xlink:href="${damagePath}" x="${box.x.toFixed(1)}" y="${box.y.toFixed(1)}" width="${box.w.toFixed(1)}" height="${box.h.toFixed(1)}" class="${isRepairable ? "clickable" : ""}" ${isRepairable ? "" : 'pointer-events="none"'}/>`);
-          attachRepairClick(svg.lastElementChild);
+          if (isRepairable) svg.lastElementChild.addEventListener("click", () => { pickRepairTarget(car, tokenValue); render(); });
         };
-        if (car.damageTokens.length >= 1) drawToken(atDamage(size, "damage1"));
-        if (car.damageTokens.length >= 2) drawToken(atDamage(size, "damage2"));
+        const slots = damageSlots(car);
+        if (slots.left !== null) drawToken(atDamage(size, "damage1"), slots.left);
+        if (slots.right !== null) drawToken(atDamage(size, "damage2"), slots.right);
       }
 
       if (car && !isInoperable && playerName === HUMAN && clickableCarSet.has(car)) {
@@ -770,6 +807,15 @@ let fullLog = []; // journal cumulé affiché sous le plateau
 // chaque rendu par diceboardSlots() ci-dessous, jamais lue par le
 // moteur. Forme : { [joueur]: { round, slots: [valeur|null, ...4] } }.
 let diceboardSlotState = {};
+// Même principe, pour les 2 emplacements dégât (gauche/droite) sous
+// chaque dashboard véhicule. Règle (retour de Mayrik) : la priorité
+// gauche ne joue qu'à L'OBTENTION d'un jeton (le nouveau va dans le
+// 1er emplacement libre, gauche d'abord) — au Repair, le joueur choisit
+// LEQUEL des deux il retire, et l'AUTRE garde sa place (ne glisse pas
+// vers la gauche). Important pour l'extension à venir (dégâts à effet
+// persistant, face visible en permanence) : il faudra pouvoir cibler
+// un jeton précis plutôt qu'un autre. Forme : { [car.id]: { left, right } }.
+let damageSlotState = {};
 let gameOver = false;
 let gameOverInfo = null;
 
@@ -1076,8 +1122,12 @@ function pickCommandChoice(type) {
   }
 }
 
-function pickRepairTarget(target) {
-  sel.command = { type: "repair", dieValue: 6, target };
+// tokenValue (optionnel) : jeton précis choisi par le joueur (clic
+// direct sur l'un des deux visuels sous le dashboard — voir
+// renderDashboards). Absent = comportement générique (vieux panneau
+// texte, retire un jeton quelconque) — voir engine.js:repairCar.
+function pickRepairTarget(target, tokenValue) {
+  sel.command = { type: "repair", dieValue: 6, target, tokenValue };
   sel.step = "commit";
 }
 
