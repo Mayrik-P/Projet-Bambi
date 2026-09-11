@@ -327,4 +327,68 @@ console.log("'dent' (gauche) toujours présent, 'shrapnel' (droite) retiré (att
 const slots9b = win.eval('damageSlots(G.allCars.find(c => c.id === ' + m9.id + '))');
 console.log("'dent' reste bien à GAUCHE (ne glisse pas) après le retrait de 'shrapnel' (attendu true) :", slots9b.left === "dent" && slots9b.right === null);
 
+section("Test 10 — Phase de tir : marqueur de cible + refus, sur le plateau");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+const shooter = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 2);
+const enemy = win.createCar(OPPONENT, CAR_SIZE.SMALL, 6, 2); // pile devant (front)
+G.allCars.push(shooter, enemy);
+win.resetSelection();
+sel = win.eval("sel");
+sel.car = shooter;
+sel.shootTargets = win.eval("getShootTargetOptions")(shooter, G.allCars);
+sel.step = "shoot";
+win.render();
+
+const boardEl = dom.window.document.getElementById("board");
+const targetImgs = [...boardEl.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("target-small"));
+console.log("Le marqueur target-small est affiché sur l'ennemi à portée (attendu true) :", targetImgs.length === 1);
+
+const declineImgs = [...boardEl.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-no.webp"));
+console.log("Le marqueur marker-no est affiché derrière le tireur (attendu true) :", declineImgs.length === 1);
+
+click(dom, targetImgs[0]);
+console.log("Le clic sur la cible a bien déclenché une résolution (véhicule ennemi touché ou statut changé, ou étape terminée) (attendu true) :", win.eval("sel").step !== "shoot" || enemy.damageTokens.length > 0);
+
+section("Test 11 — Arc de tir Airstrike : marqueurs de cible + refus, même arc entièrement occupé");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+// 3 ennemis occupent les 3 cases de l'arc avant du chopper posé en
+// (5,2) : front=(6,2), front-left=(5,1), front-right=(5,3) [rangée
+// paire -> diagColOffset=0, voir getFrontArc].
+const e1 = win.createCar(OPPONENT, CAR_SIZE.SMALL, 6, 2);
+const e2 = win.createCar(OPPONENT, CAR_SIZE.MEDIUM, 5, 1);
+const e3 = win.createCar(OPPONENT, CAR_SIZE.LARGE, 5, 3);
+G.allCars.push(e1, e2, e3);
+const chopper = win.createChopper(HUMAN);
+chopper.placed = true;
+chopper.col = 5; chopper.row = 2;
+G.allChoppers.push(chopper);
+win.resetSelection();
+sel = win.eval("sel");
+sel.car = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 4, 2); // panneau texte suppose sel.car défini (toujours vrai en vraie partie)
+sel.airstrikePlacement = { col: 5, row: 2 };
+sel.commandDieValue = 4;
+sel.step = "airstrike-shoot-arc";
+win.render();
+
+const boardEl2 = dom.window.document.getElementById("board");
+const targetSizes = ["small", "medium", "large"].map((sz) =>
+  [...boardEl2.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes(`target-${sz}.webp`)).length
+);
+console.log("Les 3 tailles de cible sont bien affichées (une par ennemi dans l'arc, arc entièrement occupé) (attendu true) :", JSON.stringify(targetSizes) === JSON.stringify([1, 1, 1]));
+
+const declineImgs2 = [...boardEl2.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-no.webp"));
+console.log("marker-no reste affiché même si les 3 cases de l'arc sont occupées (attendu true) :", declineImgs2.length === 1);
+
+click(dom, declineImgs2[0]);
+sel = win.eval("sel");
+console.log("Le refus appelle bien declineAirstrikeShoot (commandType airstrike, target null) (attendu true) :", sel.command && sel.command.type === "airstrike" && sel.command.target === null);
+
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
