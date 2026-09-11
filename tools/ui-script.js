@@ -307,19 +307,56 @@ function scaledSize(nativeW, nativeH) { return { w: nativeW * DASH_SCALE, h: nat
 // Taille affichée d'un dé — LA SEULE taille utilisée pour tout ce qui
 // est dé, que ce soit sur le diceboard ou posé sur un slot.
 const DIE_DISPLAY_SIZE = DIE_IMG_NATIVE * DASH_SCALE;
-// Hauteur commune de la ligne (le plus grand des 5 visuels à cette
-// échelle — le command board, plus haut que les autres) : sert à
-// centrer verticalement chaque visuel dans sa ligne et à empiler les
-// lignes des différents joueurs.
-const DASHBOARD_ROW_H = Math.max(
-  scaledSize(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H).h,
-  scaledSize(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H).h,
-  scaledSize(VEHICLE_DASH_NATIVE.small.w, VEHICLE_DASH_NATIVE.small.h).h,
-  scaledSize(VEHICLE_DASH_NATIVE.medium.w, VEHICLE_DASH_NATIVE.medium.h).h,
-  scaledSize(VEHICLE_DASH_NATIVE.large.w, VEHICLE_DASH_NATIVE.large.h).h
-);
-const DASH_GAP = 6;
 const PLAYER_ROW_GAP = 16;
+
+// Position de chaque board, en PIXELS NATIFS (avant mise à l'échelle
+// DASH_SCALE), relative au coin haut-gauche du command board — qui
+// sert d'ancre fixe à (0,0) : "tout à gauche de l'écran, zéro marge"
+// (retour de Mayrik). Le diceboard se place juste en dessous du
+// command board (pas dans la même ligne que les véhicules). Les
+// dashboards véhicule s'emboîtent les uns dans les autres par
+// chevauchement (encoches imprimées) — valeurs de départ = bords qui
+// se touchent SANS chevauchement, à caler précisément par Mayrik dans
+// son navigateur via tools/calage-dashboards-layout.html (même
+// principe clic + réglage fin que pour les slots).
+const BOARD_LAYOUT = {
+  diceboard: { x: 0, y: COMMAND_IMG_NATIVE_H },
+  small: { x: COMMAND_IMG_NATIVE_W, y: 0 },
+  medium: { x: COMMAND_IMG_NATIVE_W + VEHICLE_DASH_NATIVE.small.w, y: 0 },
+  large: { x: COMMAND_IMG_NATIVE_W + VEHICLE_DASH_NATIVE.small.w + VEHICLE_DASH_NATIVE.medium.w, y: 0 }
+};
+// Rectangle affiché (repère SVG local à une ligne, origine 0,0 =
+// coin haut-gauche du command board de CETTE ligne) pour l'un des 5
+// boards. "command" est toujours l'ancre ; les 4 autres viennent de
+// BOARD_LAYOUT.
+function boardBox(kind) {
+  if (kind === "command") {
+    const s = scaledSize(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
+    return { x: 0, y: 0, w: s.w, h: s.h };
+  }
+  if (kind === "diceboard") {
+    const s = scaledSize(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H);
+    return { x: BOARD_LAYOUT.diceboard.x * DASH_SCALE, y: BOARD_LAYOUT.diceboard.y * DASH_SCALE, w: s.w, h: s.h };
+  }
+  const native = VEHICLE_DASH_NATIVE[kind];
+  const s = scaledSize(native.w, native.h);
+  const off = BOARD_LAYOUT[kind];
+  return { x: off.x * DASH_SCALE, y: off.y * DASH_SCALE, w: s.w, h: s.h };
+}
+// Boîte englobante de TOUS les boards d'un même joueur (repère local
+// ci-dessus) — sert à empiler les lignes des différents joueurs sans
+// chevauchement entre joueurs, quelle que soit la géométrie exacte
+// une fois calée (y compris si un board déborde légèrement à gauche
+// ou au-dessus du command board).
+const ROW_BBOX = (() => {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  ["command", "diceboard", "small", "medium", "large"].forEach((k) => {
+    const b = boardBox(k);
+    minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.w); maxY = Math.max(maxY, b.y + b.h);
+  });
+  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+})();
 
 function dashboardImagePath(playerName, kind) {
   // kind: "command" | "diceboard" | "small" | "medium" | "large" | "<size>-inoperable"
@@ -493,50 +530,54 @@ function renderDashboards() {
 
   let maxRight = 0;
   order.forEach((playerName, rowIndex) => {
-    const rowTop = rowIndex * (DASHBOARD_ROW_H + PLAYER_ROW_GAP) + 10;
-    let x = 10;
-    // Centre verticalement un visuel de hauteur h dans la ligne.
-    const centerY = (h) => rowTop + (DASHBOARD_ROW_H - h) / 2;
+    // Origine de CETTE ligne, décalée pour que le point le plus en
+    // haut/à gauche de la boîte englobante (ROW_BBOX) tombe pile à la
+    // bonne place (0 pour la 1ère ligne, empilé ensuite) — général,
+    // fonctionne même si un board calé déborde légèrement au-dessus
+    // ou à gauche du command board.
+    const rowOriginX = -ROW_BBOX.minX;
+    const rowOriginY = rowIndex * (ROW_BBOX.h + PLAYER_ROW_GAP) - ROW_BBOX.minY;
+    const at = (kind) => { const b = boardBox(kind); return { x: rowOriginX + b.x, y: rowOriginY + b.y, w: b.w, h: b.h }; };
 
-    // --- Diceboard : vraie image, 4 emplacements droits (retour de
-    // Mayrik). Réconcilié avec le pool réel via diceboardSlots() —
-    // voir déclaration de diceboardSlotState plus haut.
-    const dice = scaledSize(DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H);
-    const diceY = centerY(dice.h);
+    // --- Command board : ancre de la ligne, dessiné en premier (en
+    // dessous des autres à l'emboîtement) — slots pas encore câblés
+    // cette tranche ---
+    const cmd = at("command");
+    const cmdPath = dashboardImagePath(playerName, "command");
+    svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${cmd.x.toFixed(1)}" y="${cmd.y.toFixed(1)}" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" pointer-events="none"/>`);
+
+    // --- Diceboard : juste en dessous du command board (retour de
+    // Mayrik) — vraie image, 4 emplacements droits. Réconcilié avec le
+    // pool réel via diceboardSlots() — voir diceboardSlotState plus
+    // haut. Dessiné APRÈS le command board (par-dessus à l'emboîtement).
+    const dice = at("diceboard");
     const dicePath = dashboardImagePath(playerName, "diceboard");
-    svg.insertAdjacentHTML("beforeend", `<image href="${dicePath}" xlink:href="${dicePath}" x="${x.toFixed(1)}" y="${diceY.toFixed(1)}" width="${dice.w.toFixed(1)}" height="${dice.h.toFixed(1)}" pointer-events="none"/>`);
+    svg.insertAdjacentHTML("beforeend", `<image href="${dicePath}" xlink:href="${dicePath}" x="${dice.x.toFixed(1)}" y="${dice.y.toFixed(1)}" width="${dice.w.toFixed(1)}" height="${dice.h.toFixed(1)}" pointer-events="none"/>`);
     diceboardSlots(playerName).forEach((value, i) => {
       if (value === null) return;
       const slotKey = "slot" + i;
       const f = DICEBOARD_SLOT_FRACTION[slotKey];
-      const dx = x + f.x * dice.w - DIE_DISPLAY_SIZE / 2, dy = diceY + f.y * dice.h - DIE_DISPLAY_SIZE / 2;
+      const dx = dice.x + f.x * dice.w - DIE_DISPLAY_SIZE / 2, dy = dice.y + f.y * dice.h - DIE_DISPLAY_SIZE / 2;
       const isClickable = playerName === HUMAN && dieStep;
       svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
       if (isClickable) {
         svg.lastElementChild.addEventListener("click", () => { pickDie(value); render(); });
       }
     });
-    x += dice.w + DASH_GAP * 2;
 
-    // --- Command board (slots pas encore câblés cette tranche) ---
-    const cmd = scaledSize(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
-    const cmdY = centerY(cmd.h);
-    const cmdPath = dashboardImagePath(playerName, "command");
-    svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${x.toFixed(1)}" y="${cmdY.toFixed(1)}" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" pointer-events="none"/>`);
-    x += cmd.w + DASH_GAP;
-
-    // --- Dashboards véhicules, alignés small -> medium -> large ---
+    // --- Dashboards véhicules, emboîtés sur le bord droit du command
+    // board puis les uns dans les autres, dans l'ordre small -> medium
+    // -> large (retour de Mayrik) — chacun dessiné par-dessus le
+    // précédent pour l'effet d'encoche. ---
     ["small", "medium", "large"].forEach((size) => {
+      const dim = at(size);
       const car = G.allCars.find((c) => c.owner === playerName && c.size === size && c.status !== "eliminated");
-      const native = VEHICLE_DASH_NATIVE[size];
-      const dim = scaledSize(native.w, native.h);
-      const dimY = centerY(dim.h);
       const isInoperable = !!(car && car.status === "inoperable");
       const kind = isInoperable ? `${size}-inoperable` : size;
 
       if (car) {
         const imgPath = dashboardImagePath(playerName, kind);
-        svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${dimY.toFixed(1)}" width="${dim.w.toFixed(1)}" height="${dim.h.toFixed(1)}" pointer-events="none"/>`);
+        svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${dim.x.toFixed(1)}" y="${dim.y.toFixed(1)}" width="${dim.w.toFixed(1)}" height="${dim.h.toFixed(1)}" pointer-events="none"/>`);
       }
       // Véhicule éliminé (car === undefined ici) -> emplacement laissé
       // vide, voir spec-dashboards.md section 2.
@@ -544,7 +585,7 @@ function renderDashboards() {
       if (car && !isInoperable && playerName === HUMAN && clickableCarSet.has(car)) {
         const slotKey = ctx.mode === "coast" ? (car.coastCount === 0 ? "coast1" : "coast2") : "any";
         const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const cx = x + f.x * dim.w, cy = dimY + f.y * dim.h;
+        const cx = dim.x + f.x * dim.w, cy = dim.y + f.y * dim.h;
         const sx = cx - DIE_DISPLAY_SIZE / 2, sy = cy - DIE_DISPLAY_SIZE / 2;
         const rotAttr = SLOT_ROTATION[slotKey] ? ` transform="rotate(${SLOT_ROTATION[slotKey]} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
         svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
@@ -559,21 +600,19 @@ function renderDashboards() {
       if (car && ctx && sel.car === car) {
         const slotKey = ctx.mode === "coast" ? "coast1" : "any";
         const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const dieX = x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dimY + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+        const dieX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
         const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
         svg.insertAdjacentHTML("beforeend", dieMarkup(sel.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
         if (isCancelable) {
           svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
         }
       }
-
-      x += dim.w + DASH_GAP;
     });
 
-    maxRight = Math.max(maxRight, x);
+    maxRight = Math.max(maxRight, rowOriginX + ROW_BBOX.maxX);
   });
 
-  const totalH = order.length * (DASHBOARD_ROW_H + PLAYER_ROW_GAP) + 10;
+  const totalH = order.length * (ROW_BBOX.h + PLAYER_ROW_GAP) + PLAYER_ROW_GAP;
   svg.setAttribute("viewBox", `0 0 ${maxRight} ${totalH}`);
 }
 

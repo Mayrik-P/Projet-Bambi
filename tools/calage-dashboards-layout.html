@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Outil de calage — emboîtement des Dashboards — Thunder Road Vendetta (usage unique)</title>
+<style>
+  body { background:#1a1a1f; color:#eee; font-family: system-ui, sans-serif; margin:0; padding:16px; }
+  h1 { font-size: 18px; color:#f5a623; margin: 0 0 4px; }
+  p.sub { color:#aaa; margin: 0 0 16px; font-size: 13px; line-height:1.5; }
+  .layout { display:flex; gap:20px; flex-wrap: wrap; align-items:flex-start; }
+  .board-wrap { flex: 1 1 700px; min-width: 320px; background:#111; border-radius:8px; padding:10px; overflow:auto; }
+  svg { width: 100%; height: auto; display:block; background:#000; cursor: crosshair; }
+  .panel { flex: 0 0 320px; background:#25252b; border-radius:8px; padding:14px; }
+  .group { border:1px solid #444; border-radius:6px; padding:10px; margin-bottom:14px; }
+  .group h2 { font-size:14px; margin:0 0 10px; color:#ffd166; }
+  .current { font-size:14px; font-weight:bold; color:#7fd858; margin-bottom:6px; }
+  ul#targetList { list-style:none; margin:0; padding:0; font-size:12px; }
+  ul#targetList li { padding:4px 6px; border-radius:4px; cursor:pointer; margin-bottom:2px; }
+  ul#targetList li:hover { background:#333; }
+  ul#targetList li.done { color:#7fd858; }
+  ul#targetList li.active { background:#3a3a1f; color:#ffd166; font-weight:bold; }
+  button { padding:10px; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:14px; }
+  button#copyBtn { width:100%; background:#f5a623; color:#111; margin-top:6px; }
+  button#copyBtn:active { background:#d9901a; }
+  button#resetBtn { width:100%; background:#555; color:#eee; margin-top:6px; }
+  button#btnValidate { width:100%; background:#3fae4f; color:#fff; margin-top:8px; }
+  button#btnCancelPending { width:100%; background:#555; color:#eee; margin-top:6px; font-weight:normal; font-size:12px; padding:6px; }
+  textarea#out { width:100%; height:180px; margin-top:10px; background:#111; color:#8f8; font-family: monospace; font-size:10.5px; border:1px solid #444; border-radius:6px; padding:8px; box-sizing:border-box; }
+  .hint { font-size:11px; color:#888; margin-top:4px; }
+  .padgrid { display:grid; grid-template-columns: 40px 40px 40px; grid-template-rows: 40px 40px 40px; gap:4px; justify-content:center; margin:8px 0; }
+  .padgrid button { background:#3a3a42; color:#ffd166; font-size:16px; padding:0; }
+  .padgrid button:active { background:#4a4a55; }
+  .padcenter { display:flex; align-items:center; justify-content:center; color:#666; font-size:11px; }
+  .coords { text-align:center; font-size:11px; color:#8fd0ff; font-variant-numeric: tabular-nums; margin-top:4px; }
+  .needclick { font-size:12px; color:#f5a623; text-align:center; padding:10px 0; }
+</style>
+</head>
+<body>
+
+<h1>Outil de calage — emboîtement des Dashboards</h1>
+<p class="sub">Le command board reste FIXE en haut à gauche (l'ancre — "tout à gauche, zéro marge"). Pour chaque autre board (diceboard, small, medium, large), clique sur le plateau à l'endroit où doit tomber son COIN HAUT-GAUCHE pour caler grossièrement, affine avec les flèches (Maj+flèche = pas plus large) ou le pavé, puis valide (Entrée). Chaque board est dessiné à sa vraie taille et par-dessus les précédents (même ordre que dans le jeu), donc tu vois directement l'emboîtement se former. Une fois les 4 cibles validées, « Copier les réglages » remplace <code>BOARD_LAYOUT</code> dans <code>tools/ui-script.js</code>.</p>
+
+<div class="layout">
+  <div class="board-wrap">
+    <svg id="board" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"></svg>
+  </div>
+
+  <div class="panel">
+    <div class="group">
+      <div class="current" id="currentLabel"></div>
+      <ul id="targetList"></ul>
+      <div class="hint">L'ordre d'empilement (quel board est dessiné par-dessus lequel) est fixe : command, puis diceboard, puis small, medium, large. Si l'emboîtement demande l'ordre inverse à un endroit, dis-le — c'est un changement d'une ligne.</div>
+    </div>
+
+    <div class="group" id="tuneGroup">
+      <h2>Réglage fin</h2>
+      <div id="needClickMsg" class="needclick">Clique d'abord sur le plateau pour caler grossièrement ce board.</div>
+      <div id="padWrap" style="display:none">
+        <div class="padgrid">
+          <div></div><button id="btnUp">▲</button><div></div>
+          <button id="btnLeft">◀</button><div class="padcenter">●</div><button id="btnRight">▶</button>
+          <div></div><button id="btnDown">▼</button><div></div>
+        </div>
+        <div class="coords" id="coordsReadout"></div>
+        <button id="btnValidate">Valider (Entrée)</button>
+        <button id="btnCancelPending">Recliquer ailleurs (Échap)</button>
+      </div>
+    </div>
+
+    <button id="resetBtn">Tout recommencer</button>
+    <button id="copyBtn">Copier les réglages</button>
+    <textarea id="out" readonly placeholder="Les valeurs copiées apparaîtront ici une fois les 4 boards validés..."></textarea>
+  </div>
+</div>
+
+<script>
+// --- Tailles natives + échelle (reprises de tools/ui-script.js) ---
+const COMMAND_IMG_NATIVE_W = 1293, COMMAND_IMG_NATIVE_H = 1134;
+const DICEBOARD_IMG_NATIVE_W = 913, DICEBOARD_IMG_NATIVE_H = 341;
+const VEHICLE_DASH_NATIVE = {
+  small: { w: 1409, h: 756 },
+  medium: { w: 1515, h: 756 },
+  large: { w: 1409, h: 756 }
+};
+// Échelle de confort pour ce calage (plus grande que dans le jeu) —
+// simple zoom, ne change aucune proportion (voir DASH_SCALE dans
+// ui-script.js).
+const CAL_SCALE = 0.35;
+function scaledSize(nativeW, nativeH) { return { w: nativeW * CAL_SCALE, h: nativeH * CAL_SCALE }; }
+const COLOR = "blue";
+
+const STEP_FINE = 1;
+const STEP_COARSE = 8;
+
+const NATIVE_SIZE = {
+  diceboard: { w: DICEBOARD_IMG_NATIVE_W, h: DICEBOARD_IMG_NATIVE_H },
+  small: VEHICLE_DASH_NATIVE.small,
+  medium: VEHICLE_DASH_NATIVE.medium,
+  large: VEHICLE_DASH_NATIVE.large
+};
+function imgPath(kind) {
+  if (kind === "command") return `../images/dashboards/command-${COLOR}.webp`;
+  if (kind === "diceboard") return `../images/dashboards/diceboard.webp`;
+  return `../images/dashboards/dashboard-${COLOR}-${kind}.webp`;
+}
+
+// Cibles à placer, dans l'ordre — c'est aussi l'ordre d'empilement
+// (chaque board dessiné par-dessus les précédents).
+const TARGETS = ["diceboard", "small", "medium", "large"];
+const LABELS = {
+  diceboard: "Diceboard (sous le command board)",
+  small: "Dashboard SMALL",
+  medium: "Dashboard MEDIUM",
+  large: "Dashboard LARGE"
+};
+
+let results = {}; // clé -> {x,y} en pixels NATIFS, relatif au coin haut-gauche du command board
+let pending = null; // idem, calage en cours pour la cible courante
+let currentIndex = 0;
+
+const svg = document.getElementById("board");
+function current() { return TARGETS[currentIndex]; }
+
+// Rectangle SVG (échelle CAL_SCALE) d'un board déjà validé ou en cours.
+function svgRect(kind, val) {
+  const s = scaledSize(NATIVE_SIZE[kind].w, NATIVE_SIZE[kind].h);
+  return { x: val.x * CAL_SCALE, y: val.y * CAL_SCALE, w: s.w, h: s.h };
+}
+
+function computeViewBox() {
+  const cmd = scaledSize(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
+  let minX = 0, minY = 0, maxX = cmd.w, maxY = cmd.h;
+  TARGETS.forEach((k, i) => {
+    const val = (i === currentIndex) ? pending : results[k];
+    if (!val) return;
+    const r = svgRect(k, val);
+    minX = Math.min(minX, r.x); minY = Math.min(minY, r.y);
+    maxX = Math.max(maxX, r.x + r.w); maxY = Math.max(maxY, r.y + r.h);
+  });
+  return { minX, minY, maxX, maxY };
+}
+
+function loadPendingForCurrent() {
+  const k = current();
+  pending = k ? (results[k] ? { ...results[k] } : null) : null;
+}
+
+function render() {
+  const vb = computeViewBox();
+  const pad = 20;
+  svg.setAttribute("viewBox", `${(vb.minX - pad).toFixed(1)} ${(vb.minY - pad).toFixed(1)} ${(vb.maxX - vb.minX + pad * 2).toFixed(1)} ${(vb.maxY - vb.minY + pad * 2).toFixed(1)}`);
+  svg.innerHTML = "";
+
+  // Command board : ancre fixe à (0,0), toujours dessinée en premier.
+  const cmd = scaledSize(COMMAND_IMG_NATIVE_W, COMMAND_IMG_NATIVE_H);
+  svg.insertAdjacentHTML("beforeend", `<image href="${imgPath("command")}" xlink:href="${imgPath("command")}" x="0" y="0" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" pointer-events="none"/>
+    <rect x="0" y="0" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" fill="none" stroke="#444" stroke-width="1" pointer-events="none"/>`);
+
+  TARGETS.forEach((k, i) => {
+    const isCurrent = i === currentIndex;
+    const val = isCurrent ? pending : results[k];
+    if (!val) return;
+    const r = svgRect(k, val);
+    svg.insertAdjacentHTML("beforeend", `<image href="${imgPath(k)}" xlink:href="${imgPath(k)}" x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${r.w.toFixed(1)}" height="${r.h.toFixed(1)}" pointer-events="none"/>`);
+    if (isCurrent) {
+      svg.insertAdjacentHTML("beforeend", `<rect x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${r.w.toFixed(1)}" height="${r.h.toFixed(1)}" fill="none" stroke="#ffd166" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"/>`);
+    }
+  });
+
+  renderPanel();
+}
+
+function renderPanel() {
+  const label = document.getElementById("currentLabel");
+  label.textContent = currentIndex < TARGETS.length
+    ? "Cible : " + LABELS[current()]
+    : "Terminé — clique « Copier les réglages ».";
+
+  const list = document.getElementById("targetList");
+  list.innerHTML = "";
+  TARGETS.forEach((k, i) => {
+    const li = document.createElement("li");
+    const done = !!results[k];
+    li.textContent = (done ? "✓ " : "· ") + LABELS[k];
+    li.className = (done ? "done " : "") + (i === currentIndex ? "active" : "");
+    li.addEventListener("click", () => { currentIndex = i; loadPendingForCurrent(); render(); });
+    list.appendChild(li);
+  });
+
+  const needClick = document.getElementById("needClickMsg");
+  const padWrap = document.getElementById("padWrap");
+  if (currentIndex >= TARGETS.length) {
+    needClick.style.display = "none";
+    padWrap.style.display = "none";
+  } else if (!pending) {
+    needClick.style.display = "block";
+    padWrap.style.display = "none";
+  } else {
+    needClick.style.display = "none";
+    padWrap.style.display = "block";
+    document.getElementById("coordsReadout").textContent = `x=${pending.x.toFixed(0)}px  y=${pending.y.toFixed(0)}px (natifs)`;
+  }
+}
+
+function svgPoint(evt) {
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+svg.addEventListener("click", (evt) => {
+  if (currentIndex >= TARGETS.length) return;
+  const p = svgPoint(evt);
+  // Le clic fixe le coin HAUT-GAUCHE du board (pas son centre) — plus
+  // simple à juger visuellement pour un emboîtement par coin.
+  pending = { x: p.x / CAL_SCALE, y: p.y / CAL_SCALE };
+  render();
+});
+
+function nudge(dx, dy) {
+  if (!pending || currentIndex >= TARGETS.length) return;
+  pending.x += dx / CAL_SCALE;
+  pending.y += dy / CAL_SCALE;
+  render();
+}
+
+function confirmPending() {
+  if (!pending || currentIndex >= TARGETS.length) return;
+  results[current()] = pending;
+  pending = null;
+  currentIndex++;
+  while (currentIndex < TARGETS.length && results[TARGETS[currentIndex]]) currentIndex++;
+  loadPendingForCurrent();
+  render();
+}
+
+document.getElementById("btnUp").addEventListener("click", () => nudge(0, -STEP_FINE));
+document.getElementById("btnDown").addEventListener("click", () => nudge(0, STEP_FINE));
+document.getElementById("btnLeft").addEventListener("click", () => nudge(-STEP_FINE, 0));
+document.getElementById("btnRight").addEventListener("click", () => nudge(STEP_FINE, 0));
+document.getElementById("btnValidate").addEventListener("click", confirmPending);
+document.getElementById("btnCancelPending").addEventListener("click", () => { pending = null; render(); });
+
+document.addEventListener("keydown", (evt) => {
+  if (currentIndex >= TARGETS.length || !pending) return;
+  const step = evt.shiftKey ? STEP_COARSE : STEP_FINE;
+  if (evt.key === "ArrowUp") { evt.preventDefault(); nudge(0, -step); }
+  else if (evt.key === "ArrowDown") { evt.preventDefault(); nudge(0, step); }
+  else if (evt.key === "ArrowLeft") { evt.preventDefault(); nudge(-step, 0); }
+  else if (evt.key === "ArrowRight") { evt.preventDefault(); nudge(step, 0); }
+  else if (evt.key === "Enter") { evt.preventDefault(); confirmPending(); }
+  else if (evt.key === "Escape") { evt.preventDefault(); pending = null; render(); }
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  results = {};
+  currentIndex = 0;
+  pending = null;
+  render();
+});
+
+document.getElementById("copyBtn").addEventListener("click", () => {
+  const missing = TARGETS.filter((k) => !results[k]);
+  if (missing.length > 0) {
+    alert("Encore " + missing.length + " board(s) non validé(s) : " + missing.map((k) => LABELS[k]).join(", "));
+    return;
+  }
+  const fmt = (n) => Math.round(n);
+  const text = [
+    "// --- Réglages de calage de l'emboîtement des Dashboards ---",
+    "// (générés par tools/calage-dashboards-layout.html)",
+    "// Remplace directement BOARD_LAYOUT dans tools/ui-script.js.",
+    "const BOARD_LAYOUT = {",
+    `  diceboard: { x: ${fmt(results.diceboard.x)}, y: ${fmt(results.diceboard.y)} },`,
+    `  small: { x: ${fmt(results.small.x)}, y: ${fmt(results.small.y)} },`,
+    `  medium: { x: ${fmt(results.medium.x)}, y: ${fmt(results.medium.y)} },`,
+    `  large: { x: ${fmt(results.large.x)}, y: ${fmt(results.large.y)} }`,
+    "};"
+  ].join("\n");
+  document.getElementById("out").value = text;
+  navigator.clipboard.writeText(text).catch(() => {});
+});
+
+render();
+</script>
+
+</body>
+</html>
