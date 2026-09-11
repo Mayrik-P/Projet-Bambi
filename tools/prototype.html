@@ -7336,8 +7336,12 @@ function renderDashboards() {
         const isRepairable = playerName === HUMAN && repairTargetStep && myRepairable.has(car);
         const drawToken = (box, tokenValue) => {
           if (isRepairable) {
-            const pad = box.w * 0.18;
-            svg.insertAdjacentHTML("beforeend", `<rect x="${(box.x - pad).toFixed(1)}" y="${(box.y - pad).toFixed(1)}" width="${(box.w + pad * 2).toFixed(1)}" height="${(box.h + pad * 2).toFixed(1)}" rx="6" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="2"/>`);
+            // Halo réduit d'1/4 par rapport à la 1ère version (retour de
+            // Mayrik : trop grand), toujours centré sur le jeton.
+            const oldPad = box.w * 0.18;
+            const rw = (box.w + oldPad * 2) * 0.75, rh = (box.h + oldPad * 2) * 0.75;
+            const rx = box.x + box.w / 2 - rw / 2, ry = box.y + box.h / 2 - rh / 2;
+            svg.insertAdjacentHTML("beforeend", `<rect x="${rx.toFixed(1)}" y="${ry.toFixed(1)}" width="${rw.toFixed(1)}" height="${rh.toFixed(1)}" rx="6" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="2"/>`);
           }
           svg.insertAdjacentHTML("beforeend", `<image href="${damagePath}" xlink:href="${damagePath}" x="${box.x.toFixed(1)}" y="${box.y.toFixed(1)}" width="${box.w.toFixed(1)}" height="${box.h.toFixed(1)}" class="${isRepairable ? "clickable" : ""}" ${isRepairable ? "" : 'pointer-events="none"'}/>`);
           if (isRepairable) svg.lastElementChild.addEventListener("click", () => { pickRepairTarget(car, tokenValue); render(); });
@@ -8365,6 +8369,54 @@ function renderBoard() {
     polyEl.setAttribute("fill-opacity", "0.55");
     polyEl.setAttribute("pointer-events", "none");
     svg.appendChild(polyEl);
+  }
+
+  // Phase de tir normale (S7, après mouvement) ET arc de tir Airstrike
+  // — pas dans highlightedCells() pour les cibles elles-mêmes (cible =
+  // une VOITURE, pas juste une case) : marqueurs de cible
+  // (target-small/medium/large selon la taille du véhicule visé,
+  // retour de Mayrik : le joueur doit voir la taille donc la chance de
+  // toucher) directement sur chaque cible éligible, + un marqueur de
+  // refus (marker-no.webp) sur la case juste derrière le tireur —
+  // TOUJOURS affiché, même pour Airstrike où cliquer une case vide de
+  // l'arc équivaut déjà à refuser (retour de Mayrik : si les 3 cases
+  // de l'arc sont occupées, il n'y a plus AUCUNE case vide à cliquer,
+  // donc le refus doit rester possible explicitement).
+  function drawShootMarkers(targets, shooterColRow, onPickTarget, onDecline) {
+    targets.forEach((target) => {
+      const { cx, cy } = cellCenter(target.col, target.row);
+      const markerPath = `../images/markers/target-${target.size}.webp`;
+      svg.insertAdjacentHTML("beforeend", `<image href="${markerPath}" xlink:href="${markerPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      svg.lastElementChild.addEventListener("click", () => { onPickTarget(target); render(); });
+    });
+    const rear = getRearArc(shooterColRow).find((a) => a.name === "rear");
+    if (rear && isOnBoard(board(), rear.col, rear.row)) {
+      const { cx, cy } = cellCenter(rear.col, rear.row);
+      const noPath = "../images/markers/marker-no.webp";
+      svg.insertAdjacentHTML("beforeend", `<image href="${noPath}" xlink:href="${noPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      svg.lastElementChild.addEventListener("click", () => { onDecline(); render(); });
+    }
+  }
+
+  if (sel.step === "shoot" && sel.car) {
+    drawShootMarkers(sel.shootTargets || [], sel.car, (t) => pickShootTarget(t), () => pickShootTarget(null));
+  }
+
+  if (sel.step === "airstrike-shoot-arc" && sel.airstrikePlacement) {
+    // Même géométrie que highlightedCells() pour "airstrike-shoot-arc"
+    // (voir plus haut) — jamais recalculée différemment ici, juste
+    // réutilisée pour savoir QUELS véhicules de l'arc marquer. Le
+    // refus se place derrière le CHOPPER (le tireur ici), pas derrière
+    // la voiture du joueur.
+    const chopper = G.allChoppers.find((c) => c.owner === HUMAN);
+    const hypotheticalChopper = { ...chopper, ...sel.airstrikePlacement };
+    const targets = getShootTargetOptions(hypotheticalChopper, G.allCars);
+    drawShootMarkers(
+      targets,
+      sel.airstrikePlacement,
+      (t) => pickAirstrikeShootCell(t.col, t.row),
+      () => declineAirstrikeShoot()
+    );
   }
 }
 
