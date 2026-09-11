@@ -38,7 +38,7 @@
 <body>
 
 <h1>Outil de calage — slots des Dashboards</h1>
-<p class="sub">Pour chaque cible : clique une première fois sur le plateau pour caler grossièrement (le carré apparaît en orange), affine avec les flèches du clavier ou le pavé ci-contre (Maj+flèche = pas plus large), puis valide (bouton ou touche Entrée) pour passer à la cible suivante. Reclique n'importe où sur le plateau pour repartir d'un calage grossier. Clique un élément de la liste pour revenir corriger un point déjà validé — son réglage fin reprend là où tu l'avais laissé. Une fois les 26 cibles validées, « Copier les réglages » remplace directement <code>DICEBOARD_SLOT_FRACTION</code> / <code>VEHICLE_SLOT_FRACTION</code> / <code>COMMAND_SLOT_FRACTION</code> dans <code>tools/ui-script.js</code>. Pour les 6 cibles "dégât" (sous chaque dashboard) : le carré ne marque que la position du centre, pas la taille ni la forme finale du jeton — ça sera réglé séparément une fois le rendu des jetons câblé.</p>
+<p class="sub">Les 20 réglages déjà validés la dernière fois sont pré-remplis — l'outil démarre directement sur les 6 nouvelles cibles "dégât" (tu peux quand même revenir corriger un ancien réglage via la liste si besoin). Pour chaque cible : clique une première fois sur le plateau pour caler grossièrement (orange), affine avec les flèches du clavier ou le pavé ci-contre (Maj+flèche = pas plus large), puis valide (bouton ou touche Entrée) pour passer à la cible suivante. Reclique n'importe où sur le plateau pour repartir d'un calage grossier. Une fois les 26 cibles validées, « Copier les réglages » remplace directement <code>DICEBOARD_SLOT_FRACTION</code> / <code>VEHICLE_SLOT_FRACTION</code> / <code>COMMAND_SLOT_FRACTION</code> dans <code>tools/ui-script.js</code>. Pour les 6 cibles "dégât" (sous chaque dashboard), la vraie image <code>damage-front.webp</code> est affichée à sa forme et son échelle réelles (même échelle que tout le reste) — seule sa position (le centre) est à régler.</p>
 
 <div class="layout">
   <div class="board-wrap">
@@ -84,6 +84,7 @@ const VEHICLE_DASH_NATIVE = {
   large: { w: 1409, h: 756 }
 };
 const DIE_IMG_NATIVE = 189;
+const DAMAGE_TOKEN_NATIVE = { w: 519, h: 487 }; // damage-front.webp — forme propre, pas carrée comme un dé
 // Échelle plus grande que dans le jeu (0.16) pour cliquer précisément
 // — c'est un simple zoom, ça ne change AUCUNE proportion relative
 // entre les visuels (voir DASH_SCALE dans ui-script.js).
@@ -138,7 +139,32 @@ const TARGETS = [
   { board: "large",  slot: "damage2", label: "LARGE — dégât (droite)",           rot: 0 }
 ];
 
-let results = {}; // clé "board:slot" -> {x,y} fraction, VALIDÉ
+// Les 20 réglages déjà validés par Mayrik lors du calage précédent —
+// pré-remplis pour ne pas les refaire (seules les 6 cibles dégât,
+// nouvelles, restent à caler). Modifiable/effaçable via "Tout
+// recommencer" si besoin de tout reprendre à zéro.
+let results = {
+  "diceboard:slot0": { x: 0.142, y: 0.607 },
+  "diceboard:slot1": { x: 0.380, y: 0.607 },
+  "diceboard:slot2": { x: 0.619, y: 0.607 },
+  "diceboard:slot3": { x: 0.857, y: 0.607 },
+  "command:nitro": { x: 0.858, y: 0.166 },
+  "command:drift": { x: 0.142, y: 0.836 },
+  "command:repair": { x: 0.857, y: 0.840 },
+  "command:airstrike": { x: 0.142, y: 0.162 },
+  "small:any": { x: 0.498, y: 0.452 },
+  "small:endTurn": { x: 0.499, y: 0.742 },
+  "small:coast1": { x: 0.805, y: 0.513 },
+  "small:coast2": { x: 0.694, y: 0.720 },
+  "medium:any": { x: 0.498, y: 0.451 },
+  "medium:endTurn": { x: 0.498, y: 0.739 },
+  "medium:coast1": { x: 0.809, y: 0.512 },
+  "medium:coast2": { x: 0.707, y: 0.720 },
+  "large:any": { x: 0.499, y: 0.451 },
+  "large:endTurn": { x: 0.499, y: 0.739 },
+  "large:coast1": { x: 0.848, y: 0.511 },
+  "large:coast2": { x: 0.735, y: 0.721 }
+}; // clé "board:slot" -> {x,y} fraction, VALIDÉ
 let pending = null; // {x,y} fraction, calage en cours pour la cible courante (pas encore validé)
 let currentIndex = 0;
 let boards = {}; // clé board -> {x,y,w,h} dans le repère SVG courant
@@ -171,10 +197,29 @@ function loadPendingForCurrent() {
   pending = t ? (results[key(t)] ? { ...results[key(t)] } : null) : null;
 }
 
+function isDamageSlot(t) { return t.slot === "damage1" || t.slot === "damage2"; }
+
 function drawSquare(cx, cy, rot, color) {
   const rotAttr = rot ? ` transform="rotate(${rot} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
   return `
     <rect x="${(cx - DIE_DISPLAY_SIZE / 2).toFixed(1)}" y="${(cy - DIE_DISPLAY_SIZE / 2).toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="${color}" fill-opacity="0.45" stroke="${color}" stroke-width="2" pointer-events="none"${rotAttr}/>
+    <line x1="${(cx - 5).toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx + 5).toFixed(1)}" y2="${cy.toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
+    <line x1="${cx.toFixed(1)}" y1="${(cy - 5).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${(cy + 5).toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
+  `;
+}
+
+// Les cibles dégât utilisent la vraie image damage-front.webp, à sa
+// propre forme (pas carrée) — même définition/échelle que le reste
+// (retour de Mayrik), donc juste CAL_SCALE appliqué au natif, comme
+// pour un dé ou un dashboard : pas de coefficient séparé.
+function damageTokenSize() { return { w: DAMAGE_TOKEN_NATIVE.w * CAL_SCALE, h: DAMAGE_TOKEN_NATIVE.h * CAL_SCALE }; }
+function drawDamageToken(cx, cy, highlight) {
+  const s = damageTokenSize();
+  const path = "../images/damage/damage-front.webp";
+  const outline = highlight ? `<rect x="${(cx - s.w / 2 - 2).toFixed(1)}" y="${(cy - s.h / 2 - 2).toFixed(1)}" width="${(s.w + 4).toFixed(1)}" height="${(s.h + 4).toFixed(1)}" fill="none" stroke="#ffb020" stroke-width="2" stroke-dasharray="5 3" pointer-events="none"/>` : "";
+  return `
+    <image href="${path}" xlink:href="${path}" x="${(cx - s.w / 2).toFixed(1)}" y="${(cy - s.h / 2).toFixed(1)}" width="${s.w.toFixed(1)}" height="${s.h.toFixed(1)}" pointer-events="none"/>
+    ${outline}
     <line x1="${(cx - 5).toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx + 5).toFixed(1)}" y2="${cy.toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
     <line x1="${cx.toFixed(1)}" y1="${(cy - 5).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${(cy + 5).toFixed(1)}" stroke="#ff2d55" stroke-width="1" pointer-events="none"/>
   `;
@@ -198,7 +243,11 @@ function render() {
     if (!val) return;
     const b = boards[t.board];
     const cx = b.x + val.x * b.w, cy = b.y + val.y * b.h;
-    svg.insertAdjacentHTML("beforeend", drawSquare(cx, cy, t.rot, isCurrent ? "#ffb020" : "#b0d458"));
+    if (isDamageSlot(t)) {
+      svg.insertAdjacentHTML("beforeend", drawDamageToken(cx, cy, isCurrent));
+    } else {
+      svg.insertAdjacentHTML("beforeend", drawSquare(cx, cy, t.rot, isCurrent ? "#ffb020" : "#b0d458"));
+    }
     svg.insertAdjacentHTML("beforeend", `<text x="${cx.toFixed(1)}" y="${(cy - DIE_DISPLAY_SIZE / 2 - 4).toFixed(1)}" font-size="9" fill="#ffd166" text-anchor="middle" pointer-events="none">${t.slot}</text>`);
   });
 
@@ -345,6 +394,8 @@ document.getElementById("copyBtn").addEventListener("click", () => {
   navigator.clipboard.writeText(text).catch(() => {});
 });
 
+while (currentIndex < TARGETS.length && results[key(TARGETS[currentIndex])]) currentIndex++;
+loadPendingForCurrent();
 render();
 </script>
 
