@@ -119,7 +119,7 @@ function executeDecision(progressionState, roundState, allCars, allChoppers, pla
       const r = resolveNitroCommand(command.dieValue);
       if (r.ok) effectiveDieValue += r.bonus;
     } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target);
+      resolveRepairCommand(command.dieValue, command.target, command.tokenValue);
     } else if (command.type === "drift") {
       const r = resolveDriftCommand(command.dieValue);
       if (r.ok) slamOptions.driftAvailable = true;
@@ -212,7 +212,7 @@ function* executeDecisionGen(progressionState, roundState, allCars, allChoppers,
       const r = resolveNitroCommand(command.dieValue);
       if (r.ok) effectiveDieValue += r.bonus;
     } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target);
+      resolveRepairCommand(command.dieValue, command.target, command.tokenValue);
     } else if (command.type === "drift") {
       const r = resolveDriftCommand(command.dieValue);
       if (r.ok) slamOptions.driftAvailable = true;
@@ -300,7 +300,7 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
       const r = resolveNitroCommand(command.dieValue);
       if (r.ok) effectiveDieValue += r.bonus;
     } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target);
+      resolveRepairCommand(command.dieValue, command.target, command.tokenValue);
     } else if (command.type === "drift") {
       const r = resolveDriftCommand(command.dieValue);
       if (r.ok) slamOptions.driftAvailable = true;

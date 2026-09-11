@@ -277,4 +277,54 @@ sel = win.eval("sel");
 console.log("Repair cible bien le véhicule medium (attendu true) :", sel.command && sel.command.type === "repair" && sel.command.target === m8);
 console.log("Étape passée à 'commit' (attendu true) :", sel.step === "commit");
 
+section("Test 9 — Repair : le joueur cible un jeton précis, l'autre garde sa place");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s9 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
+const m9 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
+m9.damageTokens = ["dent", "shrapnel"]; // 2 jetons distincts -> inopérable
+m9.status = win.eval("CAR_STATUS").INOPERABLE;
+const l9 = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2);
+G.allCars.push(s9, m9, l9);
+G.roundState.dicePool[HUMAN] = [6, 3, 1, 1];
+G.roundState.commandUsedThisRound[HUMAN] = false;
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+
+const slots9 = win.eval('damageSlots(G.allCars.find(c => c.id === ' + m9.id + '))');
+console.log("Positions initiales : gauche='dent', droite='shrapnel' (attendu true) :", slots9.left === "dent" && slots9.right === "shrapnel");
+
+win.pickDie(3);
+win.render();
+win.pickCar(s9);
+win.render();
+clickables = dashboardClickables(dom);
+const dieByPips9 = (n) => clickables.find((el) => el.tagName === "g" && el.querySelectorAll("image").length - 1 === n);
+click(dom, dieByPips9(6));
+win.render();
+clickables = dashboardClickables(dom).filter((el) => el.tagName === "rect");
+click(dom, clickables[0]); // seul "repair" est éligible ici (véhicule inopérable, pas de tir Airstrike sur soi)
+sel = win.eval("sel");
+console.log("Étape passée à 'repair-target' (attendu true) :", sel.step === "repair-target");
+
+win.render();
+const repairImgs = [...dom.window.document.querySelectorAll("#dashboards image.clickable")];
+console.log("2 jetons cliquables (gauche + droite) (attendu true) :", repairImgs.length === 2);
+
+// Clique le 2e (droite, "shrapnel" d'après les positions initiales).
+click(dom, repairImgs[1]);
+sel = win.eval("sel");
+console.log("Le jeton ciblé est bien 'shrapnel' (celui de droite) (attendu true) :", sel.command && sel.command.tokenValue === "shrapnel");
+
+win.commitAssignAndCommand();
+console.log("'dent' (gauche) toujours présent, 'shrapnel' (droite) retiré (attendu true) :", JSON.stringify(m9.damageTokens) === JSON.stringify(["dent"]));
+
+const slots9b = win.eval('damageSlots(G.allCars.find(c => c.id === ' + m9.id + '))');
+console.log("'dent' reste bien à GAUCHE (ne glisse pas) après le retrait de 'shrapnel' (attendu true) :", slots9b.left === "dent" && slots9b.right === null);
+
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
