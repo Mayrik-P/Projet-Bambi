@@ -369,7 +369,14 @@ function isValidAirstrikePlacement(board, allCars, allChoppers, chopper, col, ro
   const space = getSpace(board, col, row);
   if (!space) return false;
   if (space.terrain === TERRAIN.IMPASSABLE) return false;
+  // Toute case portant un objet physique est inéligible, peu importe
+  // sa nature : jeton hazard face cachée (space.hazard) OU face
+  // visible/persistant (space.revealedHazard — Blank/Dirt/Oil Slick
+  // déjà résolus, qui restent sur la case, voir HAZARD_BEHAVIOR
+  // "persist"). Bug trouvé par Mayrik : seul space.hazard était
+  // vérifié, laissant les cases avec un hazard révélé sélectionnables.
   if (space.hazard) return false;
+  if (space.revealedHazard) return false;
   if (getCarAt(allCars, col, row)) return false;
   if (allChoppers.some((c) => c !== chopper && c.placed && c.col === col && c.row === row)) return false;
   return true;
