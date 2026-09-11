@@ -15,6 +15,7 @@ const html = fs.readFileSync(path.join(__dirname, "tools", "prototype.html"), "u
 function section(title) { console.log("\n=== " + title + " ==="); }
 function makeDom() { return new JSDOM(html, { runScripts: "dangerously", resources: "usable" }); }
 function panelText(dom) { return dom.window.document.getElementById("panel").textContent; }
+function boardHtml(dom) { return dom.window.document.getElementById("board").innerHTML; }
 
 section("Test 1 — Coast 100% route → PAS de proposition de bonus Road");
 
@@ -103,6 +104,6 @@ sel = win.eval("sel");
 win.render();
 
 console.log("sel.step EST road-bonus-choice pour un mouvement normal (attendu true) :", sel.step === "road-bonus-choice");
-console.log("Le panneau propose bien le bonus Road (attendu true) :", panelText(dom).includes("bonus Road"));
+console.log("Le marqueur marker-road-3 est affiché sur le plateau (retour de Mayrik : remplace le texte) (attendu true) :", boardHtml(dom).includes("marker-road-3.webp"));
 
 console.log("\n=== Fin des tests dédiés (correctif Coast / bonus Road) ===");

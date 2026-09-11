@@ -435,10 +435,24 @@ win.pickMoveStep({ direction: "front", col: 4, row: 3, outcome: "slam", cost: 1 
 win.render();
 
 console.log("Pause de relance bien obtenue (attendu true) :", sel.step === "slam-reroll-choice");
+const ctx12 = win.eval("sel.pendingHumanSlam.ctx");
+console.log("dé Slam =", ctx12.slamRoll, "| dé Direction =", ctx12.directionRoll);
+const delta12 = win.getDirectionDelta(ctx12.directionRoll, ctx12.topCar.col, ctx12.topCar.row);
+const destCol = ctx12.topCar.col + delta12.dCol, destRow = ctx12.topCar.row + delta12.dRow;
+
 const boardEl3 = dom.window.document.getElementById("board");
 const rerollImgs = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-reroll.webp"));
+const slamFaceImgs = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes(`die-fx-slam-${ctx12.slamRoll}.webp`));
+const dirFaceImgs = [...boardEl3.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes("die-fx-direction-"));
 const noImgsSlam = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-no.webp"));
-console.log("marker-reroll affiché sur la case du Slam (attendu true) :", rerollImgs.length === 1);
+
+console.log("marker-reroll toujours affiché sur la case du Slam (attendu true) :", rerollImgs.length === 1);
+console.log("La face du dé Slam est affichée UNE FOIS, sur la case de DESTINATION (attendu true) :", slamFaceImgs.length === 1);
+const slamFaceCenter = win.cellCenter(destCol, destRow);
+const rerollCenter = win.cellCenter(ctx12.topCar.col, ctx12.topCar.row);
+console.log("...et cette case de destination est bien DIFFÉRENTE de la case du Slam (attendu true) :",
+  Math.abs(slamFaceCenter.cx - rerollCenter.cx) > 1 || Math.abs(slamFaceCenter.cy - rerollCenter.cy) > 1);
+console.log("Le dé Direction n'est PAS affiché (retour de Mayrik) (attendu true) :", dirFaceImgs.length === 0);
 console.log("marker-no affiché derrière le véhicule qui décide (attendu true) :", noImgsSlam.length === 1);
 
 click(dom, noImgsSlam[0]);
@@ -480,7 +494,7 @@ G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.resetSelection();
 win.render();
 const dashHtml14 = dom.window.document.getElementById("dashboards").innerHTML;
-console.log("Un halo vert (#b0d458) est présent sur le diceboard (attendu true) :", dashHtml14.includes('fill="#b0d458"'));
+console.log("Un halo vert (#b0d458) est présent sur le diceboard (attendu true) :", dashHtml14.includes('stroke="#b0d458"'));
 
 section("Test 15 — Bug réel trouvé par Mayrik : un dé cliquable ne doit JAMAIS avoir pointer-events=none sur ses images internes");
 
@@ -499,7 +513,7 @@ const innerImgsWithPE = [...clickableDieGroup.querySelectorAll("image")].filter(
 console.log("Aucune image interne du dé cliquable n'a pointer-events=none (attendu true) :", innerImgsWithPE.length === 0);
 console.log("Le halo vert du diceboard fait EXACTEMENT la taille d'un dé, sans marge (attendu true) :",
   (() => {
-    const halo = [...dom.window.document.querySelectorAll("#dashboards rect")].find((r) => r.getAttribute("fill") === "#b0d458" && parseFloat(r.getAttribute("width")).toFixed(1) === win.eval("DIE_DISPLAY_SIZE").toFixed(1));
+    const halo = [...dom.window.document.querySelectorAll("#dashboards rect")].find((r) => r.getAttribute("stroke") === "#b0d458" && r.getAttribute("fill") === "none" && parseFloat(r.getAttribute("width")).toFixed(1) === win.eval("DIE_DISPLAY_SIZE").toFixed(1));
     return !!halo;
   })());
 
@@ -529,8 +543,94 @@ G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
 win.render();
 const panelHtml17 = dom.window.document.getElementById("panel").innerHTML;
 const dashHtml17 = dom.window.document.getElementById("dashboards").innerHTML;
-console.log("Le panneau texte ne contient plus le bouton (attendu true) :", !panelHtml17.includes("Jouer le tour de l'IA"));
+console.log("Le panneau texte ne contient plus le bouton (attendu true) :", !panelHtml17.includes("Play the AI's turn"));
 console.log("Le bouton est bien présent sur les dashboards, dans un foreignObject (attendu true) :",
-  dashHtml17.includes("Jouer le tour de l'IA") && dashHtml17.includes("foreignObject"));
+  dashHtml17.includes("Play the AI's turn") && dashHtml17.includes("foreignObject"));
+
+section("Test 18 — Cases de mouvement affichées dès l'étape command-die (retour de Mayrik : pas besoin de reposer un dé)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s18 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 2);
+G.allCars.push(s18, win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1), win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 0));
+G.roundState.dicePool[HUMAN] = [4, 3, 3, 1];
+G.roundState.commandUsedThisRound[HUMAN] = false;
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+win.pickDie(4);
+win.render();
+win.pickCar(s18);
+sel = win.eval("sel");
+console.log("Étape passée à 'command-die' (attendu true) :", sel.step === "command-die");
+win.render();
+
+const boardPolys = [...dom.window.document.getElementById("board").querySelectorAll("polygon.clickable")];
+console.log("Des cases de destination sont déjà cliquables SANS reposer de dé (attendu true) :", boardPolys.length > 0);
+
+const before18 = { col: s18.col, row: s18.row };
+boardPolys[0].dispatchEvent(new win.Event("click", { bubbles: true }));
+sel = win.eval("sel");
+console.log("Le clic a bien fait progresser au-delà de 'command-die' (plus de Command en attente) (attendu true) :", sel.step !== "command-die" && sel.step !== "car");
+console.log("Le véhicule a bien bougé (attendu true) :", s18.col !== before18.col || s18.row !== before18.row);
+
+section("Test 19 — Dé sur l'emplacement END TURN une fois le tour du véhicule terminé");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s19 = win.createCar(HUMAN, CAR_SIZE.SMALL, 6, 2); // déjà loin -> mouvement finira vite
+G.allCars.push(s19, win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1), win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 0));
+G.roundState.dicePool[HUMAN] = [1, 3, 3, 4];
+G.roundState.roundNumber = 1; // tir désactivé -> passage direct à finishHumanTurn après le mouvement
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+sel = win.eval("sel");
+sel.mode = "assign";
+sel.commandAvailable = false;
+sel.car = s19;
+sel.dieValue = 1;
+sel.turnLabel = "Test";
+sel.slamOptions = { decideReroll: win.decideSlamRerollDefault };
+sel.remaining = 1;
+sel.roadEligible = true;
+sel.hadSlam = false;
+sel.hadDamage = false;
+sel.roadBonusOffered = true; // évite le bonus Road pour ce test ciblé
+sel.inRoadBonus = false;
+sel.step = "move-step";
+const opt19 = win.getMovementStepOptions(win.board(), s19, 1, G.allCars)[0];
+win.pickMoveStep(opt19);
+win.render();
+console.log("Le tour est bien terminé (sel réinitialisé) (attendu true) :", win.eval("sel").car === undefined);
+const dashHtml19 = dom.window.document.getElementById("dashboards").innerHTML;
+const etSlots = win.eval("endTurnDieState");
+console.log("endTurnDieState contient bien une entrée pour ce véhicule (attendu true) :", !!etSlots[s19.id] && etSlots[s19.id].dieValue === 1);
+console.log("Un dé est bien rendu sur le dashboard (die-move visible) (attendu true) :", dashHtml19.includes("die-move-"));
+
+section("Test 20 — Airstrike au round 1 : pas de phase de tir, retour direct au mouvement");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.roundState.roundNumber = 1;
+const s20 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 4, 2);
+G.allCars.push(s20);
+const chopper20 = win.createChopper(HUMAN);
+G.allChoppers.push(chopper20);
+win.resetSelection();
+sel = win.eval("sel");
+sel.car = s20;
+sel.commandDieValue = 4;
+win.pickAirstrikePlacement(5, 2);
+sel = win.eval("sel");
+console.log("Round 1 -> pas d'étape airstrike-shoot-arc, commit direct (attendu true) :", sel.step !== "airstrike-shoot-arc");
+console.log("sel.command.target est bien null (aucun tir tenté) (attendu true) :", sel.command && sel.command.target === null);
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
