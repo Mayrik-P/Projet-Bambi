@@ -7280,21 +7280,24 @@ function renderDashboards() {
       // pendant l'étape Repair (repair-target) : cible = le VÉHICULE,
       // pas le jeton précis (voir pickRepairTarget dans renderPanel —
       // même comportement, un clic sur l'un ou l'autre des deux jetons
-      // d'un même véhicule répare ce véhicule).
+      // d'un même véhicule répare ce véhicule). Halo vert derrière
+      // (même couleur que les slots ANY/COAST/Command) quand cliquable
+      // — sans ça, rien ne distingue visuellement un jeton réparable
+      // d'un jeton juste affiché, retour de Mayrik.
       if (car) {
         const damagePath = "../images/damage/damage-front.webp";
         const isRepairable = playerName === HUMAN && repairTargetStep && myRepairable.has(car);
         const attachRepairClick = (el) => { if (isRepairable) el.addEventListener("click", () => { pickRepairTarget(car); render(); }); };
-        if (car.damageTokens.length >= 1) {
-          const d1 = atDamage(size, "damage1");
-          svg.insertAdjacentHTML("beforeend", `<image href="${damagePath}" xlink:href="${damagePath}" x="${d1.x.toFixed(1)}" y="${d1.y.toFixed(1)}" width="${d1.w.toFixed(1)}" height="${d1.h.toFixed(1)}" class="${isRepairable ? "clickable" : ""}" ${isRepairable ? "" : 'pointer-events="none"'}/>`);
+        const drawToken = (box) => {
+          if (isRepairable) {
+            const pad = box.w * 0.18;
+            svg.insertAdjacentHTML("beforeend", `<rect x="${(box.x - pad).toFixed(1)}" y="${(box.y - pad).toFixed(1)}" width="${(box.w + pad * 2).toFixed(1)}" height="${(box.h + pad * 2).toFixed(1)}" rx="6" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="2"/>`);
+          }
+          svg.insertAdjacentHTML("beforeend", `<image href="${damagePath}" xlink:href="${damagePath}" x="${box.x.toFixed(1)}" y="${box.y.toFixed(1)}" width="${box.w.toFixed(1)}" height="${box.h.toFixed(1)}" class="${isRepairable ? "clickable" : ""}" ${isRepairable ? "" : 'pointer-events="none"'}/>`);
           attachRepairClick(svg.lastElementChild);
-        }
-        if (car.damageTokens.length >= 2) {
-          const d2 = atDamage(size, "damage2");
-          svg.insertAdjacentHTML("beforeend", `<image href="${damagePath}" xlink:href="${damagePath}" x="${d2.x.toFixed(1)}" y="${d2.y.toFixed(1)}" width="${d2.w.toFixed(1)}" height="${d2.h.toFixed(1)}" class="${isRepairable ? "clickable" : ""}" ${isRepairable ? "" : 'pointer-events="none"'}/>`);
-          attachRepairClick(svg.lastElementChild);
-        }
+        };
+        if (car.damageTokens.length >= 1) drawToken(atDamage(size, "damage1"));
+        if (car.damageTokens.length >= 2) drawToken(atDamage(size, "damage2"));
       }
 
       if (car && !isInoperable && playerName === HUMAN && clickableCarSet.has(car)) {
