@@ -270,6 +270,7 @@ console.log("Étape passée à 'repair-target' (attendu true) :", sel.step === "
 win.render();
 const repairClickables = [...dom.window.document.querySelectorAll("#dashboards .clickable")].filter((el) => el.tagName === "image");
 console.log("1 jeton dégât cliquable (celui du véhicule medium) (attendu true) :", repairClickables.length === 1);
+console.log("Un halo vert (#b0d458) est visible derrière le jeton réparable (attendu true) :", dom.window.document.getElementById("dashboards").innerHTML.includes('fill="#b0d458"'));
 
 click(dom, repairClickables[0]);
 sel = win.eval("sel");
