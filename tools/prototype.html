@@ -8712,7 +8712,19 @@ function renderBoard() {
     // case avant, qu'elle soit sur le plateau ou dans la marge.
     const rbOptions = getMovementStepOptions(board(), sel.car, 1, G.allCars);
     const rbSplit = splitOnAndOffBoardOptions(board(), rbOptions);
-    const front = [...rbSplit.onBoard, ...rbSplit.offBoard.filter((o) => o.outcome === "exits-front")].find((o) => o.direction === "front");
+    const rbCandidates = [...rbSplit.onBoard, ...rbSplit.offBoard.filter((o) => o.outcome === "exits-front")];
+    // BUG CORRIGÉ (retour de Mayrik, cas bloquant) : quand la case
+    // PILE devant est du terrain Impassable, getMovementStepOptions ne
+    // retourne AUCUNE entrée "front" du tout (contrairement à un
+    // véhicule/une Wreck dessus, qui reste une option "normal" —
+    // seul l'Impassable est exclu en amont) — marker-road ne
+    // s'affichait donc jamais, aucun moyen d'accepter le bonus. Le
+    // bonus Road autorise en réalité les 3 directions avant, comme un
+    // mouvement normal (voir highlightedCells/road-bonus-step, déjà
+    // multi-directionnel) — on replie donc sur front-left/front-right
+    // si "front" strict est indisponible, pour que le marker reste
+    // toujours accessible dès qu'UNE direction avant existe.
+    const front = rbCandidates.find((o) => o.direction === "front") || rbCandidates[0];
     if (front) {
       const fc = cellCenter(front.col, front.row);
       const roadPath = `../images/markers/marker-road-${G.roundState.roadDie}.webp`;
