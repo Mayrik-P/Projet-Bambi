@@ -7261,6 +7261,7 @@ function renderDashboards() {
   const order = cp ? [cp, ...PLAYER_NAMES.filter((p) => p !== cp)] : PLAYER_NAMES;
 
   let maxRight = 0;
+  let pendingAiButton = null;
   order.forEach((playerName, rowIndex) => {
     // Origine de CETTE ligne, décalée pour que le point le plus en
     // haut/à gauche de la boîte englobante (ROW_BBOX) tombe pile à la
@@ -7279,23 +7280,19 @@ function renderDashboards() {
     svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${cmd.x.toFixed(1)}" y="${cmd.y.toFixed(1)}" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" pointer-events="none"/>`);
 
     // Bouton "Jouer le tour de l'IA" — retour de Mayrik : plus de
-    // question texte séparée dans le panneau, le bouton remonte ici,
-    // au centre du command board de l'IA (le plus près possible du
-    // plateau). Provisoire (bouton HTML réel via foreignObject) en
-    // attendant qu'il crée un marker dédié à remplacer ceci par une
-    // simple image cliquable, comme les autres. Absent pendant une
-    // pause de relance de Slam (les marqueurs reroll/no prennent le
-    // relais, voir renderBoard) ou une fois la partie terminée.
+    // question texte séparée dans le panneau. Position calculée ici
+    // (au centre du command board de l'IA), mais le DESSIN réel est
+    // différé après la boucle complète (voir plus bas) pour être
+    // certain qu'il reste au-dessus de tout le reste, quel que soit
+    // l'ordre des lignes joueurs. Absent pendant une pause de relance
+    // de Slam (marqueurs reroll/no) ou une fois la partie terminée.
     if (playerName === OPPONENT && cp === OPPONENT && !gameOver && !G.aiPending) {
       const btnW = cmd.w * 0.88, btnH = cmd.h * 0.22;
-      const bx = cmd.x + cmd.w / 2 - btnW / 2, by = cmd.y + cmd.h / 2 - btnH / 2;
-      const label = G.aiAnimating ? "AI is playing…" : "Play the AI's turn ▶";
-      svg.insertAdjacentHTML("beforeend", `<foreignObject x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${btnW.toFixed(1)}" height="${btnH.toFixed(1)}">
-        <button xmlns="http://www.w3.org/1999/xhtml" class="primary" style="width:100%;height:100%;font-size:${(btnH * 0.26).toFixed(1)}px;line-height:1.15;white-space:normal;box-sizing:border-box;padding:2px;" ${G.aiAnimating ? "disabled" : ""}>${label}</button>
-      </foreignObject>`);
-      if (!G.aiAnimating) {
-        svg.lastElementChild.querySelector("button").addEventListener("click", playAiTurn);
-      }
+      pendingAiButton = {
+        bx: cmd.x + cmd.w / 2 - btnW / 2,
+        by: cmd.y + cmd.h / 2 - btnH / 2,
+        btnW, btnH
+      };
     }
 
     // Slots Command (Nitro/Drift/Repair/Airstrike) : cliquables
@@ -7425,7 +7422,12 @@ function renderDashboards() {
         // automatique passé (retour de Mayrik, plus de confirmation) —
         // sel.mode, lui, reste fidèle à la décision effectivement
         // prise, quel que soit l'état du pool au moment du rendu.
-        const slotKey = sel.mode === "coast" ? "coast1" : "any";
+        // BUG CORRIGÉ (retour de Mayrik) : coast1 était codé en dur ici
+        // pour TOUT dé posé en Coast, alors que le rect cliquable,
+        // juste au-dessus, choisissait déjà correctement coast1/coast2
+        // selon car.coastCount — le dé posé n'apparaissait donc jamais
+        // sur coast2, même quand c'était le bon emplacement.
+        const slotKey = sel.mode === "coast" ? (car.coastCount === 0 ? "coast1" : "coast2") : "any";
         const f = VEHICLE_SLOT_FRACTION[size][slotKey];
         const dieX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
         const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
@@ -7472,6 +7474,25 @@ function renderDashboards() {
 
   const totalH = order.length * (ROW_BBOX.h + PLAYER_ROW_GAP) + PLAYER_ROW_GAP;
   svg.setAttribute("viewBox", `0 0 ${maxRight} ${totalH}`);
+
+  // Bouton IA dessiné en tout dernier (retour de Mayrik : doit rester
+  // au-dessus de tout, quelle que soit la ligne joueur où il se
+  // trouve). border-radius répété sur les 4 coins + overflow:hidden
+  // (sinon le rendu par défaut du <button> peut déborder du
+  // foreignObject et donner l'impression de coins carrés en bas,
+  // retour de Mayrik) ; opacity:1 explicite même désactivé (annule
+  // button.primary:disabled du CSS, qui grisait le bouton pendant que
+  // l'IA joue).
+  if (pendingAiButton) {
+    const { bx, by, btnW, btnH } = pendingAiButton;
+    const label = G.aiAnimating ? "AI is playing…" : "Play the AI's turn ▶";
+    svg.insertAdjacentHTML("beforeend", `<foreignObject x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${btnW.toFixed(1)}" height="${btnH.toFixed(1)}" style="overflow:visible;">
+      <button xmlns="http://www.w3.org/1999/xhtml" class="primary" style="width:100%;height:100%;font-size:${(btnH * 0.26).toFixed(1)}px;line-height:1.15;white-space:normal;box-sizing:border-box;padding:2px;border-radius:6px;overflow:hidden;opacity:1;" ${G.aiAnimating ? "disabled" : ""}>${label}</button>
+    </foreignObject>`);
+    if (!G.aiAnimating) {
+      svg.lastElementChild.querySelector("button").addEventListener("click", playAiTurn);
+    }
+  }
 }
 
 
@@ -8489,8 +8510,13 @@ function renderBoard() {
     // normale, centré verticalement sur le véhicule, calé
     // horizontalement contre son bord GAUCHE (x = bord gauche réel de
     // l'image du véhicule, pas de la case).
+    // Retour de Mayrik : bord GAUCHE du marqueur = bord GAUCHE du webp
+    // du véhicule (pas centré sur ce bord) ; milieu du marqueur =
+    // milieu du webp (x,y = coin haut-gauche du véhicule, déjà calculé
+    // plus haut, donc naturellement "attaché" au véhicule plutôt qu'à
+    // la case — suivra un futur mouvement animé sans changement ici).
     const damageMarkerSize = MARKER_ICON_SIZE * 0.75;
-    const markerX = x - damageMarkerSize / 2;
+    const markerX = x;
     const markerY = cy - damageMarkerSize / 2;
     // Voiture inopérable (2 dégâts) : le jeu physique se contente de
     // retourner le véhicule à 180° (il pointe vers l'arrière du
@@ -8517,9 +8543,9 @@ function renderBoard() {
     // inchangé.
     svg.insertAdjacentHTML("beforeend", `<g>
       ${carShadowMarkup(imgPath, x, y, isInoperableVisual)}
-      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${markerX.toFixed(1)}" y="${markerY.toFixed(1)}" width="${damageMarkerSize.toFixed(1)}" height="${damageMarkerSize.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${markerX.toFixed(1)}" y="${markerY.toFixed(1)}" width="${damageMarkerSize.toFixed(1)}" height="${damageMarkerSize.toFixed(1)}" pointer-events="none"/>` : "")}
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none"/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#b0d458" stroke-width="2.5" pointer-events="none"/>` : ""}
+      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${markerX.toFixed(1)}" y="${markerY.toFixed(1)}" width="${damageMarkerSize.toFixed(1)}" height="${damageMarkerSize.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${markerX.toFixed(1)}" y="${markerY.toFixed(1)}" width="${damageMarkerSize.toFixed(1)}" height="${damageMarkerSize.toFixed(1)}" pointer-events="none"/>` : "")}
     </g>`);
   });
 
@@ -8649,9 +8675,17 @@ function renderBoard() {
     const dc = cellCenter(dest.col, dest.row);
     const slamPath = `../images/dice/die-fx-slam-${ctx.slamRoll}.webp`;
     svg.insertAdjacentHTML("beforeend", `<image href="${slamPath}" xlink:href="${slamPath}" x="${(dc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(dc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>`);
-    const rear = getRearArc(ctx.largerCar).find((a) => a.name === "rear");
-    if (rear && isOnBoard(board(), rear.col, rear.row)) {
-      const rc = cellCenter(rear.col, rear.row);
+    const rearArc = getRearArc(ctx.largerCar);
+    const rear = rearArc.find((a) => a.name === "rear");
+    // Retour de Mayrik : si la case de destination du dé Slam est
+    // JUSTEMENT la case "rear" (où va normalement marker-yes), les
+    // deux se superposent et marker-yes cache le dé — on décale alors
+    // marker-yes vers rear-left (toujours juste derrière le véhicule,
+    // mais une case à côté).
+    const rearCoincidesWithSlamDest = rear && rear.col === dest.col && rear.row === dest.row;
+    const yesTarget = rearCoincidesWithSlamDest ? rearArc.find((a) => a.name === "rear-left") : rear;
+    if (yesTarget && isOnBoard(board(), yesTarget.col, yesTarget.row)) {
+      const rc = cellCenter(yesTarget.col, yesTarget.row);
       // marker-yes (pas marker-no) — retour de Mayrik : même effet
       // (refuser la relance = garder ce résultat), mais plus clair
       // pour le joueur formulé comme "j'accepte ce résultat" plutôt
