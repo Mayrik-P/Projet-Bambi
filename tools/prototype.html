@@ -8178,6 +8178,19 @@ function pickShootTarget(target) {
 }
 
 function finishHumanTurn() {
+  // BUG MOTEUR TROUVÉ (retour de Mayrik) : car.coastCount n'était
+  // JAMAIS incrémenté pour un tour Coast joué par un humain — cette
+  // logique n'existe que dans playTurnCoast/playTurnCoastWithProgression
+  // (utilisées par l'IA), jamais dans le chemin humain
+  // (executeAssignAndCommand + executeEndOfTurn). Conséquence concrète :
+  // le 2e Coast d'un round proposait toujours le slot coast1 (déjà pris)
+  // au lieu de coast2, puisque coastCount restait bloqué à 0. Corrigé
+  // ici, au même endroit conceptuel que le "END OF TURN" de
+  // playTurnCoast — AVANT la bookkeeping coastDieState ci-dessous, qui
+  // dépend de cette valeur déjà incrémentée.
+  if (sel.car && sel.mode === "coast") {
+    sel.car.coastCount = (sel.car.coastCount || 0) + 1;
+  }
   // Dé ANY -> emplacement END TURN (retour de Mayrik) : capturé AVANT
   // resetSelection() (qui vide sel.car/sel.dieValue) — sel.mode==="coast"
   // n'a pas d'emplacement END TURN dédié (spec section 2), seul le cas
@@ -8464,7 +8477,12 @@ function renderBoard() {
     // bas) — retour de Mayrik : le marqueur doit coller au bord HAUT
     // de la case, sans quoi il retombe encore sur le graphisme du
     // véhicule.
-    const cellTopY = cellPoly(car.col, car.row)[0][1];
+    // Bas réel de la case (p[3] ou p[4] de cellPoly, voir sa
+    // définition) — retour de Mayrik : test d'un calage contre le BAS
+    // de la case plutôt que le haut, marqueur toujours centré
+    // horizontalement sur le véhicule.
+    const cellBotY = cellPoly(car.col, car.row)[3][1];
+    const markerY = cellBotY - MARKER_ICON_SIZE;
     // Voiture inopérable (2 dégâts) : le jeu physique se contente de
     // retourner le véhicule à 180° (il pointe vers l'arrière du
     // plateau, p.8) plutôt que de le retirer — reproduit ici par une
@@ -8490,9 +8508,9 @@ function renderBoard() {
     // inchangé.
     svg.insertAdjacentHTML("beforeend", `<g>
       ${carShadowMarkup(imgPath, x, y, isInoperableVisual)}
+      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${markerY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${markerY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : "")}
       <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none" ${isInoperableVisual ? 'opacity="0.5"' : ""}/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#b0d458" stroke-width="2.5" pointer-events="none"/>` : ""}
-      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${cellTopY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${cellTopY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : "")}
     </g>`);
   });
 
@@ -8612,13 +8630,16 @@ function renderBoard() {
     // l'a déterminé. Vient EN PLUS de marker-reroll ci-dessus, ne le
     // remplace pas. Purement informatif, PAS cliquable (retour de
     // Mayrik : marker-reroll suffit déjà pour relancer).
+    // Toujours affiché, MÊME si la destination sort du plateau (bord
+    // haut/bas/arrière, retour de Mayrik) : cellCenter est du pur
+    // calcul géométrique, extrapolable sans souci hors limites — en
+    // haut ça tombe sur la bande titre (aucun souci), en bas ça tombe
+    // sur la zone joueur/un dashboard (accepté tel quel).
     const delta = getDirectionDelta(ctx.directionRoll, ctx.topCar.col, ctx.topCar.row);
     const dest = { col: ctx.topCar.col + delta.dCol, row: ctx.topCar.row + delta.dRow };
-    if (isOnBoard(board(), dest.col, dest.row)) {
-      const dc = cellCenter(dest.col, dest.row);
-      const slamPath = `../images/dice/die-fx-slam-${ctx.slamRoll}.webp`;
-      svg.insertAdjacentHTML("beforeend", `<image href="${slamPath}" xlink:href="${slamPath}" x="${(dc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(dc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>`);
-    }
+    const dc = cellCenter(dest.col, dest.row);
+    const slamPath = `../images/dice/die-fx-slam-${ctx.slamRoll}.webp`;
+    svg.insertAdjacentHTML("beforeend", `<image href="${slamPath}" xlink:href="${slamPath}" x="${(dc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(dc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>`);
     const rear = getRearArc(ctx.largerCar).find((a) => a.name === "rear");
     if (rear && isOnBoard(board(), rear.col, rear.row)) {
       const rc = cellCenter(rear.col, rear.row);
@@ -8665,9 +8686,11 @@ function renderBoard() {
   // élément externe sous le plateau comme avant), dessiné en tout
   // dernier pour rester au-dessus de tout le reste.
   if (gameOver && gameOverInfo) {
+    const color = gameOverInfo.winner ? PLAYER_CAR_COLOR[gameOverInfo.winner] : null;
+    const colorLabel = color ? color.charAt(0).toUpperCase() + color.slice(1) : null;
     const text = gameOverInfo.winner
-      ? `🏁 Partie terminée : victoire de ${gameOverInfo.winner} (${gameOverInfo.reason}).`
-      : "Partie terminée sans vainqueur.";
+      ? `🏁 Game over: ${colorLabel} wins by ${gameOverInfo.reason}`
+      : "🏁 Game over: no winner";
     const bx = BOARD_VIEW.w / 2, by = BOARD_VIEW.h / 2;
     const boxW = Math.min(BOARD_VIEW.w * 0.8, text.length * 9 + 40), boxH = 60;
     svg.insertAdjacentHTML("beforeend", `<g pointer-events="none">
