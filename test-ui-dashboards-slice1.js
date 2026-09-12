@@ -1080,4 +1080,107 @@ const cdState35 = win.eval("coastDieState");
 console.log("coastDieState contient bien une entrée pour le véhicule IA (COAST), sur coast2 (prioritaire) (attendu true) :",
   !!cdState35[aiCar35.id] && cdState35[aiCar35.id].slots[1] === 2);
 
+section("Test 36 — Bug corrigé : le dé de Command reste affiché jusqu'à la fin du round (côté joueur)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const b36 = win.board();
+const clearHazardsAround36 = (col, row) => {
+  win.getSpace(b36, col, row).hazard = null;
+  const front = win.getFrontArc({ col, row });
+  const rear = win.getRearArc({ col, row });
+  for (const { col: c, row: r } of [...front, ...rear]) {
+    const cell = win.getSpace(b36, c, r);
+    if (cell) cell.hazard = null;
+  }
+};
+clearHazardsAround36(5, 3);
+const s36 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 3);
+G.allCars.push(s36, win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1), win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2));
+G.roundState.dicePool[HUMAN] = [4, 3];
+G.roundState.commandUsedThisRound[HUMAN] = false;
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+win.pickDie(4);
+win.pickCar(s36);
+win.render();
+win.pickCommandDieChoice(3);
+win.render();
+win.pickCommandChoice("drift"); // pas de sous-étape -> commit direct
+win.render();
+sel = win.eval("sel");
+// Joue le mouvement jusqu'au bout (drift n'était que la Command, il
+// faut réellement finir le tour pour atteindre finishHumanTurn).
+// Case de départ dégagée -> pas de Slam attendu ; si un bonus Road
+// est proposé, on le refuse pour finir le tour simplement.
+for (let i = 0; i < 20 && sel.car !== undefined; i++) {
+  if (sel.step === "road-bonus-choice") { win.declineRoadBonus(); win.render(); sel = win.eval("sel"); continue; }
+  if (sel.step === "slam-reroll-choice") { win.resumeHumanSlamRerollChoice(false); win.render(); sel = win.eval("sel"); continue; }
+  const optsD = win.getMovementStepOptions(win.board(), sel.car, sel.remaining, G.allCars);
+  const optD = optsD.find((o) => o.outcome !== "eliminated-edge" && !String(o.outcome || "").startsWith("exits")) || optsD[0];
+  if (!optD) break;
+  win.pickMoveStep(optD);
+  win.render();
+  sel = win.eval("sel");
+}
+
+const cdStateCmd36 = win.eval("commandDieState");
+console.log("commandDieState contient bien une entrée pour HUMAN (attendu true) :", !!cdStateCmd36[HUMAN] && cdStateCmd36[HUMAN].commandType === "drift" && cdStateCmd36[HUMAN].dieValue === 3);
+
+// Simule un changement de véhicule actif (autre tour, sel réinitialisé) -> le dé doit rester affiché
+win.resetSelection();
+win.render();
+// Retrouve dynamiquement la VRAIE position du command board de HUMAN
+// dans le DOM (plutôt que de supposer qu'il reste en ligne 0 — une
+// fois le tour terminé, le joueur actif bascule vers l'IA, qui peut
+// désormais occuper la ligne du haut).
+const dashSvg36 = dom.window.document.getElementById("dashboards");
+const humanCmdImg36 = [...dashSvg36.querySelectorAll("image")].find((img) => (img.getAttribute("href") || "").includes("command-blue"));
+const cmdX36 = parseFloat(humanCmdImg36.getAttribute("x")), cmdY36 = parseFloat(humanCmdImg36.getAttribute("y"));
+const cmdW36 = parseFloat(humanCmdImg36.getAttribute("width")), cmdH36 = parseFloat(humanCmdImg36.getAttribute("height"));
+const fracDrift36 = win.eval("COMMAND_SLOT_FRACTION.drift");
+const DIE36 = win.eval("DIE_DISPLAY_SIZE");
+const expectedX36 = cmdX36 + fracDrift36.x * cmdW36 - DIE36 / 2, expectedY36 = cmdY36 + fracDrift36.y * cmdH36 - DIE36 / 2;
+const driftDieImg36 = [...dashSvg36.querySelectorAll("g")].find((g) => {
+  const img = g.querySelector("image");
+  return img && Math.abs(parseFloat(img.getAttribute("x")) - expectedX36) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - expectedY36) < 1;
+});
+console.log("Le dé de Command reste bien affiché sur le slot DRIFT après resetSelection (attendu true) :", !!driftDieImg36);
+
+section("Test 37 — Bug corrigé : le dé de Command s'affiche aussi côté IA (jamais affiché avant ce correctif)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars.length = 0;
+const b37 = win.board();
+const clearHazardsAround37 = (col, row) => {
+  win.getSpace(b37, col, row).hazard = null;
+  const front = win.getFrontArc({ col, row });
+  const rear = win.getRearArc({ col, row });
+  for (const { col: c, row: r } of [...front, ...rear]) {
+    const cell = win.getSpace(b37, c, r);
+    if (cell) cell.hazard = null;
+  }
+};
+clearHazardsAround37(3, 3);
+const aiCar37 = win.createCar(OPPONENT, CAR_SIZE.SMALL, 3, 3);
+G.allCars.push(aiCar37);
+G.roundState.dicePool[OPPONENT] = [1, 2, 3, 4];
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
+const decision37 = { car: aiCar37, dieValue: 1, command: { type: "drift", dieValue: 3 }, isEntry: false, isCoast: false, destination: { path: ["front"] }, slam: null, roadBonusPath: null };
+const gen37 = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, win.eval("PLAYER_NAMES"), OPPONENT, decision37, { isHumanOwner: (o) => o === HUMAN });
+win.driveAiTurnGenerator(gen37, "Test — tour IA avec Command", decision37);
+
+const cdStateCmd37 = win.eval("commandDieState");
+console.log("commandDieState contient bien une entrée pour l'IA (attendu true) :", !!cdStateCmd37[OPPONENT] && cdStateCmd37[OPPONENT].commandType === "drift" && cdStateCmd37[OPPONENT].dieValue === 3);
+win.render();
+const dashHtml37 = dom.window.document.getElementById("dashboards").innerHTML;
+console.log("Le dé de Command de l'IA est bien rendu sur son command board (attendu true) :", dashHtml37.includes("die-move-"));
+
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
