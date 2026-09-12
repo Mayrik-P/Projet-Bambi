@@ -709,17 +709,17 @@ const MARKER_ICON_SIZE23 = win.eval("MARKER_ICON_SIZE");
 const damageMarkerSize23 = MARKER_ICON_SIZE23 * 0.75;
 const cellC23 = win.cellCenter(4, 3);
 const vehicleLeftX23 = cellC23.cx + win.eval("CAR_IMG_OFFSET_X") - win.eval("CAR_IMG_W") / 2;
-const expectedX23 = vehicleLeftX23 - damageMarkerSize23 / 2;
+const expectedX23 = vehicleLeftX23; // bord gauche EXACT du marqueur = bord gauche EXACT du véhicule, retour de Mayrik
 const expectedY23 = cellC23.cy - damageMarkerSize23 / 2;
 console.log("Taille réduite à 75% (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("width")) - damageMarkerSize23) < 0.5);
 console.log("Centré verticalement sur le véhicule (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("y")) - expectedY23) < 0.5);
-console.log("Calé horizontalement contre le bord GAUCHE du véhicule (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("x")) - expectedX23) < 0.5);
+console.log("Calé horizontalement, bord gauche exact contre bord gauche du véhicule (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("x")) - expectedX23) < 0.5);
 
 const parentGroup23 = boardEl23.closest("g");
 const childrenOrder23 = [...parentGroup23.children];
 const markerIdx23 = childrenOrder23.indexOf(boardEl23);
 const vehicleImgIdx23 = childrenOrder23.map((el, i) => (el.tagName === "image" && el.getAttribute("href").includes("images/vehicles/") ? i : -1)).filter((i) => i !== -1).pop();
-console.log("Le marqueur est dessiné AVANT le véhicule dans le SVG (donc EN DESSOUS visuellement, retour de Mayrik) (attendu true) :", markerIdx23 < vehicleImgIdx23);
+console.log("Le marqueur est dessiné APRÈS le véhicule dans le SVG (donc AU-DESSUS visuellement, retour de Mayrik) (attendu true) :", markerIdx23 > vehicleImgIdx23);
 
 section("Test 24 — Bandeau de fin de partie centré sur le plateau (SVG), plus de div externe");
 
@@ -808,5 +808,94 @@ const vehicleImgs26 = [...dom.window.document.getElementById("board").querySelec
 const vehicleImg26 = vehicleImgs26[vehicleImgs26.length - 1]; // la dernière = le véhicule réel (l'ombre partage le même chemin et vient avant)
 console.log("Aucun attribut opacity sur le véhicule inopérable (attendu true) :", vehicleImg26.getAttribute("opacity") === null);
 console.log("La rotation 180° est bien conservée (attendu true) :", (vehicleImg26.getAttribute("transform") || "").includes("rotate(180"));
+
+section("Test 27 — Slam : marker-yes se décale vers rear-left si le dé Direction pointe pile sur la case arrière");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars.length = 0;
+const largerCar27 = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 3);
+const smallerCar27 = win.createCar(OPPONENT, CAR_SIZE.SMALL, 5, 3);
+G.allCars.push(largerCar27, smallerCar27);
+sel = win.eval("sel");
+sel.pendingHumanSlam = {
+  gen: null,
+  onComplete: null,
+  ctx: { topCar: smallerCar27, bottomCar: largerCar27, largerCar: largerCar27, smallerCar: smallerCar27, slamRoll: "top", directionRoll: "rear" }
+};
+sel.step = "slam-reroll-choice";
+win.render();
+
+const boardEl27 = dom.window.document.getElementById("board");
+const rearArc27 = win.getRearArc(largerCar27);
+const rearLeft27 = rearArc27.find((a) => a.name === "rear-left");
+const yesImg27 = [...boardEl27.querySelectorAll("image.clickable")].find((el) => el.getAttribute("href").includes("marker-yes.webp"));
+const MARKER_SIZE27 = win.eval("MARKER_ICON_SIZE");
+const yesCenterX27 = parseFloat(yesImg27.getAttribute("x")) + MARKER_SIZE27 / 2;
+const yesCenterY27 = parseFloat(yesImg27.getAttribute("y")) + MARKER_SIZE27 / 2;
+const rearLeftCenter27 = win.cellCenter(rearLeft27.col, rearLeft27.row);
+console.log("marker-yes s'est bien décalé vers rear-left quand le dé Direction pointe sur 'rear' (attendu true) :",
+  Math.abs(yesCenterX27 - rearLeftCenter27.cx) < 1 && Math.abs(yesCenterY27 - rearLeftCenter27.cy) < 1);
+
+section("Test 28 — Bouton IA : au-dessus de tout, coins arrondis partout, pas de transparence pendant l'animation");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
+win.eval("G.aiAnimating = true;");
+win.render();
+const dashSvg28 = dom.window.document.getElementById("dashboards");
+const lastChild28 = dashSvg28.lastElementChild;
+console.log("Le bouton (foreignObject) est bien le DERNIER élément du SVG (au-dessus de tout) (attendu true) :", lastChild28.tagName.toLowerCase() === "foreignobject");
+const btn28 = lastChild28.querySelector("button");
+console.log("border-radius appliqué explicitement en inline (4 coins identiques) (attendu true) :", (btn28.getAttribute("style") || "").includes("border-radius:6px"));
+console.log("opacity:1 explicite malgré disabled (plus de grisage pendant que l'IA joue) (attendu true) :", (btn28.getAttribute("style") || "").includes("opacity:1"));
+console.log("Le bouton est bien désactivé pendant l'animation (attendu true) :", btn28.hasAttribute("disabled"));
+
+section("Test 29 — Bug corrigé : le dé du 2e Coast s'affiche bien sur coast2, pas coast1");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s29 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
+s29.movedThisRound = true;
+s29.coastCount = 1; // a déjà coasté une fois -> le 2e doit aller sur coast2
+const m29 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
+m29.movedThisRound = true;
+const l29 = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2);
+l29.movedThisRound = true;
+G.allCars.push(s29, m29, l29);
+G.roundState.dicePool[HUMAN] = [4];
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+let clickables29 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables29[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
+win.render();
+clickables29 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+clickables29[0].dispatchEvent(new win.Event("click", { bubbles: true })); // slot coast2 de s29 (seul véhicule à coastCount<2 restant éligible avec un slot déjà pris)
+win.render();
+
+const box29 = win.eval('boardBox("small")');
+const rowBBox29 = win.eval("ROW_BBOX");
+const dimX29 = -rowBBox29.minX + box29.x, dimY29 = -rowBBox29.minY + box29.y;
+const frac29 = win.eval("VEHICLE_SLOT_FRACTION.small");
+const DIE29 = win.eval("DIE_DISPLAY_SIZE");
+const coast2X29 = dimX29 + frac29.coast2.x * box29.w - DIE29 / 2;
+const coast2Y29 = dimY29 + frac29.coast2.y * box29.h - DIE29 / 2;
+
+const dashHtml29 = dom.window.document.getElementById("dashboards").innerHTML;
+console.log("Un dé est bien rendu quelque part sur le dashboard (attendu true) :", dashHtml29.includes("die-move-"));
+const postDieEl29 = [...dom.window.document.querySelectorAll("#dashboards g")].find((g) => {
+  const img = g.querySelector("image");
+  return img && Math.abs(parseFloat(img.getAttribute("x")) - coast2X29) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - coast2Y29) < 1;
+});
+console.log("...et précisément SUR l'emplacement coast2 (bug corrigé, attendu true) :", !!postDieEl29);
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
