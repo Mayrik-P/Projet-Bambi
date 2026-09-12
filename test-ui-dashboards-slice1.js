@@ -690,7 +690,7 @@ win.render();
 sel = win.eval("sel");
 console.log("Le tour est bien terminé (sel réinitialisé) (attendu true) :", sel.car === undefined);
 const cdState = win.eval("coastDieState");
-console.log("coastDieState contient bien une entrée pour ce véhicule (attendu true) :", !!cdState[s22.id] && cdState[s22.id].slots[0] === 4);
+console.log("coastDieState contient bien une entrée pour ce véhicule, stockée sur coast2 (prioritaire, retour de Mayrik) (attendu true) :", !!cdState[s22.id] && cdState[s22.id].slots[1] === 4);
 const dashHtml22 = dom.window.document.getElementById("dashboards").innerHTML;
 console.log("Un dé est bien rendu sur le dashboard après la fin du tour (attendu true) :", dashHtml22.includes("die-move-"));
 
@@ -732,7 +732,7 @@ const boardHtml24 = dom.window.document.getElementById("board").innerHTML;
 console.log("Le bandeau est bien dessiné DANS le SVG du plateau, nouveau format anglais (attendu true) :", boardHtml24.includes("Game over: Blue wins by Finish Line"));
 console.log("L'ancien bandeau HTML externe reste caché (attendu true) :", dom.window.document.getElementById("winnerBanner").style.display === "none");
 
-section("Test 25 — Bug de fond : coastCount s'incrémente réellement, le 2e Coast propose bien coast2");
+section("Test 25 — Bug de fond : coastCount s'incrémente réellement, coast1 reste toujours proposé au clic");
 
 dom = makeDom();
 win = dom.window;
@@ -782,15 +782,17 @@ s25Rect2.dispatchEvent(new win.Event("click", { bubbles: true }));
 sel = win.eval("sel");
 console.log("Le 2e clic cible bien s25 (attendu true) :", sel.car === s25);
 
-// Vérifie que la position cliquée correspond bien à coast2, pas coast1 (déjà pris)
+// Vérifie que la position cliquée correspond bien à coast1 — TOUJOURS
+// le slot proposé au clic désormais, même pour un 2e Coast (retour de
+// Mayrik : coast2 ne sert plus qu'au stockage, jamais à la sélection).
 const box25 = win.eval('boardBox("small")');
 const rowBBox25 = win.eval("ROW_BBOX");
 const dimX25 = -rowBBox25.minX + box25.x, dimY25 = -rowBBox25.minY + box25.y;
 const frac25 = win.eval("VEHICLE_SLOT_FRACTION.small");
 const DIE25 = win.eval("DIE_DISPLAY_SIZE");
-const coast2X = dimX25 + frac25.coast2.x * box25.w - DIE25 / 2;
-console.log("Le slot proposé est bien COAST2 (coast1 déjà pris) (attendu true) :",
-  Math.abs(parseFloat(s25Rect2.getAttribute("x")) - coast2X) < 1);
+const coast1X = dimX25 + frac25.coast1.x * box25.w - DIE25 / 2;
+console.log("Le slot proposé est bien TOUJOURS COAST1, même pour le 2e Coast (attendu true) :",
+  Math.abs(parseFloat(s25Rect2.getAttribute("x")) - coast1X) < 1);
 
 section("Test 26 — Véhicule inopérable : plus de transparence, rotation 180° conservée");
 
@@ -856,7 +858,7 @@ console.log("border-radius appliqué explicitement en inline (4 coins identiques
 console.log("opacity:1 explicite malgré disabled (plus de grisage pendant que l'IA joue) (attendu true) :", (btn28.getAttribute("style") || "").includes("opacity:1"));
 console.log("Le bouton est bien désactivé pendant l'animation (attendu true) :", btn28.hasAttribute("disabled"));
 
-section("Test 29 — Bug corrigé : le dé du 2e Coast s'affiche bien sur coast2, pas coast1");
+section("Test 29 — Nouvelle logique Coast : le dé en cours de tour reste TOUJOURS sur coast1, même avec coastCount=1");
 
 dom = makeDom();
 win = dom.window;
@@ -865,7 +867,7 @@ G = win.eval("G");
 G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
 const s29 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
 s29.movedThisRound = true;
-s29.coastCount = 1; // a déjà coasté une fois -> le 2e doit aller sur coast2
+s29.coastCount = 1; // a déjà coasté une fois -> coast1 doit quand même être proposé/affiché à nouveau
 const m29 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
 m29.movedThisRound = true;
 const l29 = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2);
@@ -879,7 +881,7 @@ let clickables29 = [...dom.window.document.querySelectorAll("#dashboards .clicka
 clickables29[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
 win.render();
 clickables29 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
-clickables29[0].dispatchEvent(new win.Event("click", { bubbles: true })); // slot coast2 de s29 (seul véhicule à coastCount<2 restant éligible avec un slot déjà pris)
+clickables29[0].dispatchEvent(new win.Event("click", { bubbles: true })); // slot coast1 de s29 (toujours coast1, retour de Mayrik)
 win.render();
 
 const box29 = win.eval('boardBox("small")');
@@ -887,16 +889,16 @@ const rowBBox29 = win.eval("ROW_BBOX");
 const dimX29 = -rowBBox29.minX + box29.x, dimY29 = -rowBBox29.minY + box29.y;
 const frac29 = win.eval("VEHICLE_SLOT_FRACTION.small");
 const DIE29 = win.eval("DIE_DISPLAY_SIZE");
-const coast2X29 = dimX29 + frac29.coast2.x * box29.w - DIE29 / 2;
-const coast2Y29 = dimY29 + frac29.coast2.y * box29.h - DIE29 / 2;
+const coast1X29 = dimX29 + frac29.coast1.x * box29.w - DIE29 / 2;
+const coast1Y29 = dimY29 + frac29.coast1.y * box29.h - DIE29 / 2;
 
 const dashHtml29 = dom.window.document.getElementById("dashboards").innerHTML;
 console.log("Un dé est bien rendu quelque part sur le dashboard (attendu true) :", dashHtml29.includes("die-move-"));
 const postDieEl29 = [...dom.window.document.querySelectorAll("#dashboards g")].find((g) => {
   const img = g.querySelector("image");
-  return img && Math.abs(parseFloat(img.getAttribute("x")) - coast2X29) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - coast2Y29) < 1;
+  return img && Math.abs(parseFloat(img.getAttribute("x")) - coast1X29) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - coast1Y29) < 1;
 });
-console.log("...et précisément SUR l'emplacement coast2 (bug corrigé, attendu true) :", !!postDieEl29);
+console.log("...et précisément SUR l'emplacement coast1, malgré coastCount=1 (nouvelle logique, attendu true) :", !!postDieEl29);
 
 section("Test 30 — BUG BLOQUANT trouvé par Mayrik : marker-road doit s'afficher même si la case pile devant est Impassable");
 
@@ -982,5 +984,57 @@ win.render();
 const btn33 = [...dom.window.document.querySelectorAll("#dashboards button")][0];
 console.log("Le bouton n'a plus de margin-top parasite (centrage vertical correct) (attendu true) :", !(btn33.getAttribute("style") || "").includes("margin-top"));
 console.log("La classe .primary n'ajoute plus de margin (vérifié en CSS) (attendu true) :", dom.window.getComputedStyle(btn33).marginTop === "0px");
+
+section("Test 34 — Scénario complet bout-en-bout : 1er Coast -> bascule sur coast2, 2e Coast -> reste sur coast1");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s34 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
+const m34 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
+const l34 = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2);
+[s34, m34, l34].forEach((c) => { c.movedThisRound = true; });
+G.allCars.push(s34, m34, l34);
+G.roundState.dicePool[HUMAN] = [4, 3];
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+
+// --- 1er Coast complet sur s34 ---
+let clickables34 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
+win.render();
+clickables34 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // coast1 (toujours, s34 en 1er)
+sel = win.eval("sel");
+const opts34a = win.getMovementStepOptions(win.board(), sel.car, sel.remaining, G.allCars);
+const opt34a = opts34a.find((o) => o.outcome !== "eliminated-edge" && !String(o.outcome || "").startsWith("exits")) || opts34a[0];
+win.pickMoveStep(opt34a);
+win.render();
+
+let cdState34 = win.eval("coastDieState");
+console.log("Après le 1er Coast : coast1 vide, coast2 contient le dé (bascule, attendu true) :",
+  cdState34[s34.id].slots[0] === null && cdState34[s34.id].slots[1] === 4);
+
+// --- 2e Coast, même véhicule (on force le retour à HUMAN, le tour de l'IA n'est pas le sujet ici) ---
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.render();
+clickables34 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie (dernier dé, 3)
+win.render();
+clickables34 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // coast1 à nouveau (toujours proposé)
+sel = win.eval("sel");
+console.log("Le 2e clic cible bien s34 à nouveau (attendu true) :", sel.car === s34);
+const opts34b = win.getMovementStepOptions(win.board(), sel.car, sel.remaining, G.allCars);
+const opt34b = opts34b.find((o) => o.outcome !== "eliminated-edge" && !String(o.outcome || "").startsWith("exits")) || opts34b[0];
+win.pickMoveStep(opt34b);
+win.render();
+
+cdState34 = win.eval("coastDieState");
+console.log("Après le 2e Coast : coast2 inchangé (1er dé), coast1 contient maintenant le 2e dé, y reste (attendu true) :",
+  cdState34[s34.id].slots[0] === 3 && cdState34[s34.id].slots[1] === 4);
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
