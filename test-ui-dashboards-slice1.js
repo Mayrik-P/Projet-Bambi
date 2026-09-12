@@ -931,4 +931,53 @@ const boardHtml30 = dom.window.document.getElementById("board").innerHTML;
 console.log("marker-road-3 est bien affiché même si 'devant' est Impassable, repli sur front-left/right (attendu true) :", boardHtml30.includes("marker-road-3.webp"));
 console.log("marker-no reste affiché comme avant (attendu true) :", boardHtml30.includes("marker-no.webp"));
 
+section("Test 31 — Mise en page épurée : titre/badges/panel/damageRow/legend masqués, plateau calé en haut");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+console.log("h1 et .sub ont bien été retirés du DOM (attendu true) :", !dom.window.document.querySelector("h1") && !dom.window.document.querySelector(".sub"));
+[".badges", "#panel", ".damageList", ".legend"].forEach((sel) => {
+  const el = dom.window.document.querySelector(sel);
+  const display = dom.window.getComputedStyle(el).display;
+  console.log(`${sel} est bien masqué (display:none) (attendu true) :`, display === "none");
+});
+const bodyStyle = dom.window.getComputedStyle(dom.window.document.body);
+console.log("Plus de padding sur body (plateau collé en haut) (attendu true) :", bodyStyle.padding === "0px" || bodyStyle.paddingTop === "0px");
+console.log("#log reste bien visible (journal debug conservé) (attendu true) :", dom.window.getComputedStyle(dom.window.document.getElementById("log")).display !== "none");
+
+section("Test 32 — Overlay du dé Road actif : position calculée au milieu de la bande titre, centrée à l'écran");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.roundState.roadDie = 2;
+const boardStub = dom.window.document.getElementById("board");
+boardStub.getBoundingClientRect = () => ({ top: 100, left: 0, width: 900, height: 500, right: 900, bottom: 600 });
+win.render();
+const overlay32 = dom.window.document.getElementById("roadDieOverlay");
+console.log("L'overlay est visible (attendu true) :", overlay32.style.display === "block");
+console.log("Le src pointe bien vers die-fx-road-2 (attendu true) :", overlay32.src.includes("die-fx-road-2.webp"));
+const IMG_CELL_H32 = win.eval("IMG_CELL_H");
+const BOARD_VIEW_W32 = win.eval("BOARD_VIEW.w");
+const expectedTop32 = 100 + (IMG_CELL_H32 / 2) * (900 / BOARD_VIEW_W32);
+console.log("Le 'top' correspond bien au milieu de la bande titre, reconverti à l'échelle réelle (attendu true) :",
+  Math.abs(parseFloat(overlay32.style.top) - expectedTop32) < 0.5);
+console.log("Centré horizontalement via CSS (left:50%, translateX(-50%)) (attendu true) :",
+  win.eval('getComputedStyle(document.getElementById("roadDieOverlay")).left') === "50%");
+
+section("Test 33 — Bouton IA : centrage vertical corrigé (plus de margin-top parasite)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
+win.render();
+const btn33 = [...dom.window.document.querySelectorAll("#dashboards button")][0];
+console.log("Le bouton n'a plus de margin-top parasite (centrage vertical correct) (attendu true) :", !(btn33.getAttribute("style") || "").includes("margin-top"));
+console.log("La classe .primary n'ajoute plus de margin (vérifié en CSS) (attendu true) :", dom.window.getComputedStyle(btn33).marginTop === "0px");
+
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
