@@ -949,27 +949,34 @@ const bodyStyle = dom.window.getComputedStyle(dom.window.document.body);
 console.log("Plus de padding sur body (plateau collé en haut) (attendu true) :", bodyStyle.padding === "0px" || bodyStyle.paddingTop === "0px");
 console.log("#log reste bien visible (journal debug conservé) (attendu true) :", dom.window.getComputedStyle(dom.window.document.getElementById("log")).display !== "none");
 
-section("Test 32 — Dé Road actif : rendu intégré aux dashboards, position calibrée, présent sur les DEUX lignes joueur");
+section("Test 32 — Dé Road actif : rendu intégré aux dashboards, position calibrée, UNIQUEMENT sur la ligne du 1er joueur du round");
 
 dom = makeDom();
 win = dom.window;
 win.newGame();
 G = win.eval("G");
 G.roundState.roadDie = 2;
+const roundStartPlayer32 = G.roundState.playerOrder[G.roundState.roundStartIndex];
+console.log("1er joueur de ce round (pour référence) :", roundStartPlayer32);
 win.render();
 
 const dashHtml32 = dom.window.document.getElementById("dashboards").innerHTML;
 const roadDieImgs32 = [...dom.window.document.querySelectorAll("#dashboards image")].filter((el) => el.getAttribute("href").includes("die-fx-road-2.webp"));
-console.log("Le dé Road (die-fx-road-2) est bien affiché (attendu true) :", roadDieImgs32.length >= 1);
-console.log("...et présent sur les DEUX lignes joueur, peu importe qui les occupe (attendu true) :", roadDieImgs32.length === 2);
+console.log("Le dé Road (die-fx-road-2) est bien affiché (attendu true) :", roadDieImgs32.length === 1);
+console.log("...UNE SEULE FOIS (retour de Mayrik : plus sur les deux lignes) (attendu true) :", roadDieImgs32.length === 1);
+console.log("...à la taille normale des autres dés (DIE_DISPLAY_SIZE, pas MARKER_ICON_SIZE) (attendu true) :",
+  Math.abs(parseFloat(roadDieImgs32[0].getAttribute("width")) - win.eval("DIE_DISPLAY_SIZE")) < 0.5);
 
-const box32 = win.eval('boardBox("small")');
-const rowBBox32 = win.eval("ROW_BBOX");
-const dimX32 = -rowBBox32.minX + box32.x, dimY32 = -rowBBox32.minY + box32.y;
+// Retrouve dynamiquement la position réelle du dashboard SMALL du 1er
+// joueur du round (plutôt que de supposer qu'il est en ligne 0).
+const roundStartColor32 = win.eval(`PLAYER_CAR_COLOR["${roundStartPlayer32}"]`);
+const smallImg32 = [...dom.window.document.querySelectorAll("#dashboards image")].find((el) => (el.getAttribute("href") || "").includes(`dashboard-${roundStartColor32}-small`));
+const smallX32 = parseFloat(smallImg32.getAttribute("x")), smallY32 = parseFloat(smallImg32.getAttribute("y"));
+const smallW32 = parseFloat(smallImg32.getAttribute("width")), smallH32 = parseFloat(smallImg32.getAttribute("height"));
 const frac32 = win.eval("ROAD_DIE_FRACTION");
-const MARKER32 = win.eval("MARKER_ICON_SIZE");
-const expectedX32 = dimX32 + frac32.x * box32.w - MARKER32 / 2;
-const expectedY32 = dimY32 + frac32.y * box32.h - MARKER32 / 2;
+const DIE32 = win.eval("DIE_DISPLAY_SIZE");
+const expectedX32 = smallX32 + frac32.x * smallW32 - DIE32 / 2;
+const expectedY32 = smallY32 + frac32.y * smallH32 - DIE32 / 2;
 console.log("Position conforme à la fraction calibrée par Mayrik (x=0.142, y=-0.126, relative à SMALL) (attendu true) :",
   Math.abs(parseFloat(roadDieImgs32[0].getAttribute("x")) - expectedX32) < 0.5 && Math.abs(parseFloat(roadDieImgs32[0].getAttribute("y")) - expectedY32) < 0.5);
 
@@ -992,6 +999,17 @@ win = dom.window;
 win.newGame();
 G = win.eval("G");
 G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const b34 = win.board();
+const clearHazardsAround34 = (col, row) => {
+  win.getSpace(b34, col, row).hazard = null;
+  const front = win.getFrontArc({ col, row });
+  const rear = win.getRearArc({ col, row });
+  for (const { col: c, row: r } of [...front, ...rear]) {
+    const cell = win.getSpace(b34, c, r);
+    if (cell) cell.hazard = null;
+  }
+};
+clearHazardsAround34(5, 0);
 const s34 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
 const m34 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
 const l34 = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2);
@@ -1182,5 +1200,56 @@ console.log("commandDieState contient bien une entrée pour l'IA (attendu true) 
 win.render();
 const dashHtml37 = dom.window.document.getElementById("dashboards").innerHTML;
 console.log("Le dé de Command de l'IA est bien rendu sur son command board (attendu true) :", dashHtml37.includes("die-move-"));
+
+section("Test 38 — BUG CORRIGÉ : le dé de l'IA doit s'effacer à la fin du round même quand SON tour termine le round");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars.length = 0;
+const b38 = win.board();
+const clearHazardsAround38 = (col, row) => {
+  win.getSpace(b38, col, row).hazard = null;
+  const front = win.getFrontArc({ col, row });
+  const rear = win.getRearArc({ col, row });
+  for (const { col: c, row: r } of [...front, ...rear]) {
+    const cell = win.getSpace(b38, c, r);
+    if (cell) cell.hazard = null;
+  }
+};
+clearHazardsAround38(3, 3);
+const aiCar38 = win.createCar(OPPONENT, CAR_SIZE.SMALL, 3, 3);
+G.allCars.push(aiCar38);
+G.roundState.dicePool[OPPONENT] = [1];
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
+// Force ce tour à être le TOUT DERNIER du round : personne d'autre
+// n'a de tour restant, et l'IA en est à son 3e (dernier).
+G.roundState.turnsThisRound[HUMAN] = 3;
+G.roundState.turnsThisRound[OPPONENT] = 2;
+const roundBeforeThisTurn38 = G.roundState.roundNumber;
+
+const decision38 = { car: aiCar38, dieValue: 1, command: null, isEntry: false, isCoast: false, destination: { path: ["front"] }, slam: null, roadBonusPath: null };
+decision38.roundAtStart = G.roundState.roundNumber; // même chose que playAiTurn() ferait avant d'appeler executeDecisionGen
+const gen38 = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, win.eval("PLAYER_NAMES"), OPPONENT, decision38, { isHumanOwner: (o) => o === HUMAN });
+win.driveAiTurnGenerator(gen38, "Test — dernier tour du round", decision38);
+
+console.log("Le round a bien avancé PENDANT ce tour (condition du bug) (attendu true) :", G.roundState.roundNumber === roundBeforeThisTurn38 + 1);
+const etState38 = win.eval("endTurnDieState");
+console.log("Le dé est bien estampillé sur le round PENDANT LEQUEL il a été joué, pas le suivant (bug corrigé, attendu true) :",
+  etState38[aiCar38.id] && etState38[aiCar38.id].round === roundBeforeThisTurn38);
+win.render();
+const smallImg38 = [...dom.window.document.querySelectorAll("#dashboards image")].find((el) => (el.getAttribute("href") || "").includes("dashboard-orange-small") || (el.getAttribute("href") || "").includes(`dashboard-${win.eval('PLAYER_CAR_COLOR[OPPONENT]')}-small`));
+const smallX38 = parseFloat(smallImg38.getAttribute("x")), smallY38 = parseFloat(smallImg38.getAttribute("y"));
+const smallW38 = parseFloat(smallImg38.getAttribute("width")), smallH38 = parseFloat(smallImg38.getAttribute("height"));
+const fracEndTurn38 = win.eval("VEHICLE_SLOT_FRACTION.small.endTurn");
+const DIE38 = win.eval("DIE_DISPLAY_SIZE");
+const expectedEndTurnX38 = smallX38 + fracEndTurn38.x * smallW38 - DIE38 / 2;
+const expectedEndTurnY38 = smallY38 + fracEndTurn38.y * smallH38 - DIE38 / 2;
+const staleDie38 = [...dom.window.document.querySelectorAll("#dashboards g")].find((g) => {
+  const img = g.querySelector("image");
+  return img && Math.abs(parseFloat(img.getAttribute("x")) - expectedEndTurnX38) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - expectedEndTurnY38) < 1;
+});
+console.log("...et ne s'affiche donc PLUS sur l'emplacement END TURN maintenant que le round suivant est en cours (attendu true) :", !staleDie38);
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
