@@ -947,26 +947,29 @@ const bodyStyle = dom.window.getComputedStyle(dom.window.document.body);
 console.log("Plus de padding sur body (plateau collé en haut) (attendu true) :", bodyStyle.padding === "0px" || bodyStyle.paddingTop === "0px");
 console.log("#log reste bien visible (journal debug conservé) (attendu true) :", dom.window.getComputedStyle(dom.window.document.getElementById("log")).display !== "none");
 
-section("Test 32 — Overlay du dé Road actif : position calculée au milieu de la bande titre, centrée à l'écran");
+section("Test 32 — Dé Road actif : rendu intégré aux dashboards, position calibrée, présent sur les DEUX lignes joueur");
 
 dom = makeDom();
 win = dom.window;
 win.newGame();
 G = win.eval("G");
 G.roundState.roadDie = 2;
-const boardStub = dom.window.document.getElementById("board");
-boardStub.getBoundingClientRect = () => ({ top: 100, left: 0, width: 900, height: 500, right: 900, bottom: 600 });
 win.render();
-const overlay32 = dom.window.document.getElementById("roadDieOverlay");
-console.log("L'overlay est visible (attendu true) :", overlay32.style.display === "block");
-console.log("Le src pointe bien vers die-fx-road-2 (attendu true) :", overlay32.src.includes("die-fx-road-2.webp"));
-const IMG_CELL_H32 = win.eval("IMG_CELL_H");
-const BOARD_VIEW_W32 = win.eval("BOARD_VIEW.w");
-const expectedTop32 = 100 + (IMG_CELL_H32 / 2) * (900 / BOARD_VIEW_W32);
-console.log("Le 'top' correspond bien au milieu de la bande titre, reconverti à l'échelle réelle (attendu true) :",
-  Math.abs(parseFloat(overlay32.style.top) - expectedTop32) < 0.5);
-console.log("Centré horizontalement via CSS (left:50%, translateX(-50%)) (attendu true) :",
-  win.eval('getComputedStyle(document.getElementById("roadDieOverlay")).left') === "50%");
+
+const dashHtml32 = dom.window.document.getElementById("dashboards").innerHTML;
+const roadDieImgs32 = [...dom.window.document.querySelectorAll("#dashboards image")].filter((el) => el.getAttribute("href").includes("die-fx-road-2.webp"));
+console.log("Le dé Road (die-fx-road-2) est bien affiché (attendu true) :", roadDieImgs32.length >= 1);
+console.log("...et présent sur les DEUX lignes joueur, peu importe qui les occupe (attendu true) :", roadDieImgs32.length === 2);
+
+const box32 = win.eval('boardBox("small")');
+const rowBBox32 = win.eval("ROW_BBOX");
+const dimX32 = -rowBBox32.minX + box32.x, dimY32 = -rowBBox32.minY + box32.y;
+const frac32 = win.eval("ROAD_DIE_FRACTION");
+const MARKER32 = win.eval("MARKER_ICON_SIZE");
+const expectedX32 = dimX32 + frac32.x * box32.w - MARKER32 / 2;
+const expectedY32 = dimY32 + frac32.y * box32.h - MARKER32 / 2;
+console.log("Position conforme à la fraction calibrée par Mayrik (x=0.142, y=-0.126, relative à SMALL) (attendu true) :",
+  Math.abs(parseFloat(roadDieImgs32[0].getAttribute("x")) - expectedX32) < 0.5 && Math.abs(parseFloat(roadDieImgs32[0].getAttribute("y")) - expectedY32) < 0.5);
 
 section("Test 33 — Bouton IA : centrage vertical corrigé (plus de margin-top parasite)");
 
