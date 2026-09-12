@@ -7379,14 +7379,18 @@ function renderDashboards() {
       // Dé Road actif ce round — retour de Mayrik : remplace l'ancien
       // texte "Dé Road ce round : N", et l'overlay flottant en haut de
       // l'écran (mal placé). Position calibrée par Mayrik dans l'espace
-      // libre entre le plateau, le command board et SMALL — dessiné une
-      // fois par ligne joueur (donc toujours visible, peu importe
-      // laquelle des deux occupe cette ligne à l'instant donné).
-      if (size === "small" && G.roundState.roadDie) {
-        const rdX = dim.x + ROAD_DIE_FRACTION.x * dim.w - MARKER_ICON_SIZE / 2;
-        const rdY = dim.y + ROAD_DIE_FRACTION.y * dim.h - MARKER_ICON_SIZE / 2;
+      // libre entre le plateau, le command board et SMALL. Affiché
+      // UNIQUEMENT sur la ligne du 1er joueur DE CE ROUND (celui qui a
+      // tiré le dé Road, voir roundStartIndex) — pas sur les deux
+      // lignes comme avant (retour de Mayrik). Même taille que les
+      // autres dés (DIE_DISPLAY_SIZE, pas MARKER_ICON_SIZE — échelles
+      // différentes, retour de Mayrik : il paraissait plus petit).
+      const roundStartPlayer = G.roundState.playerOrder[G.roundState.roundStartIndex];
+      if (size === "small" && G.roundState.roadDie && playerName === roundStartPlayer) {
+        const rdX = dim.x + ROAD_DIE_FRACTION.x * dim.w - DIE_DISPLAY_SIZE / 2;
+        const rdY = dim.y + ROAD_DIE_FRACTION.y * dim.h - DIE_DISPLAY_SIZE / 2;
         const rdPath = `../images/dice/die-fx-road-${G.roundState.roadDie}.webp`;
-        svg.insertAdjacentHTML("beforeend", `<image href="${rdPath}" xlink:href="${rdPath}" x="${rdX.toFixed(1)}" y="${rdY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>`);
+        svg.insertAdjacentHTML("beforeend", `<image href="${rdPath}" xlink:href="${rdPath}" x="${rdX.toFixed(1)}" y="${rdY.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" pointer-events="none"/>`);
       }
 
       const car = G.allCars.find((c) => c.owner === playerName && c.size === size && c.status !== "eliminated");
@@ -7721,6 +7725,15 @@ function playAiTurn() {
     render();
     return;
   }
+  // BUG CORRIGÉ (retour de Mayrik) : executeDecisionGen appelle
+  // advanceTurn() EN INTERNE avant de signaler sa fin — si ce tour de
+  // l'IA est le DERNIER du round, G.roundState.roundNumber a donc déjà
+  // changé au moment où driveAiTurnGenerator enregistre l'état
+  // persistant (endTurnDieState/coastDieState/commandDieState), qui se
+  // retrouvait alors estampillé sur le MAUVAIS round (celui qui vient
+  // de démarrer) et ne s'effaçait donc jamais au bon moment. On capture
+  // le round ICI, avant tout appel, et on le transporte avec decision.
+  decision.roundAtStart = G.roundState.roundNumber;
   // Verrou anti double-clic PENDANT l'animation case par case : les
   // pauses {type:"step"} passent par setTimeout (voir
   // driveAiTurnGenerator, qui pose G.aiAnimating dès son premier
@@ -7799,13 +7812,18 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
   // même chose côté IA que côté joueur — sur quoi elle a joué quel
   // dé). decision.car/dieValue/isCoast viennent de decideAssignAndCommand,
   // stables du tout début à la toute fin de ce tour (jamais mutés en
-  // cours de route, contrairement à sel côté humain).
+  // cours de route, contrairement à sel côté humain). decision.roundAtStart
+  // (pas G.roundState.roundNumber, potentiellement déjà avancé par
+  // executeDecisionGen en interne si ce tour finissait le round — voir
+  // playAiTurn) : c'est le round PENDANT LEQUEL ce dé a réellement été
+  // joué qui doit être estampillé, jamais le suivant.
+  const roundPlayed = decision ? decision.roundAtStart : G.roundState.roundNumber;
   if (decision && decision.car && !decision.isCoast && decision.dieValue !== undefined) {
-    endTurnDieState[decision.car.id] = { round: G.roundState.roundNumber, dieValue: decision.dieValue };
+    endTurnDieState[decision.car.id] = { round: roundPlayed, dieValue: decision.dieValue };
   }
   if (decision && decision.car && decision.isCoast && decision.dieValue !== undefined) {
-    if (!coastDieState[decision.car.id] || coastDieState[decision.car.id].round !== G.roundState.roundNumber) {
-      coastDieState[decision.car.id] = { round: G.roundState.roundNumber, slots: [null, null] };
+    if (!coastDieState[decision.car.id] || coastDieState[decision.car.id].round !== roundPlayed) {
+      coastDieState[decision.car.id] = { round: roundPlayed, slots: [null, null] };
     }
     const slots = coastDieState[decision.car.id].slots;
     const idx = slots[1] === null ? 1 : 0; // coast2 prioritaire s'il est libre, sinon coast1 — même règle que côté humain
@@ -7815,7 +7833,7 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
   // côté humain (retour de Mayrik : ne s'affichait jamais du tout pour
   // l'IA jusqu'ici).
   if (decision && decision.car && decision.command && decision.command.dieValue !== undefined) {
-    commandDieState[decision.car.owner] = { round: G.roundState.roundNumber, commandType: decision.command.type, dieValue: decision.command.dieValue };
+    commandDieState[decision.car.owner] = { round: roundPlayed, commandType: decision.command.type, dieValue: decision.command.dieValue };
   }
   pushLogLines(outcome.result.log || [], turnLabel);
   checkEnd();
