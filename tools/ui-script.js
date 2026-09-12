@@ -24,16 +24,51 @@
 // executeDecision — aucun changement de ce côté.
 // ===================================================================
 
-const HUMAN = "Vous";
-const OPPONENT = "IA";
-const PLAYER_NAMES = [HUMAN, OPPONENT];
-// Couleur de véhicule par joueur — table FIXE temporaire (Mayrik n'a
-// pas encore tranché : à terme, un écran proposera le choix parmi les
-// 5 couleurs disponibles avant le lancement d'une partie). En
-// attendant, changer ces deux valeurs suffit pour tester une autre
-// combinaison. Couleurs disponibles : blue/green/orange/purple/white
-// (voir images/vehicles/).
-const PLAYER_CAR_COLOR = { [HUMAN]: "blue", [OPPONENT]: "orange" };
+// Identité par couleur (retour de Mayrik) : chaque joueur, humain ou
+// IA, est identifié directement par sa couleur de véhicule — c'est
+// cette couleur qui sert de clé partout dans le moteur (playerName),
+// jamais un nom générique "Vous"/"IA". L'affichage textuel (les
+// quelques endroits où un nom apparaît en clair) passe par
+// playerLabel() ci-dessous, qui construit "Humain Bleu"/"IA Verte" à
+// la volée — jamais stocké comme identifiant.
+//
+// OPPONENT reste "orange" (1ère IA) pour ne rien casser de l'existant
+// (tests, code déjà écrit autour d'un scénario 1 IA) — le joueur
+// humain est TOUJOURS bleu, les IA supplémentaires prennent
+// vert/violet dans l'ordre d'ajout. AI_COUNT (1 à 3) est fixé par
+// l'écran d'accueil (voir showStartScreen()/configurePlayers() plus
+// bas) avant tout appel à newGame(). Couleurs disponibles :
+// blue/green/orange/purple/white (voir images/vehicles/) — white
+// reste en réserve si Mayrik veut un jour un 5e joueur.
+const HUMAN = "blue";
+const OPPONENT = "orange";
+const AI_COLORS = ["orange", "green", "purple"];
+let AI_COUNT = 1;
+let PLAYER_NAMES = [HUMAN, ...AI_COLORS.slice(0, AI_COUNT)];
+// Devient une identité pure (chaque joueur EST sa couleur) — gardée
+// comme vraie table plutôt que remplacée par playerName partout, pour
+// ne toucher aucun des nombreux appels existants qui font déjà
+// PLAYER_CAR_COLOR[playerName]. Reconstruite par configurePlayers().
+let PLAYER_CAR_COLOR = Object.fromEntries(PLAYER_NAMES.map((p) => [p, p]));
+
+// Nom d'affichage lisible pour les quelques endroits où un nom de
+// joueur apparaît en texte (jamais utilisé comme clé/identifiant).
+const COLOR_LABEL_FR = { blue: "Bleu", orange: "Orange", green: "Verte", purple: "Violette", white: "Blanche" };
+function playerLabel(playerName) {
+  const role = playerName === HUMAN ? "Humain" : "IA";
+  return `${role} ${COLOR_LABEL_FR[playerName] || playerName}`;
+}
+
+// Reconfigure PLAYER_NAMES/PLAYER_CAR_COLOR pour un nombre d'IA donné
+// (1 à 3, borné à AI_COLORS.length) — appelé par l'écran d'accueil
+// avant newGame(). Un appel newGame() est TOUJOURS nécessaire après
+// pour que la partie démarre avec le bon nombre de joueurs (chopper +
+// 3 véhicules par joueur, voir newGame()).
+function configurePlayers(aiCount) {
+  AI_COUNT = Math.max(1, Math.min(AI_COLORS.length, aiCount));
+  PLAYER_NAMES = [HUMAN, ...AI_COLORS.slice(0, AI_COUNT)];
+  PLAYER_CAR_COLOR = Object.fromEntries(PLAYER_NAMES.map((p) => [p, p]));
+}
 
 // --- Géométrie du plateau (reprise à l'identique des viewers de debug) ---
 // --- Calibrage final, réglé à la main par Mayrik avec l'outil
@@ -690,7 +725,7 @@ function renderDashboards() {
     // certain qu'il reste au-dessus de tout le reste, quel que soit
     // l'ordre des lignes joueurs. Absent pendant une pause de relance
     // de Slam (marqueurs reroll/no) ou une fois la partie terminée.
-    if (playerName === OPPONENT && cp === OPPONENT && !gameOver && !G.aiPending) {
+    if (playerName !== HUMAN && cp === playerName && !gameOver && !G.aiPending) {
       const btnW = cmd.w * 0.88, btnH = cmd.h * 0.22;
       pendingAiButton = {
         bx: cmd.x + cmd.w / 2 - btnW / 2,
@@ -734,7 +769,7 @@ function renderDashboards() {
       if (isCancelable) {
         svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
       }
-    } else if (playerName === OPPONENT && currentAiDecision && currentAiDecision.command) {
+    } else if (playerName !== HUMAN && currentAiDecision && currentAiDecision.car && currentAiDecision.car.owner === playerName && currentAiDecision.command) {
       // Même affichage "vivant" que côté humain (retour de Mayrik) —
       // visible dès que la décision de l'IA est connue, avant même le
       // début du mouvement. Jamais cliquable.
@@ -882,7 +917,7 @@ function renderDashboards() {
         if (isCancelable) {
           svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
         }
-      } else if (car && playerName === OPPONENT && currentAiDecision && currentAiDecision.car === car) {
+      } else if (car && playerName !== HUMAN && currentAiDecision && currentAiDecision.car === car) {
         // Même affichage "vivant", côté IA (retour de Mayrik : voir le
         // dé posé avant/pendant le mouvement, pas seulement une fois le
         // tour fini — comme pour un joueur). Jamais cliquable (aucune
@@ -1067,6 +1102,15 @@ function clearSavedGame() {
 // Restaure une partie sauvegardée dans G, prête à reprendre au début
 // d'une nouvelle activation (voir le compromis expliqué plus haut).
 function restoreGameState(payload) {
+  // Reconstruit PLAYER_NAMES/AI_COUNT/PLAYER_CAR_COLOR à partir de la
+  // partie sauvegardée (retour de Mayrik, support multi-IA) — sans ça,
+  // reprendre une partie à 3 IA après avoir rouvert l'appli (repartie
+  // sur son réglage par défaut, 1 IA) afficherait les mauvaises lignes
+  // de dashboard. payload.roundState.playerOrder est la source de
+  // vérité, HUMAN toujours en premier (voir configurePlayers).
+  PLAYER_NAMES = [...payload.roundState.playerOrder];
+  AI_COUNT = PLAYER_NAMES.length - 1;
+  PLAYER_CAR_COLOR = Object.fromEntries(PLAYER_NAMES.map((p) => [p, p]));
   G = {
     progressionState: payload.progressionState,
     allCars: payload.allCars,
@@ -1082,8 +1126,8 @@ function restoreGameState(payload) {
 function newGame() {
   const rawTiles = loadRealTiles();
   let setup, attempts = 0;
-  do { setup = setupTileProgressionFromRawData(rawTiles, { playerCount: 2 }); attempts++; } while (!setup.ok && attempts < 20);
-  const progressionState = createTileProgressionState(setup.rearTile, setup.middleTile, setup.leadTile, setup.drawPile, { playerCount: 2 });
+  do { setup = setupTileProgressionFromRawData(rawTiles, { playerCount: PLAYER_NAMES.length }); attempts++; } while (!setup.ok && attempts < 20);
+  const progressionState = createTileProgressionState(setup.rearTile, setup.middleTile, setup.leadTile, setup.drawPile, { playerCount: PLAYER_NAMES.length });
   const allCars = [];
   const allChoppers = [];
   for (const name of PLAYER_NAMES) {
@@ -1142,7 +1186,7 @@ function checkEnd() {
 function playAiTurn() {
   ensureRoadDieRolled(G.roundState);
   const cp = getCurrentPlayer(G.roundState);
-  if (!cp || cp !== OPPONENT) return;
+  if (!cp || cp === HUMAN) return;
   const b = board();
   const decision = decideAssignAndCommand(G.progressionState, b, G.allCars, G.allChoppers, G.roundState.dicePool, cp, G.roundState);
   if (!decision) {
@@ -2313,9 +2357,9 @@ function renderPanel() {
   const cp = getCurrentPlayer(G.roundState);
   if (!cp) return;
 
-  if (cp === OPPONENT) {
+  if (cp !== HUMAN) {
     const h2 = document.createElement("h2");
-    h2.textContent = `Au tour de ${OPPONENT}`;
+    h2.textContent = `Au tour de ${playerLabel(cp)}`;
     panel.appendChild(h2);
 
     if (G.aiPending) {
@@ -2484,15 +2528,44 @@ function render() {
 // ===================================================================
 // DÉMARRAGE
 // ===================================================================
+// Écran d'accueil (retour de Mayrik) : visible par défaut (voir
+// template.html), masqué dès qu'une partie démarre — que ce soit par
+// un choix explicite (bouton 1/2/3 IA) ou par la reprise d'une
+// sauvegarde existante (dans ce cas, le réglage d'alors est restauré
+// tel quel par restoreGameState(), pas besoin de repasser par
+// l'écran).
+function hideStartScreen() {
+  const el = document.getElementById("start-screen");
+  if (el) el.style.display = "none";
+}
+
+function startNewGameFromScreen(aiCount) {
+  configurePlayers(aiCount);
+  hideStartScreen();
+  newGame();
+  resetSelection();
+  render();
+}
+
+document.querySelectorAll(".opponent-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    startNewGameFromScreen(parseInt(btn.dataset.aiCount, 10));
+  });
+});
+
 const savedGame = loadGameState();
 if (savedGame && confirm("Une partie sauvegardée a été trouvée. Reprendre cette partie ?")) {
+  hideStartScreen();
   restoreGameState(savedGame);
-} else {
-  if (savedGame) clearSavedGame(); // le joueur a choisi de repartir à zéro
-  newGame();
+  resetSelection();
+  render();
+} else if (savedGame) {
+  clearSavedGame(); // le joueur a choisi de repartir à zéro
+  // L'écran d'accueil reste affiché (visible par défaut) — on attend
+  // son choix via un des boutons ci-dessus.
 }
-resetSelection();
-render();
+// Sans sauvegarde du tout : l'écran d'accueil reste affiché tel quel,
+// rien à faire de plus ici.
 
 // Filets de sécurité (voir le commentaire détaillé près de SAVE_KEY) :
 // `visibilitychange` est plus fiable que `beforeunload` sur mobile

@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <title>Thunder Road Vendetta — Prototype jouable (humain vs IA)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Oswald:wght@500;700&display=swap" rel="stylesheet">
 <style>
   body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 0; }
   #wrap { max-width: 1000px; margin: 0 auto; }
@@ -27,9 +30,74 @@
   #winnerBanner { display: none; }
   #panel .stop-message { background: #4a2020; border: 1px solid #a04040; padding: 10px; border-radius: 6px; margin-bottom: 8px; }
   #panel .tile-message { background: #204a3a; border: 1px solid #3ba07a; padding: 10px; border-radius: 6px; margin-bottom: 8px; }
+
+  /* --------------------------------------------------------------
+     Écran d'accueil (retour de Mayrik) : choix du nombre d'IA avant
+     le début de la partie. Ambiance graphique reprise de TRV Road
+     Tile Editor (même jeu, même univers) — fond parchemin, overlay
+     sombre, typographie extrudée "Alfa Slab One"/Oswald, boutons dorés
+     à bordure. Prototype pour l'instant (1/2/3 IA seulement) — un
+     futur menu complet (2e joueur humain, options) viendra remplacer
+     ceci sans toucher au reste de l'appli, même esprit que #title-band
+     dans le projet de référence. Visible par défaut ; masqué une fois
+     un choix fait (voir hideStartScreen() dans ui-script.js). -->
+  #start-screen { position: fixed; inset: 0; background: #565558; display: flex;
+    align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+  #start-screen-inner { display: flex; flex-direction: column; align-items: center; max-width: 460px; width: 100%; }
+  #start-title { font-family: "Alfa Slab One", serif; font-size: clamp(24px, 6vw, 34px);
+    color: #ecd5a7; text-transform: uppercase; letter-spacing: 1px; text-align: center;
+    -webkit-text-stroke: 1.2px #000; text-shadow: 2px 2px 0 #000, 4px 4px 0 rgba(0,0,0,0.6);
+    margin: 0 0 4px; }
+  #start-subtitle { font-family: "Oswald", Arial, sans-serif; font-weight: 700; font-size: 12px;
+    color: #d9a34a; text-transform: uppercase; letter-spacing: 2px; margin: 0 0 30px; text-align: center; }
+  #start-heading { font-family: "Oswald", Arial, sans-serif; font-weight: 700; font-size: 15px;
+    color: #ececec; margin: 0 0 18px; text-align: center; }
+  #opponent-options { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+  .opponent-btn { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: #e8b459; color: #1e1e24; border: 2px solid #b0956e; border-radius: 8px;
+    padding: 14px 20px; cursor: pointer; font-family: "Oswald", Arial, sans-serif; width: 100%;
+    box-shadow: 0 2px 2px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.35); }
+  .opponent-btn:hover { background: #d9a34a; }
+  .opponent-btn:active { box-shadow: inset 0 2px 3px rgba(0,0,0,0.35); }
+  .opponent-btn-title { font-weight: 700; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .opponent-swatches { display: flex; gap: 5px; flex-shrink: 0; }
+  .opponent-swatch { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(0,0,0,0.35); }
 </style>
 </head>
 <body>
+<div id="start-screen">
+  <div id="start-screen-inner">
+    <div id="start-title">Thunder Road Vendetta</div>
+    <div id="start-subtitle">Prototype solo — contre l'IA</div>
+    <div id="start-heading">Choisissez le nombre d'adversaires IA</div>
+    <div id="opponent-options">
+      <button class="opponent-btn" data-ai-count="1">
+        <span class="opponent-btn-title">1 adversaire</span>
+        <span class="opponent-swatches">
+          <span class="opponent-swatch" style="background:#3d6ba3"></span>
+          <span class="opponent-swatch" style="background:#d9762e"></span>
+        </span>
+      </button>
+      <button class="opponent-btn" data-ai-count="2">
+        <span class="opponent-btn-title">2 adversaires</span>
+        <span class="opponent-swatches">
+          <span class="opponent-swatch" style="background:#3d6ba3"></span>
+          <span class="opponent-swatch" style="background:#d9762e"></span>
+          <span class="opponent-swatch" style="background:#5a8f4a"></span>
+        </span>
+      </button>
+      <button class="opponent-btn" data-ai-count="3">
+        <span class="opponent-btn-title">3 adversaires</span>
+        <span class="opponent-swatches">
+          <span class="opponent-swatch" style="background:#3d6ba3"></span>
+          <span class="opponent-swatch" style="background:#d9762e"></span>
+          <span class="opponent-swatch" style="background:#5a8f4a"></span>
+          <span class="opponent-swatch" style="background:#7a5aa3"></span>
+        </span>
+      </button>
+    </div>
+  </div>
+</div>
 <div id="wrap">
   <div class="badges">
     <span class="badge" id="roundBadge"></span>
