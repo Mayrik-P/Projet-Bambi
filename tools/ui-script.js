@@ -820,7 +820,12 @@ function renderDashboards() {
       }
 
       if (car && !isInoperable && playerName === HUMAN && clickableCarSet.has(car)) {
-        const slotKey = ctx.mode === "coast" ? (car.coastCount === 0 ? "coast1" : "coast2") : "any";
+        // Retour de Mayrik (nouvelle logique) : coast1 est TOUJOURS
+        // l'emplacement proposé au clic, peu importe coastCount — c'est
+        // coast2 qui devient prioritaire pour le STOCKAGE une fois le
+        // tour terminé (voir finishHumanTurn), jamais pour la sélection
+        // elle-même.
+        const slotKey = ctx.mode === "coast" ? "coast1" : "any";
         const f = VEHICLE_SLOT_FRACTION[size][slotKey];
         const cx = dim.x + f.x * dim.w, cy = dim.y + f.y * dim.h;
         const sx = cx - DIE_DISPLAY_SIZE / 2, sy = cy - DIE_DISPLAY_SIZE / 2;
@@ -840,12 +845,12 @@ function renderDashboards() {
         // automatique passé (retour de Mayrik, plus de confirmation) —
         // sel.mode, lui, reste fidèle à la décision effectivement
         // prise, quel que soit l'état du pool au moment du rendu.
-        // BUG CORRIGÉ (retour de Mayrik) : coast1 était codé en dur ici
-        // pour TOUT dé posé en Coast, alors que le rect cliquable,
-        // juste au-dessus, choisissait déjà correctement coast1/coast2
-        // selon car.coastCount — le dé posé n'apparaissait donc jamais
-        // sur coast2, même quand c'était le bon emplacement.
-        const slotKey = sel.mode === "coast" ? (car.coastCount === 0 ? "coast1" : "coast2") : "any";
+        // Retour de Mayrik (nouvelle logique, remplace le correctif
+        // précédent) : le dé Coast reste affiché sur coast1 pendant
+        // TOUT le tour en cours, peu importe coastCount — il ne
+        // bascule vers coast2 (stockage définitif) qu'une fois le tour
+        // terminé, voir finishHumanTurn/coastDieState ci-dessous.
+        const slotKey = sel.mode === "coast" ? "coast1" : "any";
         const f = VEHICLE_SLOT_FRACTION[size][slotKey];
         const dieX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
         const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
@@ -1645,16 +1650,19 @@ function finishHumanTurn() {
   if (sel.car && sel.mode === "assign" && sel.dieValue !== undefined) {
     endTurnDieState[sel.car.id] = { round: G.roundState.roundNumber, dieValue: sel.dieValue };
   }
-  // Dé Coast -> reste sur SON emplacement (coast1 ou coast2, jamais
-  // transféré) — car.coastCount vient déjà d'être incrémenté par le
-  // commit réel (bien avant ce point), donc coastCount-1 identifie
-  // sans ambiguïté lequel des deux emplacements vient d'être utilisé.
+  // Dé Coast -> stocké de façon définitive à la fin du tour (jamais
+  // pendant le tour lui-même, où il reste affiché sur coast1 — voir
+  // plus haut). Retour de Mayrik (nouvelle logique) : coast1 est
+  // TOUJOURS l'emplacement de sélection, mais coast2 est PRIORITAIRE
+  // pour le stockage définitif — si coast2 est déjà pris (par un
+  // Coast précédent ce round), le nouveau dé reste sur coast1.
   if (sel.car && sel.mode === "coast" && sel.dieValue !== undefined) {
     if (!coastDieState[sel.car.id] || coastDieState[sel.car.id].round !== G.roundState.roundNumber) {
       coastDieState[sel.car.id] = { round: G.roundState.roundNumber, slots: [null, null] };
     }
-    const idx = Math.max(0, Math.min(1, sel.car.coastCount - 1));
-    coastDieState[sel.car.id].slots[idx] = sel.dieValue;
+    const slots = coastDieState[sel.car.id].slots;
+    const idx = slots[1] === null ? 1 : 0; // coast2 (index 1) prioritaire s'il est libre, sinon coast1
+    slots[idx] = sel.dieValue;
   }
   const result = executeEndOfTurn(G.progressionState, G.roundState, G.allCars, G.allChoppers, PLAYER_NAMES, sel.car);
   logTurn(result.log || []);
