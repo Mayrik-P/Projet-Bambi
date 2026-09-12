@@ -720,7 +720,11 @@ function renderDashboards() {
     // le type est choisi (repair-target/airstrike-placement/
     // airstrike-shoot-arc/commit), reclic dessus = annuler (même
     // cancelSelection() que partout ailleurs, reset complet du tour —
-    // comportement déjà existant, pas nouveau).
+    // comportement déjà existant, pas nouveau). Une fois le tour
+    // terminé (sel réinitialisé) OU pour l'IA (jamais de sel du tout),
+    // on retombe sur commandDieState — même logique persistante que
+    // END TURN/Coast, retour de Mayrik : ne restait affiché ni pour le
+    // joueur ni pour l'IA jusqu'à la fin du round.
     if (playerName === HUMAN && ctx && sel.commandType) {
       const f = COMMAND_SLOT_FRACTION[sel.commandType];
       const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
@@ -729,6 +733,14 @@ function renderDashboards() {
       svg.insertAdjacentHTML("beforeend", dieMarkup(sel.commandDieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[sel.commandType]));
       if (isCancelable) {
         svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
+      }
+    } else {
+      const cd = commandDieState[playerName];
+      if (cd && cd.round === G.roundState.roundNumber) {
+        const f = COMMAND_SLOT_FRACTION[cd.commandType];
+        const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
+        const dieX = cx - DIE_DISPLAY_SIZE / 2, dieY = cy - DIE_DISPLAY_SIZE / 2;
+        svg.insertAdjacentHTML("beforeend", dieMarkup(cd.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[cd.commandType]));
       }
     }
 
@@ -953,6 +965,15 @@ let endTurnDieState = {};
 // round, pas de transfert. Forme : { [car.id]: { round, slots: [dé
 // coast1 | null, dé coast2 | null] } }.
 let coastDieState = {};
+// Dé de Command "posé" (nitro/drift/repair/airstrike) — retour de
+// Mayrik : ne restait affiché ni pour le joueur (disparaissait après
+// resetSelection en fin de tour) ni pour l'IA (jamais affiché du
+// tout, câblé uniquement pour sel côté humain). Contrairement à
+// endTurnDieState/coastDieState (par VÉHICULE), Command est une
+// ressource par JOUEUR — une seule fois par round au total, jamais
+// deux fois — donc gardé par nom de joueur ici, pas par car.id.
+// Forme : { [playerName]: { round, commandType, dieValue } }.
+let commandDieState = {};
 let gameOver = false;
 let gameOverInfo = null;
 
@@ -1189,6 +1210,12 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
     const slots = coastDieState[decision.car.id].slots;
     const idx = slots[1] === null ? 1 : 0; // coast2 prioritaire s'il est libre, sinon coast1 — même règle que côté humain
     slots[idx] = decision.dieValue;
+  }
+  // Dé de Command -> persiste jusqu'à la fin du round, même règle que
+  // côté humain (retour de Mayrik : ne s'affichait jamais du tout pour
+  // l'IA jusqu'ici).
+  if (decision && decision.car && decision.command && decision.command.dieValue !== undefined) {
+    commandDieState[decision.car.owner] = { round: G.roundState.roundNumber, commandType: decision.command.type, dieValue: decision.command.dieValue };
   }
   pushLogLines(outcome.result.log || [], turnLabel);
   checkEnd();
@@ -1679,6 +1706,13 @@ function finishHumanTurn() {
     const slots = coastDieState[sel.car.id].slots;
     const idx = slots[1] === null ? 1 : 0; // coast2 (index 1) prioritaire s'il est libre, sinon coast1
     slots[idx] = sel.dieValue;
+  }
+  // Dé de Command -> persiste jusqu'à la fin du round (retour de
+  // Mayrik) — ressource par JOUEUR (une fois par round au total, voir
+  // commandDieState plus haut), donc gardée par HUMAN et non par
+  // sel.car.id.
+  if (sel.commandType && sel.commandDieValue !== undefined) {
+    commandDieState[HUMAN] = { round: G.roundState.roundNumber, commandType: sel.commandType, dieValue: sel.commandDieValue };
   }
   const result = executeEndOfTurn(G.progressionState, G.roundState, G.allCars, G.allChoppers, PLAYER_NAMES, sel.car);
   logTurn(result.log || []);
