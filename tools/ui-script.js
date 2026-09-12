@@ -391,6 +391,16 @@ const VEHICLE_SLOT_FRACTION = {
   }
 };
 
+// Position du dé Road actif ce round — calée par Mayrik dans l'espace
+// libre entre le plateau, le command board et le dashboard SMALL (y
+// négatif : au-dessus du sommet réel de l'image small). Toujours
+// relative à SMALL spécifiquement (jamais medium/large — les 3
+// dashboards n'ont pas le même agencement, voir VEHICLE_SLOT_FRACTION
+// ci-dessus), et dessinée UNE FOIS PAR LIGNE JOUEUR (donc toujours
+// visible, peu importe lequel des deux occupe cette ligne à l'instant
+// donné — retour de Mayrik).
+const ROAD_DIE_FRACTION = { x: 0.142, y: -0.126 };
+
 // Rectangle affiché (même repère local que boardBox) d'un jeton dégât
 // pour une taille de véhicule et un slot ("damage1"/"damage2") donnés
 // — même échelle DASH_SCALE que tout le reste (retour de Mayrik :
@@ -753,6 +763,20 @@ function renderDashboards() {
     // précédent pour l'effet d'encoche. ---
     ["small", "medium", "large"].forEach((size) => {
       const dim = at(size);
+
+      // Dé Road actif ce round — retour de Mayrik : remplace l'ancien
+      // texte "Dé Road ce round : N", et l'overlay flottant en haut de
+      // l'écran (mal placé). Position calibrée par Mayrik dans l'espace
+      // libre entre le plateau, le command board et SMALL — dessiné une
+      // fois par ligne joueur (donc toujours visible, peu importe
+      // laquelle des deux occupe cette ligne à l'instant donné).
+      if (size === "small" && G.roundState.roadDie) {
+        const rdX = dim.x + ROAD_DIE_FRACTION.x * dim.w - MARKER_ICON_SIZE / 2;
+        const rdY = dim.y + ROAD_DIE_FRACTION.y * dim.h - MARKER_ICON_SIZE / 2;
+        const rdPath = `../images/dice/die-fx-road-${G.roundState.roadDie}.webp`;
+        svg.insertAdjacentHTML("beforeend", `<image href="${rdPath}" xlink:href="${rdPath}" x="${rdX.toFixed(1)}" y="${rdY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>`);
+      }
+
       const car = G.allCars.find((c) => c.owner === playerName && c.size === size && c.status !== "eliminated");
       const isInoperable = !!(car && car.status === "inoperable");
       const kind = isInoperable ? `${size}-inoperable` : size;
@@ -2315,29 +2339,6 @@ function renderPanel() {
   }
 }
 
-// Face du dé Road actif ce round — retour de Mayrik : remplace le
-// texte "Dé Road ce round : N" retiré du panneau. La bande titre du
-// plateau occupe très exactement la 1ère rangée sur 7 de la hauteur
-// des images de tuile (voir "7 * IMG_CELL_H" dans renderBoard) — son
-// milieu, en unités de viewBox, est donc à IMG_CELL_H/2. Le SVG étant
-// mis à l'échelle par CSS (width:100%), il faut reconvertir cette
-// coordonnée de viewBox en pixels écran RÉELS via le rectangle
-// effectivement rendu du SVG, recalculé à chaque appel (couvre aussi
-// un redimensionnement de fenêtre, voir l'écouteur resize plus bas).
-function updateRoadDieOverlay() {
-  const overlay = document.getElementById("roadDieOverlay");
-  if (!G.roundState.roadDie) { overlay.style.display = "none"; return; }
-  const boardEl = document.getElementById("board");
-  const rect = boardEl.getBoundingClientRect();
-  if (rect.width === 0) { overlay.style.display = "none"; return; }
-  const scale = rect.width / BOARD_VIEW.w;
-  const titleBandMidY = IMG_CELL_H / 2;
-  overlay.style.display = "block";
-  overlay.style.top = `${(rect.top + titleBandMidY * scale).toFixed(1)}px`;
-  overlay.src = `../images/dice/die-fx-road-${G.roundState.roadDie}.webp`;
-}
-window.addEventListener("resize", () => { if (typeof G !== "undefined") updateRoadDieOverlay(); });
-
 function render() {
   saveGameState(); // point de contrôle sûr : voir le commentaire détaillé près de SAVE_KEY
 
@@ -2352,7 +2353,6 @@ function render() {
   renderBoard();
   renderDashboards();
   renderPanel();
-  updateRoadDieOverlay();
 
   document.getElementById("damageRow").innerHTML = G.allCars
     .filter((car) => car.status !== "eliminated" && !car.isWreck) // les épaves n'ont aucun affichage UI (retour de Mayrik)
