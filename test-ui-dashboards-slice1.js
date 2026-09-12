@@ -1252,4 +1252,61 @@ const staleDie38 = [...dom.window.document.querySelectorAll("#dashboards g")].fi
 });
 console.log("...et ne s'affiche donc PLUS sur l'emplacement END TURN maintenant que le round suivant est en cours (attendu true) :", !staleDie38);
 
+section("Test 39 — Retour de Mayrik : le dé de l'IA est visible AVANT/PENDANT son mouvement, pas seulement à la fin");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars.length = 0;
+const b39 = win.board();
+const clearHazardsAround39 = (col, row) => {
+  win.getSpace(b39, col, row).hazard = null;
+  const front = win.getFrontArc({ col, row });
+  const rear = win.getRearArc({ col, row });
+  for (const { col: c, row: r } of [...front, ...rear]) {
+    const cell = win.getSpace(b39, c, r);
+    if (cell) cell.hazard = null;
+  }
+};
+clearHazardsAround39(3, 3);
+clearHazardsAround39(4, 3);
+const aiCar39 = win.createCar(OPPONENT, CAR_SIZE.SMALL, 3, 3);
+G.allCars.push(aiCar39);
+G.roundState.dicePool[OPPONENT] = [3];
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
+const decision39 = { car: aiCar39, dieValue: 3, command: { type: "nitro", dieValue: 2 }, isEntry: false, isCoast: false, destination: { path: ["front", "front", "front"] }, slam: null, roadBonusPath: null };
+decision39.roundAtStart = G.roundState.roundNumber;
+win.eval("function __setAiDecision(d) { currentAiDecision = d; }");
+win.__setAiDecision(decision39); // même chose que playAiTurn() ferait AVANT de lancer le générateur
+const gen39 = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, win.eval("PLAYER_NAMES"), OPPONENT, decision39, { isHumanOwner: (o) => o === HUMAN, emitSteps: true });
+win.driveAiTurnGenerator(gen39, "Test — dé visible avant/pendant mouvement", decision39);
+
+console.log("L'animation est bien en cours (pas encore terminée) (attendu true) :", win.eval("G.aiAnimating") === true);
+win.render();
+const boxAny39 = { small: win.eval('boardBox("small")') };
+const rowBBox39 = win.eval("ROW_BBOX");
+const smallImg39 = [...dom.window.document.querySelectorAll("#dashboards image")].find((el) => (el.getAttribute("href") || "").includes(`dashboard-${win.eval("PLAYER_CAR_COLOR[OPPONENT]")}-small`));
+const smallX39 = parseFloat(smallImg39.getAttribute("x")), smallY39 = parseFloat(smallImg39.getAttribute("y"));
+const smallW39 = parseFloat(smallImg39.getAttribute("width")), smallH39 = parseFloat(smallImg39.getAttribute("height"));
+const fracAny39 = win.eval("VEHICLE_SLOT_FRACTION.small.any");
+const DIE39 = win.eval("DIE_DISPLAY_SIZE");
+const expectedAnyX39 = smallX39 + fracAny39.x * smallW39 - DIE39 / 2, expectedAnyY39 = smallY39 + fracAny39.y * smallH39 - DIE39 / 2;
+const liveAnyDie39 = [...dom.window.document.querySelectorAll("#dashboards g")].find((g) => {
+  const img = g.querySelector("image");
+  return img && Math.abs(parseFloat(img.getAttribute("x")) - expectedAnyX39) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - expectedAnyY39) < 1;
+});
+console.log("Le dé ANY (3) est déjà visible sur le dashboard PENDANT le mouvement (attendu true) :", !!liveAnyDie39);
+
+const cmdImg39 = [...dom.window.document.querySelectorAll("#dashboards image")].find((el) => (el.getAttribute("href") || "").includes(`command-${win.eval("PLAYER_CAR_COLOR[OPPONENT]")}`));
+const cmdX39 = parseFloat(cmdImg39.getAttribute("x")), cmdY39 = parseFloat(cmdImg39.getAttribute("y"));
+const cmdW39 = parseFloat(cmdImg39.getAttribute("width")), cmdH39 = parseFloat(cmdImg39.getAttribute("height"));
+const fracNitro39 = win.eval("COMMAND_SLOT_FRACTION.nitro");
+const expectedNitroX39 = cmdX39 + fracNitro39.x * cmdW39 - DIE39 / 2, expectedNitroY39 = cmdY39 + fracNitro39.y * cmdH39 - DIE39 / 2;
+const liveNitroDie39 = [...dom.window.document.querySelectorAll("#dashboards g")].find((g) => {
+  const img = g.querySelector("image");
+  return img && Math.abs(parseFloat(img.getAttribute("x")) - expectedNitroX39) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - expectedNitroY39) < 1;
+});
+console.log("Le dé de Command (NITRO, 2) est déjà visible PENDANT le mouvement (attendu true) :", !!liveNitroDie39);
+
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
