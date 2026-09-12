@@ -694,7 +694,7 @@ console.log("coastDieState contient bien une entrée pour ce véhicule (attendu 
 const dashHtml22 = dom.window.document.getElementById("dashboards").innerHTML;
 console.log("Un dé est bien rendu sur le dashboard après la fin du tour (attendu true) :", dashHtml22.includes("die-move-"));
 
-section("Test 23 — Marqueurs dégât/inopérable calés sur le vrai sommet de la case");
+section("Test 23 — Marqueurs dégât/inopérable calés sur le vrai bas de la case, centrés horizontalement");
 
 dom = makeDom();
 win = dom.window;
@@ -705,8 +705,16 @@ dmgCar23.damageTokens = ["dent"];
 G.allCars.push(dmgCar23);
 win.render();
 const boardEl23 = [...dom.window.document.getElementById("board").querySelectorAll("image")].find((el) => el.getAttribute("href").includes("marker-damaged.webp"));
-const expectedTopY = win.cellPoly(4, 3)[0][1];
-console.log("Le marqueur dégât est bien calé sur le sommet réel de la case (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("y")) - expectedTopY) < 0.5);
+const expectedBotY = win.cellPoly(4, 3)[3][1] - win.eval("MARKER_ICON_SIZE");
+const expectedCx = win.cellCenter(4, 3).cx - win.eval("MARKER_ICON_SIZE") / 2;
+console.log("Le marqueur dégât est bien calé sur le vrai bas de la case (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("y")) - expectedBotY) < 0.5);
+console.log("...et centré horizontalement sur le véhicule (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("x")) - expectedCx) < 0.5);
+
+const parentGroup23 = boardEl23.closest("g");
+const childrenOrder23 = [...parentGroup23.children];
+const markerIdx23 = childrenOrder23.indexOf(boardEl23);
+const vehicleImgIdx23 = childrenOrder23.map((el, i) => (el.tagName === "image" && el.getAttribute("href").includes("images/vehicles/") ? i : -1)).filter((i) => i !== -1).pop();
+console.log("Le marqueur est dessiné AVANT le véhicule dans le SVG (donc EN DESSOUS visuellement, retour de Mayrik) (attendu true) :", markerIdx23 < vehicleImgIdx23);
 
 section("Test 24 — Bandeau de fin de partie centré sur le plateau (SVG), plus de div externe");
 
@@ -716,7 +724,67 @@ win.newGame();
 win.eval("gameOver = true; gameOverInfo = { winner: 'Vous', reason: 'Finish Line' };");
 win.render();
 const boardHtml24 = dom.window.document.getElementById("board").innerHTML;
-console.log("Le bandeau est bien dessiné DANS le SVG du plateau (attendu true) :", boardHtml24.includes("Partie terminée"));
+console.log("Le bandeau est bien dessiné DANS le SVG du plateau, nouveau format anglais (attendu true) :", boardHtml24.includes("Game over: Blue wins by Finish Line"));
 console.log("L'ancien bandeau HTML externe reste caché (attendu true) :", dom.window.document.getElementById("winnerBanner").style.display === "none");
+
+section("Test 25 — Bug de fond : coastCount s'incrémente réellement, le 2e Coast propose bien coast2");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars = G.allCars.filter((c) => c.owner !== HUMAN);
+const s25 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 0);
+const m25 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 5, 1);
+const l25 = win.createCar(HUMAN, CAR_SIZE.LARGE, 5, 2);
+[s25, m25, l25].forEach((c) => { c.movedThisRound = true; });
+G.allCars.push(s25, m25, l25);
+G.roundState.dicePool[HUMAN] = [4, 3];
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
+win.resetSelection();
+win.render();
+
+// --- 1er Coast complet sur s25 ---
+let clickables25 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables25[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
+win.render();
+clickables25 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+const s25Rect = clickables25[0]; // small en 1er dans l'ordre de rendu
+s25Rect.dispatchEvent(new win.Event("click", { bubbles: true }));
+sel = win.eval("sel");
+const opts25 = win.getMovementStepOptions(win.board(), sel.car, sel.remaining, G.allCars);
+const opt25 = opts25.find((o) => o.outcome !== "eliminated-edge" && !String(o.outcome || "").startsWith("exits")) || opts25[0];
+win.pickMoveStep(opt25);
+win.render();
+
+console.log("coastCount vaut bien 1 après le 1er Coast complet (attendu true) — bug de fond corrigé :", s25.coastCount === 1);
+
+// --- 2e Coast sur le MÊME véhicule (seul dé restant, tous les autres déjà actifs) ---
+sel = win.eval("sel");
+console.log("Bien de retour à l'étape 'die' pour le tour suivant (attendu true) :", sel.step === "die");
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN); // on saute le tour de l'IA, hors-sujet ici
+win.render();
+clickables25 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables25[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie (dernier dé)
+win.render();
+const ctx25 = win.eval("currentTurnContext()");
+console.log("Mode bien 'coast', s25 toujours éligible (coastCount=1 < 2) (attendu true) :",
+  ctx25.mode === "coast" && ctx25.coastableCars.includes(s25));
+
+clickables25 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+const s25Rect2 = clickables25.find((r) => true); // s25 est le seul restant possible ici selon le setup
+s25Rect2.dispatchEvent(new win.Event("click", { bubbles: true }));
+sel = win.eval("sel");
+console.log("Le 2e clic cible bien s25 (attendu true) :", sel.car === s25);
+
+// Vérifie que la position cliquée correspond bien à coast2, pas coast1 (déjà pris)
+const box25 = win.eval('boardBox("small")');
+const rowBBox25 = win.eval("ROW_BBOX");
+const dimX25 = -rowBBox25.minX + box25.x, dimY25 = -rowBBox25.minY + box25.y;
+const frac25 = win.eval("VEHICLE_SLOT_FRACTION.small");
+const DIE25 = win.eval("DIE_DISPLAY_SIZE");
+const coast2X = dimX25 + frac25.coast2.x * box25.w - DIE25 / 2;
+console.log("Le slot proposé est bien COAST2 (coast1 déjà pris) (attendu true) :",
+  Math.abs(parseFloat(s25Rect2.getAttribute("x")) - coast2X) < 1);
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
