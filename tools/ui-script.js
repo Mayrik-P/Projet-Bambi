@@ -1111,7 +1111,7 @@ function playAiTurn() {
     isHumanOwner: (owner) => owner === HUMAN,
     emitSteps: true // pause visuelle case par case (voir driveAiTurnGenerator) — jamais activé côté self-play/tests
   });
-  driveAiTurnGenerator(gen, `Round ${G.roundState.roundNumber} — ${cp}`);
+  driveAiTurnGenerator(gen, `Round ${G.roundState.roundNumber} — ${cp}`, decision);
 }
 
 // Délai (ms) entre deux cases affichées pendant le mouvement de l'IA —
@@ -1140,7 +1140,7 @@ let AI_STEP_DELAY_MS = 500;
 // implique une DEUXIÈME voiture humaine) — chaque pause est traitée de
 // façon identique, sans code spécial, puisque le générateur reprend
 // exactement là où il s'est arrêté.
-function driveAiTurnGenerator(gen, turnLabel, answer) {
+function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
   G.aiAnimating = true;
   const outcome = driveInteractive(gen, answer);
   if (!outcome.done) {
@@ -1162,18 +1162,34 @@ function driveAiTurnGenerator(gen, turnLabel, answer) {
         return;
       }
       if (AI_STEP_DELAY_MS > 0) {
-        setTimeout(() => driveAiTurnGenerator(gen, turnLabel), AI_STEP_DELAY_MS);
+        setTimeout(() => driveAiTurnGenerator(gen, turnLabel, decision), AI_STEP_DELAY_MS);
       } else {
-        driveAiTurnGenerator(gen, turnLabel);
+        driveAiTurnGenerator(gen, turnLabel, decision);
       }
       return;
     }
-    G.aiPending = { gen, ctx: outcome.pending, turnLabel };
+    G.aiPending = { gen, ctx: outcome.pending, turnLabel, decision };
     render();
     return;
   }
   G.aiPending = null;
   G.aiAnimating = false;
+  // Même bookkeeping que finishHumanTurn (retour de Mayrik : voir la
+  // même chose côté IA que côté joueur — sur quoi elle a joué quel
+  // dé). decision.car/dieValue/isCoast viennent de decideAssignAndCommand,
+  // stables du tout début à la toute fin de ce tour (jamais mutés en
+  // cours de route, contrairement à sel côté humain).
+  if (decision && decision.car && !decision.isCoast && decision.dieValue !== undefined) {
+    endTurnDieState[decision.car.id] = { round: G.roundState.roundNumber, dieValue: decision.dieValue };
+  }
+  if (decision && decision.car && decision.isCoast && decision.dieValue !== undefined) {
+    if (!coastDieState[decision.car.id] || coastDieState[decision.car.id].round !== G.roundState.roundNumber) {
+      coastDieState[decision.car.id] = { round: G.roundState.roundNumber, slots: [null, null] };
+    }
+    const slots = coastDieState[decision.car.id].slots;
+    const idx = slots[1] === null ? 1 : 0; // coast2 prioritaire s'il est libre, sinon coast1 — même règle que côté humain
+    slots[idx] = decision.dieValue;
+  }
   pushLogLines(outcome.result.log || [], turnLabel);
   checkEnd();
   resetSelection();
@@ -1185,8 +1201,8 @@ function driveAiTurnGenerator(gen, turnLabel, answer) {
 // renderPanel). Reprend le même générateur là où il s'est arrêté.
 function resumeAiSlamRerollChoice(wantsReroll) {
   if (!G.aiPending) return;
-  const { gen, turnLabel } = G.aiPending;
-  driveAiTurnGenerator(gen, turnLabel, wantsReroll);
+  const { gen, turnLabel, decision } = G.aiPending;
+  driveAiTurnGenerator(gen, turnLabel, decision, wantsReroll);
 }
 
 // ===================================================================
