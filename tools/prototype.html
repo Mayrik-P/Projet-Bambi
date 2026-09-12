@@ -7334,6 +7334,14 @@ function renderDashboards() {
       if (isCancelable) {
         svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
       }
+    } else if (playerName === OPPONENT && currentAiDecision && currentAiDecision.command) {
+      // Même affichage "vivant" que côté humain (retour de Mayrik) —
+      // visible dès que la décision de l'IA est connue, avant même le
+      // début du mouvement. Jamais cliquable.
+      const f = COMMAND_SLOT_FRACTION[currentAiDecision.command.type];
+      const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
+      const dieX = cx - DIE_DISPLAY_SIZE / 2, dieY = cy - DIE_DISPLAY_SIZE / 2;
+      svg.insertAdjacentHTML("beforeend", dieMarkup(currentAiDecision.command.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[currentAiDecision.command.type]));
     } else {
       const cd = commandDieState[playerName];
       if (cd && cd.round === G.roundState.roundNumber) {
@@ -7474,6 +7482,16 @@ function renderDashboards() {
         if (isCancelable) {
           svg.lastElementChild.addEventListener("click", () => { cancelSelection(); });
         }
+      } else if (car && playerName === OPPONENT && currentAiDecision && currentAiDecision.car === car) {
+        // Même affichage "vivant", côté IA (retour de Mayrik : voir le
+        // dé posé avant/pendant le mouvement, pas seulement une fois le
+        // tour fini — comme pour un joueur). Jamais cliquable (aucune
+        // interaction possible sur la décision de l'IA), sinon même
+        // convention coast1 que côté humain.
+        const slotKey = currentAiDecision.isCoast ? "coast1" : "any";
+        const f = VEHICLE_SLOT_FRACTION[size][slotKey];
+        const dieX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+        svg.insertAdjacentHTML("beforeend", dieMarkup(currentAiDecision.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[slotKey]));
       }
 
       // Dé "parqué" sur END TURN (voir endTurnDieState plus haut) —
@@ -7578,6 +7596,17 @@ let coastDieState = {};
 // deux fois — donc gardé par nom de joueur ici, pas par car.id.
 // Forme : { [playerName]: { round, commandType, dieValue } }.
 let commandDieState = {};
+// Décision de l'IA EN COURS D'EXÉCUTION (retour de Mayrik : voir le dé
+// posé AVANT/PENDANT le mouvement, pas seulement une fois le tour fini
+// — comme pour un joueur). Symétrique à sel côté humain, mais pour
+// l'IA : posé dès que decideAssignAndCommand() a répondu (avant même
+// executeDecisionGen), effacé une fois le tour réellement terminé
+// (juste avant que endTurnDieState/coastDieState/commandDieState ne
+// prennent le relais pour l'affichage persistant jusqu'à la fin du
+// round). Reste posé pendant toute l'animation case par case ET
+// pendant une éventuelle pause de relance de Slam (G.aiPending),
+// puisque jamais réinitialisé entre-temps.
+let currentAiDecision = null;
 let gameOver = false;
 let gameOverInfo = null;
 
@@ -7734,6 +7763,10 @@ function playAiTurn() {
   // de démarrer) et ne s'effaçait donc jamais au bon moment. On capture
   // le round ICI, avant tout appel, et on le transporte avec decision.
   decision.roundAtStart = G.roundState.roundNumber;
+  // Retour de Mayrik : le dé doit être visible dès MAINTENANT (avant
+  // le mouvement), pas seulement une fois le tour terminé — comme pour
+  // un joueur qui pose son dé puis voit sa voiture bouger.
+  currentAiDecision = decision;
   // Verrou anti double-clic PENDANT l'animation case par case : les
   // pauses {type:"step"} passent par setTimeout (voir
   // driveAiTurnGenerator, qui pose G.aiAnimating dès son premier
@@ -7808,6 +7841,10 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
   }
   G.aiPending = null;
   G.aiAnimating = false;
+  // Tour réellement terminé -> plus de dé "vivant" à afficher, le
+  // relais est pris juste en dessous par endTurnDieState/coastDieState/
+  // commandDieState (persistants jusqu'à la fin du round).
+  currentAiDecision = null;
   // Même bookkeeping que finishHumanTurn (retour de Mayrik : voir la
   // même chose côté IA que côté joueur — sur quoi elle a joué quel
   // dé). decision.car/dieValue/isCoast viennent de decideAssignAndCommand,
