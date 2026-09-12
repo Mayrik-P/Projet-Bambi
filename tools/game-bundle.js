@@ -918,7 +918,13 @@ function* moveCarGen(tile, car, dieValue, chosenPath, allCars = [], slamOptions 
 
     if (step.eliminated) return { ok: true, log, remaining: 0, eliminated: true, roadEligible, stepsConsumed: i };
     if (step.frontExit) return { ok: true, log, remaining, frontExit: true, roadEligible, stepsConsumed: i };
-    if (step.slam) return { ok: true, log, remaining: 0, slam: step.slam, roadEligible, stepsConsumed: i };
+    // Un Slam met fin au mouvement ET rend inéligible au bonus Road
+    // (p.9), quel que soit le terrain sur lequel la voiture atterrit
+    // après avoir été projetée — bug trouvé par Mayrik (le bonus Road
+    // était quand même proposé si la projection retombait sur route).
+    // roadEligible ne suivait jusqu'ici que le terrain traversé, pas
+    // l'événement Slam lui-même.
+    if (step.slam) return { ok: true, log, remaining: 0, slam: step.slam, roadEligible: false, stepsConsumed: i };
   }
 
   return { ok: true, log, remaining, roadEligible };
@@ -1020,7 +1026,9 @@ function* moveCarEnteringBoardGen(tile, car, dieValue, entryRow, chosenPath = []
     return { ok: true, log, remaining: entryStep.remaining, frontExit: true, roadEligible, stepsConsumed: 0 };
   }
   if (entryStep.slam) {
-    return { ok: true, log, remaining: 0, slam: entryStep.slam, roadEligible, stepsConsumed: 0 };
+    // Même règle que dans moveCarGen ci-dessus : un Slam annule
+    // toujours l'éligibilité au bonus Road, quel que soit le terrain.
+    return { ok: true, log, remaining: 0, slam: entryStep.slam, roadEligible: false, stepsConsumed: 0 };
   }
 
   // Poursuite du trajet (s'il en reste) avec le mouvement normal en

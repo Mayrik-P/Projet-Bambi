@@ -742,11 +742,11 @@ function renderDashboards() {
       if (isClickable) {
         const handler = dieStep ? (() => { pickDie(value); render(); }) : (() => { pickCommandDieChoice(value); render(); });
         svg.lastElementChild.addEventListener("click", handler);
-        // Halo vert dessiné APRÈS le dé (premier plan, retour de
-        // Mayrik : il était sous le dé et donc invisible) — contour
-        // seul, sans remplissage, pour ne pas cacher les pips en
-        // dessous. Taille exacte du dé, sans marge.
-        svg.insertAdjacentHTML("beforeend", `<rect x="${dx.toFixed(1)}" y="${dy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" rx="4" fill="none" stroke="#b0d458" stroke-width="3" pointer-events="none"/>`);
+        // Halo vert dessiné APRÈS le dé (premier plan) — retour de
+        // Mayrik : même style que toutes les autres surbrillances
+        // (bordure pleine + remplissage semi-transparent), pas juste
+        // un contour. Taille exacte du dé, sans marge.
+        svg.insertAdjacentHTML("beforeend", `<rect x="${dx.toFixed(1)}" y="${dy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" rx="4" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5" pointer-events="none"/>`);
       }
     });
 
@@ -1879,12 +1879,13 @@ function renderBoard() {
     // bas) — retour de Mayrik : le marqueur doit coller au bord HAUT
     // de la case, sans quoi il retombe encore sur le graphisme du
     // véhicule.
-    // Bas réel de la case (p[3] ou p[4] de cellPoly, voir sa
-    // définition) — retour de Mayrik : test d'un calage contre le BAS
-    // de la case plutôt que le haut, marqueur toujours centré
-    // horizontalement sur le véhicule.
-    const cellBotY = cellPoly(car.col, car.row)[3][1];
-    const markerY = cellBotY - MARKER_ICON_SIZE;
+    // Nouvelle position testée (retour de Mayrik) : 75% de la taille
+    // normale, centré verticalement sur le véhicule, calé
+    // horizontalement contre son bord GAUCHE (x = bord gauche réel de
+    // l'image du véhicule, pas de la case).
+    const damageMarkerSize = MARKER_ICON_SIZE * 0.75;
+    const markerX = x - damageMarkerSize / 2;
+    const markerY = cy - damageMarkerSize / 2;
     // Voiture inopérable (2 dégâts) : le jeu physique se contente de
     // retourner le véhicule à 180° (il pointe vers l'arrière du
     // plateau, p.8) plutôt que de le retirer — reproduit ici par une
@@ -1910,8 +1911,8 @@ function renderBoard() {
     // inchangé.
     svg.insertAdjacentHTML("beforeend", `<g>
       ${carShadowMarkup(imgPath, x, y, isInoperableVisual)}
-      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${markerY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${markerY.toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>` : "")}
-      <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none" ${isInoperableVisual ? 'opacity="0.5"' : ""}/>
+      ${isInoperableVisual ? `<image href="${INOPERABLE_MARKER_PATH}" xlink:href="${INOPERABLE_MARKER_PATH}" x="${markerX.toFixed(1)}" y="${markerY.toFixed(1)}" width="${damageMarkerSize.toFixed(1)}" height="${damageMarkerSize.toFixed(1)}" pointer-events="none"/>` : (car.damageTokens.length > 0 ? `<image href="${DAMAGE_MARKER_PATH}" xlink:href="${DAMAGE_MARKER_PATH}" x="${markerX.toFixed(1)}" y="${markerY.toFixed(1)}" width="${damageMarkerSize.toFixed(1)}" height="${damageMarkerSize.toFixed(1)}" pointer-events="none"/>` : "")}
+      <image href="${imgPath}" xlink:href="${imgPath}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${CAR_IMG_W.toFixed(1)}" height="${CAR_IMG_H.toFixed(1)}" ${rotation} pointer-events="none"/>
       ${isActive ? `<circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="#b0d458" stroke-width="2.5" pointer-events="none"/>` : ""}
     </g>`);
   });
@@ -2045,8 +2046,12 @@ function renderBoard() {
     const rear = getRearArc(ctx.largerCar).find((a) => a.name === "rear");
     if (rear && isOnBoard(board(), rear.col, rear.row)) {
       const rc = cellCenter(rear.col, rear.row);
-      const noPath = "../images/markers/marker-no.webp";
-      svg.insertAdjacentHTML("beforeend", `<image href="${noPath}" xlink:href="${noPath}" x="${(rc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      // marker-yes (pas marker-no) — retour de Mayrik : même effet
+      // (refuser la relance = garder ce résultat), mais plus clair
+      // pour le joueur formulé comme "j'accepte ce résultat" plutôt
+      // que "je refuse la relance".
+      const yesPath = "../images/markers/marker-yes.webp";
+      svg.insertAdjacentHTML("beforeend", `<image href="${yesPath}" xlink:href="${yesPath}" x="${(rc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
       svg.lastElementChild.addEventListener("click", () => { resume(false); render(); });
     }
   }
