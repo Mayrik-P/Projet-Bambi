@@ -63,7 +63,7 @@ async function main() {
     })();
   `);
 
-  win.driveAiTurnGenerator(gen, "Test animation");
+  win.driveAiTurnGenerator(gen, "Test animation", decision);
 
   console.log("G.aiAnimating est bien passé à true dès le lancement (attendu true) :", win.eval("G").aiAnimating === true);
   console.log("Le bouton IA est désactivé pendant l'animation (attendu true) :", dashboardsText(dom).includes("AI is playing"));
@@ -95,7 +95,7 @@ async function main() {
     isHumanOwner: (owner) => owner === HUMAN
     // pas de emitSteps : comportement d'avant cette fonctionnalité
   });
-  win2.driveAiTurnGenerator(gen2, "Test non-régression");
+  win2.driveAiTurnGenerator(gen2, "Test non-régression", decision2);
   console.log("Résolu immédiatement, sans attendre (attendu true) :", aiCar2.col === 4);
   console.log("G2.aiAnimating jamais mis à true dans ce chemin (attendu true) :", G2.aiAnimating !== true);
 

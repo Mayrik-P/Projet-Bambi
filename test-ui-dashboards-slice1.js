@@ -1037,4 +1037,47 @@ cdState34 = win.eval("coastDieState");
 console.log("Après le 2e Coast : coast2 inchangé (1er dé), coast1 contient maintenant le 2e dé, y reste (attendu true) :",
   cdState34[s34.id].slots[0] === 3 && cdState34[s34.id].slots[1] === 4);
 
+section("Test 35 — Symétrie IA : dé END TURN et dés Coast persistants, comme côté joueur (retour de Mayrik)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars.length = 0;
+const b35 = win.board();
+const clearHazardsAround35 = (col, row) => {
+  win.getSpace(b35, col, row).hazard = null;
+  const front = win.getFrontArc({ col, row });
+  const rear = win.getRearArc({ col, row });
+  for (const { col: c, row: r } of [...front, ...rear]) {
+    const cell = win.getSpace(b35, c, r);
+    if (cell) cell.hazard = null;
+  }
+};
+clearHazardsAround35(3, 3);
+const aiCar35 = win.createCar(OPPONENT, CAR_SIZE.SMALL, 3, 3);
+G.allCars.push(aiCar35);
+G.roundState.dicePool[OPPONENT] = [1, 2, 3, 4];
+G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
+const decision35 = { car: aiCar35, dieValue: 1, command: null, isEntry: false, isCoast: false, destination: { path: ["front"] }, slam: null, roadBonusPath: null };
+const gen35 = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, win.eval("PLAYER_NAMES"), OPPONENT, decision35, { isHumanOwner: (o) => o === HUMAN });
+win.driveAiTurnGenerator(gen35, "Test — tour IA ASSIGN", decision35);
+
+const etState35 = win.eval("endTurnDieState");
+console.log("endTurnDieState contient bien une entrée pour le véhicule IA (ASSIGN) (attendu true) :", !!etState35[aiCar35.id] && etState35[aiCar35.id].dieValue === 1);
+win.render();
+const dashHtml35a = dom.window.document.getElementById("dashboards").innerHTML;
+console.log("Un dé est bien rendu sur le dashboard de l'IA après son tour (attendu true) :", dashHtml35a.includes("die-move-"));
+
+// --- Coast côté IA ---
+aiCar35.movedThisRound = true;
+G.roundState.dicePool[OPPONENT] = [2];
+const decisionCoast35 = { car: aiCar35, dieValue: 2, command: null, isEntry: false, isCoast: true, destination: { path: ["front"] }, slam: null, roadBonusPath: null };
+const genCoast35 = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, win.eval("PLAYER_NAMES"), OPPONENT, decisionCoast35, { isHumanOwner: (o) => o === HUMAN });
+win.driveAiTurnGenerator(genCoast35, "Test — tour IA COAST", decisionCoast35);
+
+const cdState35 = win.eval("coastDieState");
+console.log("coastDieState contient bien une entrée pour le véhicule IA (COAST), sur coast2 (prioritaire) (attendu true) :",
+  !!cdState35[aiCar35.id] && cdState35[aiCar35.id].slots[1] === 2);
+
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");

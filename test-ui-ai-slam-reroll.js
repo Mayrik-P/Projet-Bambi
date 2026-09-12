@@ -124,7 +124,7 @@ const decision = {
 const gen = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, PLAYER_NAMES, OPPONENT, decision, {
   isHumanOwner: (owner) => owner === HUMAN
 });
-win.driveAiTurnGenerator(gen, "Test — tour IA");
+win.driveAiTurnGenerator(gen, "Test — tour IA", decision);
 
 console.log("G.aiPending bien renseigné après la pause (attendu true) :", !!G.aiPending);
 // Texte retiré du panneau (retour de Mayrik, comportement marker-only
@@ -163,7 +163,7 @@ const decision2 = { car: aiCar2, dieValue: 1, command: null, isEntry: false, isC
 const gen2 = win.executeDecisionGen(G2.progressionState, G2.roundState, G2.allCars, G2.allChoppers, PLAYER_NAMES, OPPONENT, decision2, {
   isHumanOwner: (owner) => owner === HUMAN
 });
-win.driveAiTurnGenerator(gen2, "Test — tour IA 2");
+win.driveAiTurnGenerator(gen2, "Test — tour IA 2", decision2);
 console.log("Pause obtenue (attendu true) :", !!G2.aiPending);
 
 clickBoardMarker(dom, "marker-reroll.webp");
@@ -194,7 +194,7 @@ const decision3 = { car: aiCar3, dieValue: 1, command: null, isEntry: false, isC
 const gen3 = win.executeDecisionGen(G3.progressionState, G3.roundState, G3.allCars, G3.allChoppers, PLAYER_NAMES, OPPONENT, decision3, {
   isHumanOwner: (owner) => owner === HUMAN
 });
-win.driveAiTurnGenerator(gen3, "Test — tour IA 3");
+win.driveAiTurnGenerator(gen3, "Test — tour IA 3", decision3);
 
 console.log("Aucune pause (attendu true) :", G3.aiPending === null);
 console.log("Tour terminé directement, journalisé (attendu true) :",
