@@ -898,4 +898,37 @@ const postDieEl29 = [...dom.window.document.querySelectorAll("#dashboards g")].f
 });
 console.log("...et précisément SUR l'emplacement coast2 (bug corrigé, attendu true) :", !!postDieEl29);
 
+section("Test 30 — BUG BLOQUANT trouvé par Mayrik : marker-road doit s'afficher même si la case pile devant est Impassable");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+G.allCars.length = 0;
+const b30 = win.board();
+const clearHazardsAround30 = (col, row) => {
+  win.getSpace(b30, col, row).hazard = null;
+  const front = win.getFrontArc({ col, row });
+  const rear = win.getRearArc({ col, row });
+  for (const { col: c, row: r } of [...front, ...rear]) {
+    const cell = win.getSpace(b30, c, r);
+    if (cell) cell.hazard = null;
+  }
+};
+clearHazardsAround30(5, 3);
+const TERRAIN30 = win.eval("TERRAIN");
+win.getSpace(b30, 6, 3).terrain = TERRAIN30.IMPASSABLE; // pile devant = bloqué
+const car30 = win.createCar(HUMAN, CAR_SIZE.SMALL, 5, 3);
+G.allCars.push(car30);
+G.roundState.roadDie = 3;
+sel = win.eval("sel");
+sel.mode = "assign";
+sel.car = car30;
+sel.step = "road-bonus-choice";
+win.render();
+
+const boardHtml30 = dom.window.document.getElementById("board").innerHTML;
+console.log("marker-road-3 est bien affiché même si 'devant' est Impassable, repli sur front-left/right (attendu true) :", boardHtml30.includes("marker-road-3.webp"));
+console.log("marker-no reste affiché comme avant (attendu true) :", boardHtml30.includes("marker-no.webp"));
+
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
