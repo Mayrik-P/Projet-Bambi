@@ -2315,6 +2315,29 @@ function renderPanel() {
   }
 }
 
+// Face du dé Road actif ce round — retour de Mayrik : remplace le
+// texte "Dé Road ce round : N" retiré du panneau. La bande titre du
+// plateau occupe très exactement la 1ère rangée sur 7 de la hauteur
+// des images de tuile (voir "7 * IMG_CELL_H" dans renderBoard) — son
+// milieu, en unités de viewBox, est donc à IMG_CELL_H/2. Le SVG étant
+// mis à l'échelle par CSS (width:100%), il faut reconvertir cette
+// coordonnée de viewBox en pixels écran RÉELS via le rectangle
+// effectivement rendu du SVG, recalculé à chaque appel (couvre aussi
+// un redimensionnement de fenêtre, voir l'écouteur resize plus bas).
+function updateRoadDieOverlay() {
+  const overlay = document.getElementById("roadDieOverlay");
+  if (!G.roundState.roadDie) { overlay.style.display = "none"; return; }
+  const boardEl = document.getElementById("board");
+  const rect = boardEl.getBoundingClientRect();
+  if (rect.width === 0) { overlay.style.display = "none"; return; }
+  const scale = rect.width / BOARD_VIEW.w;
+  const titleBandMidY = IMG_CELL_H / 2;
+  overlay.style.display = "block";
+  overlay.style.top = `${(rect.top + titleBandMidY * scale).toFixed(1)}px`;
+  overlay.src = `../images/dice/die-fx-road-${G.roundState.roadDie}.webp`;
+}
+window.addEventListener("resize", () => { if (typeof G !== "undefined") updateRoadDieOverlay(); });
+
 function render() {
   saveGameState(); // point de contrôle sûr : voir le commentaire détaillé près de SAVE_KEY
 
@@ -2329,6 +2352,7 @@ function render() {
   renderBoard();
   renderDashboards();
   renderPanel();
+  updateRoadDieOverlay();
 
   document.getElementById("damageRow").innerHTML = G.allCars
     .filter((car) => car.status !== "eliminated" && !car.isWreck) // les épaves n'ont aucun affichage UI (retour de Mayrik)

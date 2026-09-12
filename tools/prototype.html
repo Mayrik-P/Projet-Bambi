@@ -4,39 +4,41 @@
 <meta charset="UTF-8">
 <title>Thunder Road Vendetta — Prototype jouable (humain vs IA)</title>
 <style>
-  body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 16px; }
+  body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 0; }
   #wrap { max-width: 1000px; margin: 0 auto; }
-  h1 { font-size: 16px; color: #ffb347; margin-bottom: 4px; }
-  .sub { font-size: 12px; color: #999; margin-bottom: 10px; }
-  .badges { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
-  .badge { background: #2c2c36; padding: 4px 10px; border-radius: 6px; }
   .die { display: inline-block; background: #3a3a46; border-radius: 4px; padding: 2px 7px; margin-right: 3px; font-weight: bold; }
-  svg { width: 100%; height: auto; background: #26262e; border-radius: 8px; }
+  svg { display: block; width: 100%; height: auto; background: #26262e; }
   .clickable { cursor: pointer; }
   .clickable:hover { filter: brightness(1.3); }
-  #panel { margin-top: 12px; padding: 12px; background: #2c2c36; border-radius: 8px; font-size: 14px; }
-  #panel h2 { font-size: 14px; color: #ffb347; margin: 0 0 8px 0; }
+  /* Retirés de l'affichage (retour de Mayrik) — gardés dans le DOM
+     (juste masqués) car ui-script.js continue d'y écrire du contenu ;
+     les enlever du DOM casserait ces appels. */
+  h1, .sub, .badges, #panel, .damageList, .legend { display: none; }
   #choices { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   button.choice { background: #3a3a46; border: 1px solid #555; color: #eee; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   button.choice:hover { background: #4a4a58; }
   button.choice.selected { background: #ffb347; color: #1e1e24; font-weight: bold; }
-  button.primary { background: #ffb347; border: none; color: #1e1e24; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; margin-top: 10px; }
+  button.primary { background: #ffb347; border: none; color: #1e1e24; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; margin: 0; }
   button.primary:disabled { opacity: 0.3; cursor: default; }
   button.secondary { background: #555; border: none; color: #eee; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 13px; margin-top: 10px; margin-left: 8px; }
-  #log { margin-top: 12px; padding: 12px; background: #2c2c36; border-radius: 8px; font-size: 13px; line-height: 1.6; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column-reverse; }
+  #log { margin: 12px; padding: 12px; background: #2c2c36; border-radius: 8px; font-size: 13px; line-height: 1.6; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column-reverse; }
   #log div.line { margin-bottom: 2px; }
   #log div.turn-sep { color: #ffb347; font-weight: bold; margin: 6px 0 2px 0; }
-  .damageList { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
-  #winnerBanner { display: none; margin-top: 10px; padding: 10px; background: #ffb347; color: #1e1e24; border-radius: 8px; font-weight: bold; text-align: center; }
-  .legend { font-size: 12px; color: #999; margin-top: 8px; }
+  #winnerBanner { display: none; }
   #panel .stop-message { background: #4a2020; border: 1px solid #a04040; padding: 10px; border-radius: 6px; margin-bottom: 8px; }
   #panel .tile-message { background: #204a3a; border: 1px solid #3ba07a; padding: 10px; border-radius: 6px; margin-bottom: 8px; }
+  /* Face du dé Road actif ce round — retour de Mayrik : remplace
+     l'ancien texte "Dé Road ce round : N". position:fixed pour rester
+     centré à l'écran quel que soit le défilement horizontal du
+     plateau (large de plusieurs tuiles) ; le "top" exact est recalculé
+     en JS (voir updateRoadDieOverlay) pour coller au milieu de la
+     bande titre, qui n'a pas une hauteur fixe en pixels écran (dépend
+     de la largeur réellement affichée du plateau). */
+  #roadDieOverlay { position: fixed; left: 50%; transform: translate(-50%, -50%); width: 56px; height: 56px; z-index: 1000; pointer-events: none; display: none; }
 </style>
 </head>
 <body>
 <div id="wrap">
-  <h1>Thunder Road Vendetta — Prototype jouable</h1>
-  <div class="sub">Phase 2, point 3 — mouvement case par case et tir librement choisi par le joueur, sur le même moteur que l'IA.</div>
   <div class="badges">
     <span class="badge" id="roundBadge"></span>
     <span class="badge" id="playerBadge"></span>
@@ -45,6 +47,7 @@
     <span class="badge">Pool : <span id="dicePool"></span></span>
   </div>
   <svg id="board" viewBox="0 0 900 500"></svg>
+  <img id="roadDieOverlay" alt="Dé Road actif ce round">
   <svg id="dashboards" viewBox="0 0 900 300"></svg>
   <div id="panel"></div>
   <div class="damageList" id="damageRow"></div>
@@ -8921,6 +8924,29 @@ function renderPanel() {
   }
 }
 
+// Face du dé Road actif ce round — retour de Mayrik : remplace le
+// texte "Dé Road ce round : N" retiré du panneau. La bande titre du
+// plateau occupe très exactement la 1ère rangée sur 7 de la hauteur
+// des images de tuile (voir "7 * IMG_CELL_H" dans renderBoard) — son
+// milieu, en unités de viewBox, est donc à IMG_CELL_H/2. Le SVG étant
+// mis à l'échelle par CSS (width:100%), il faut reconvertir cette
+// coordonnée de viewBox en pixels écran RÉELS via le rectangle
+// effectivement rendu du SVG, recalculé à chaque appel (couvre aussi
+// un redimensionnement de fenêtre, voir l'écouteur resize plus bas).
+function updateRoadDieOverlay() {
+  const overlay = document.getElementById("roadDieOverlay");
+  if (!G.roundState.roadDie) { overlay.style.display = "none"; return; }
+  const boardEl = document.getElementById("board");
+  const rect = boardEl.getBoundingClientRect();
+  if (rect.width === 0) { overlay.style.display = "none"; return; }
+  const scale = rect.width / BOARD_VIEW.w;
+  const titleBandMidY = IMG_CELL_H / 2;
+  overlay.style.display = "block";
+  overlay.style.top = `${(rect.top + titleBandMidY * scale).toFixed(1)}px`;
+  overlay.src = `../images/dice/die-fx-road-${G.roundState.roadDie}.webp`;
+}
+window.addEventListener("resize", () => { if (typeof G !== "undefined") updateRoadDieOverlay(); });
+
 function render() {
   saveGameState(); // point de contrôle sûr : voir le commentaire détaillé près de SAVE_KEY
 
@@ -8935,6 +8961,7 @@ function render() {
   renderBoard();
   renderDashboards();
   renderPanel();
+  updateRoadDieOverlay();
 
   document.getElementById("damageRow").innerHTML = G.allCars
     .filter((car) => car.status !== "eliminated" && !car.isWreck) // les épaves n'ont aucun affichage UI (retour de Mayrik)
