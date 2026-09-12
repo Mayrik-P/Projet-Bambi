@@ -97,7 +97,7 @@ const boardEl1 = dom.window.document.getElementById("board");
 console.log("marker-reroll affiché sur la case du Slam (attendu true) :", boardEl1.innerHTML.includes("marker-reroll.webp"));
 console.log("La face du dé Slam est affichée sur la case de destination (attendu true) :", boardEl1.innerHTML.includes("die-fx-slam-"));
 
-const noImg1 = [...boardEl1.querySelectorAll("image.clickable")].find((el) => el.getAttribute("href").includes("marker-no.webp"));
+const noImg1 = [...boardEl1.querySelectorAll("image.clickable")].find((el) => el.getAttribute("href").includes("marker-yes.webp"));
 noImg1.dispatchEvent(new win.Event("click", { bubbles: true }));
 sel = win.eval("sel"); // resetSelection() RÉASSIGNE `sel` — il faut le relire, pas garder l'ancienne référence
 
@@ -195,7 +195,8 @@ win.render();
 console.log("Une pause a bien été obtenue pour le Wreck (attendu true) :", sel3.step === "slam-reroll-choice");
 const boardEl3w = dom.window.document.getElementById("board");
 console.log("marker-reroll affiché sur la case du Slam (attendu true) :", boardEl3w.innerHTML.includes("marker-reroll.webp"));
-const noImg3 = [...boardEl3w.querySelectorAll("image.clickable")].find((el) => el.getAttribute("href").includes("marker-no.webp"));
+console.log("La face du dé Slam est affichée sur la case de destination, même contre une Wreck (attendu true) :", boardEl3w.innerHTML.includes("die-fx-slam-"));
+const noImg3 = [...boardEl3w.querySelectorAll("image.clickable")].find((el) => el.getAttribute("href").includes("marker-yes.webp"));
 noImg3.dispatchEvent(new win.Event("click", { bubbles: true }));
 console.log("Épave bien ajoutée à allCars après résolution (attendu true) :", G3.allCars.some((c) => c.isWreck));
 

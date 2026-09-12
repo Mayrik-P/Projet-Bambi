@@ -444,7 +444,7 @@ const boardEl3 = dom.window.document.getElementById("board");
 const rerollImgs = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-reroll.webp"));
 const slamFaceImgs = [...boardEl3.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes(`die-fx-slam-${ctx12.slamRoll}.webp`));
 const dirFaceImgs = [...boardEl3.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes("die-fx-direction-"));
-const noImgsSlam = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-no.webp"));
+const noImgsSlam = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-yes.webp"));
 
 console.log("marker-reroll toujours affiché sur la case du Slam (attendu true) :", rerollImgs.length === 1);
 console.log("La face du dé Slam est affichée UNE FOIS, sur la case de DESTINATION (attendu true) :", slamFaceImgs.length === 1);
@@ -454,11 +454,11 @@ const rerollCenter = win.cellCenter(ctx12.topCar.col, ctx12.topCar.row);
 console.log("...et cette case de destination est bien DIFFÉRENTE de la case du Slam (attendu true) :",
   Math.abs(slamFaceCenter.cx - rerollCenter.cx) > 1 || Math.abs(slamFaceCenter.cy - rerollCenter.cy) > 1);
 console.log("Le dé Direction n'est PAS affiché (retour de Mayrik) (attendu true) :", dirFaceImgs.length === 0);
-console.log("marker-no affiché derrière le véhicule qui décide (attendu true) :", noImgsSlam.length === 1);
+console.log("marker-yes (pas marker-no, retour de Mayrik) affiché derrière le véhicule qui décide (attendu true) :", noImgsSlam.length === 1);
 
 click(dom, noImgsSlam[0]);
 sel = win.eval("sel");
-console.log("Cliquer marker-no a bien répondu 'non, pas de relance' (pause terminée) (attendu true) :", !sel.pendingHumanSlam);
+console.log("Cliquer marker-yes a bien répondu 'j'accepte ce résultat' (pause terminée) (attendu true) :", !sel.pendingHumanSlam);
 
 section("Test 13 — Airstrike : le chopper s'affiche à sa position choisie pendant l'arc de tir");
 
@@ -512,9 +512,9 @@ win.render();
 const clickableDieGroup = [...dom.window.document.querySelectorAll("#dashboards g.clickable")][0];
 const innerImgsWithPE = [...clickableDieGroup.querySelectorAll("image")].filter((img) => img.getAttribute("pointer-events") === "none");
 console.log("Aucune image interne du dé cliquable n'a pointer-events=none (attendu true) :", innerImgsWithPE.length === 0);
-console.log("Le halo vert du diceboard fait EXACTEMENT la taille d'un dé, sans marge (attendu true) :",
+console.log("Le halo vert du diceboard fait EXACTEMENT la taille d'un dé, même style que les autres surbrillances (bordure + remplissage) (attendu true) :",
   (() => {
-    const halo = [...dom.window.document.querySelectorAll("#dashboards rect")].find((r) => r.getAttribute("stroke") === "#b0d458" && r.getAttribute("fill") === "none" && parseFloat(r.getAttribute("width")).toFixed(1) === win.eval("DIE_DISPLAY_SIZE").toFixed(1));
+    const halo = [...dom.window.document.querySelectorAll("#dashboards rect")].find((r) => r.getAttribute("stroke") === "#b0d458" && r.getAttribute("fill") === "#b0d458" && parseFloat(r.getAttribute("width")).toFixed(1) === win.eval("DIE_DISPLAY_SIZE").toFixed(1));
     return !!halo;
   })());
 
@@ -694,7 +694,7 @@ console.log("coastDieState contient bien une entrée pour ce véhicule (attendu 
 const dashHtml22 = dom.window.document.getElementById("dashboards").innerHTML;
 console.log("Un dé est bien rendu sur le dashboard après la fin du tour (attendu true) :", dashHtml22.includes("die-move-"));
 
-section("Test 23 — Marqueurs dégât/inopérable calés sur le vrai bas de la case, centrés horizontalement");
+section("Test 23 — Marqueurs dégât/inopérable : 75% de la taille, centrés verticalement, calés contre le bord gauche du véhicule");
 
 dom = makeDom();
 win = dom.window;
@@ -705,10 +705,15 @@ dmgCar23.damageTokens = ["dent"];
 G.allCars.push(dmgCar23);
 win.render();
 const boardEl23 = [...dom.window.document.getElementById("board").querySelectorAll("image")].find((el) => el.getAttribute("href").includes("marker-damaged.webp"));
-const expectedBotY = win.cellPoly(4, 3)[3][1] - win.eval("MARKER_ICON_SIZE");
-const expectedCx = win.cellCenter(4, 3).cx - win.eval("MARKER_ICON_SIZE") / 2;
-console.log("Le marqueur dégât est bien calé sur le vrai bas de la case (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("y")) - expectedBotY) < 0.5);
-console.log("...et centré horizontalement sur le véhicule (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("x")) - expectedCx) < 0.5);
+const MARKER_ICON_SIZE23 = win.eval("MARKER_ICON_SIZE");
+const damageMarkerSize23 = MARKER_ICON_SIZE23 * 0.75;
+const cellC23 = win.cellCenter(4, 3);
+const vehicleLeftX23 = cellC23.cx + win.eval("CAR_IMG_OFFSET_X") - win.eval("CAR_IMG_W") / 2;
+const expectedX23 = vehicleLeftX23 - damageMarkerSize23 / 2;
+const expectedY23 = cellC23.cy - damageMarkerSize23 / 2;
+console.log("Taille réduite à 75% (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("width")) - damageMarkerSize23) < 0.5);
+console.log("Centré verticalement sur le véhicule (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("y")) - expectedY23) < 0.5);
+console.log("Calé horizontalement contre le bord GAUCHE du véhicule (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("x")) - expectedX23) < 0.5);
 
 const parentGroup23 = boardEl23.closest("g");
 const childrenOrder23 = [...parentGroup23.children];
@@ -786,5 +791,22 @@ const DIE25 = win.eval("DIE_DISPLAY_SIZE");
 const coast2X = dimX25 + frac25.coast2.x * box25.w - DIE25 / 2;
 console.log("Le slot proposé est bien COAST2 (coast1 déjà pris) (attendu true) :",
   Math.abs(parseFloat(s25Rect2.getAttribute("x")) - coast2X) < 1);
+
+section("Test 26 — Véhicule inopérable : plus de transparence, rotation 180° conservée");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+G = win.eval("G");
+const CAR_STATUS26 = win.eval("CAR_STATUS");
+const inopCar26 = win.createCar(HUMAN, CAR_SIZE.MEDIUM, 4, 3);
+inopCar26.damageTokens = ["dent", "shrapnel"];
+inopCar26.status = CAR_STATUS26.INOPERABLE;
+G.allCars.push(inopCar26);
+win.render();
+const vehicleImgs26 = [...dom.window.document.getElementById("board").querySelectorAll("image")].filter((el) => el.getAttribute("href").includes("images/vehicles/medium-blue.webp"));
+const vehicleImg26 = vehicleImgs26[vehicleImgs26.length - 1]; // la dernière = le véhicule réel (l'ombre partage le même chemin et vient avant)
+console.log("Aucun attribut opacity sur le véhicule inopérable (attendu true) :", vehicleImg26.getAttribute("opacity") === null);
+console.log("La rotation 180° est bien conservée (attendu true) :", (vehicleImg26.getAttribute("transform") || "").includes("rotate(180"));
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");

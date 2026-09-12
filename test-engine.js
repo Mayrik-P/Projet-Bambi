@@ -10,6 +10,7 @@ const {
   getSpace,
   createCar,
   moveCar,
+  moveCarGen,
   CAR_SIZE,
   CAR_STATUS,
   getFrontArc
@@ -2818,6 +2819,35 @@ section("Test 206 — Finish Line : face visuelle (a/b) aléatoire mais injectab
   state206.tilesPlacedCount = 5;
   checkGameEndConditions(state206, [], [], ["Alice", "Bob"], { forcedFinishLineFace: "b" });
   console.log("Face forcée relayée depuis checkGameEndConditions (attendu 'b') :", state206.finishLineTile && state206.finishLineTile.face);
+}
+
+// -----------------------------------------------------------------
+// TEST 207 — BUG TROUVÉ PAR MAYRIK : un Slam doit TOUJOURS annuler
+// l'éligibilité au bonus Road, même si la voiture projetée retombe
+// sur une case ROUTE. roadEligible ne suivait jusqu'ici que le
+// terrain traversé, jamais l'événement Slam lui-même — un tour IA
+// pouvait donc enchaîner Slam -> bonus Road -> mouvement continué,
+// alors que la règle (p.9) dit que le Slam met fin au mouvement.
+// -----------------------------------------------------------------
+section("Test 207 — Un Slam annule roadEligible même en retombant sur une case Route");
+
+{
+  const tile207 = createTestTile(8, 6); // createTestTile = tout en Route par défaut
+  const mover207 = createCar("IA", CAR_SIZE.SMALL, 3, 3);
+  const occupant207 = createCar("IA", CAR_SIZE.LARGE, 4, 3); // même propriétaire -> jamais de pause de relance ici, non pertinent pour ce test
+  const cars207 = [mover207, occupant207];
+
+  const gen207 = moveCarGen(tile207, mover207, 1, ["front"], cars207, {
+    forcedDice: { slam: "bottom", direction: "front-left" }
+  });
+  const step207 = gen207.next();
+  console.log("Le générateur se termine sans pause (même owner des deux côtés) (attendu true) :", step207.done);
+  const result207 = step207.value;
+  console.log("Un Slam a bien été déclenché (attendu true) :", !!result207.slam);
+  const landedSpace207 = getSpace(tile207, mover207.col, mover207.row);
+  console.log("La voiture projetée est bien retombée sur une case ROUTE (attendu true) :", landedSpace207.terrain === TERRAIN.ROAD);
+  console.log("...et pourtant roadEligible est bien FALSE (bug corrigé, attendu true) :", result207.roadEligible === false);
+  console.log("remaining bien ramené à 0 (le Slam met fin au mouvement, déjà correct avant ce correctif) (attendu true) :", result207.remaining === 0);
 }
 
 section("Fin des tests");

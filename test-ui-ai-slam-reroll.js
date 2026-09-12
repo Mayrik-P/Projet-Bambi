@@ -133,8 +133,8 @@ console.log("G.aiPending bien renseigné après la pause (attendu true) :", !!G.
 console.log("marker-reroll affiché sur la case du Slam (attendu true) :", boardHtml(dom).includes("marker-reroll.webp"));
 console.log("La face du dé Slam est affichée sur la case de destination (attendu true) :", boardHtml(dom).includes("die-fx-slam-"));
 
-// Clique VRAIMENT marker-no ("Non, garder ce résultat").
-clickBoardMarker(dom, "marker-no.webp");
+// Clique VRAIMENT marker-yes ("j'accepte ce résultat", pas de relance).
+clickBoardMarker(dom, "marker-yes.webp");
 
 console.log("G.aiPending nettoyé après la réponse (attendu true) :", G.aiPending === null);
 console.log("Le tour de l'IA a bien été journalisé (attendu true) :",
@@ -236,7 +236,7 @@ win.driveAiTurnGenerator(gen5, "Test — tir + Dazed");
 
 console.log("Pause obtenue (attendu true) :", !!G5.aiPending);
 console.log("marker-reroll affiché sur le plateau (attendu true) :", boardHtml(dom).includes("marker-reroll.webp"));
-clickBoardMarker(dom, "marker-no.webp");
+clickBoardMarker(dom, "marker-yes.webp");
 console.log("G5.aiPending nettoyé après la réponse (attendu true) :", G5.aiPending === null);
 console.log("Le tir/dégât a bien été journalisé (attendu true) :",
   win.eval("fullLog").some((entry) => entry.line && entry.line.includes("Touché")));
