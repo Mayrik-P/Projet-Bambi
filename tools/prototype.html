@@ -9202,7 +9202,7 @@ function initDashboardsPanzoom() {
     // vitesse au relâché (panzoomend), plus robuste qu'un simple delta
     // entre les 2 derniers échantillons.
     const KINETIC_TIME_CONSTANT = 450;
-    const MOMENTUM_DISTANCE_MULTIPLIER = 3.5;
+    const MOMENTUM_DISTANCE_MULTIPLIER = 2.625; // 3.5 réduit d'1/4 (retour de Mayrik : un peu trop rapide en usage réel)
     let panSamples = [];
     let momentumFrame = null;
     function stopMomentum() {
