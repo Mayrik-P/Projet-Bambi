@@ -68,6 +68,19 @@
      dans un chantier séparé. Style "afficheur de flipper" en attendant
      mieux : police monospace, espacement des lettres, léger halo —
      approximation raisonnable sans police bitmap dédiée. */
+  /* Bouton plein écran (retour de Mayrik) : flottant et indépendant
+     des 3 zones — jamais placé DANS #info-band, dont le contenu est
+     entièrement réécrit à chaque tour (voir updateInfoBand), ce qui
+     l'aurait fait disparaître aussitôt. Masqué proprement en JS si
+     l'API Fullscreen n'est pas disponible (iOS Safari/Chrome ne la
+     supportent pas du tout pour un élément quelconque — restriction
+     délibérée d'Apple — plutôt que d'afficher un bouton qui ne ferait
+     rien). */
+  #fullscreen-btn { position: fixed; top: 8px; right: 8px; z-index: 2000;
+    background: rgba(30,30,36,0.85); border: 1px solid #555; color: #eee; border-radius: 6px;
+    padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  #fullscreen-btn:hover { background: rgba(60,60,70,0.9); }
+
   #info-band { width: 100%; box-sizing: border-box; min-height: 44px; background: #0d0d10;
     border-top: 2px solid #3a3a46; border-bottom: 2px solid #3a3a46;
     display: flex; align-items: center; justify-content: center; padding: 6px 14px;
@@ -170,6 +183,7 @@
   </div>
 </div>
 <div id="wrap">
+  <button id="fullscreen-btn" type="button" title="Plein écran">⛶ Plein écran</button>
   <div class="badges">
     <span class="badge" id="roundBadge"></span>
     <span class="badge" id="playerBadge"></span>
@@ -9232,13 +9246,32 @@ function initDashboardsPanzoom() {
     // touchstart et touchend, jamais un glissé de panoramique) suivi
     // d'un second dans les 350ms et à moins de 30px du premier ->
     // bascule. `dblclick` natif couvre la souris séparément.
+    //
+    // BUG CORRIGÉ (retour de Mayrik, usage réel) : sur tactile, un
+    // touchend déclenche ENSUITE un click puis un dblclick SYNTHÉTIQUES
+    // (comportement standard des navigateurs mobiles, documenté —
+    // c'est la raison d'être historique de bibliothèques comme
+    // FastClick) — sans protection, la bascule se déclenchait deux
+    // fois pour un seul geste physique (une fois via ce gestionnaire
+    // touchend, une fois via le dblclick synthétique juste après),
+    // annulant l'effet visuel l'une de l'autre. Double protection
+    // éprouvée : preventDefault() sur le touchend qui bascule (coupe
+    // le click/dblclick synthétique à la source — nécessite
+    // passive:false, sinon preventDefault() est silencieusement
+    // ignoré) + un drapeau de garde côté dblclick en filet de
+    // sécurité (au cas où un navigateur ne respecterait pas le
+    // preventDefault, cross-browser oblige).
+    let ignoreNextDblclickUntil = 0;
     function toggleZoomAt(point) {
       stopMomentum();
       const scale = dashboardsPanzoom.getScale();
       if (scale > 1.01) dashboardsPanzoom.reset();
       else dashboardsPanzoom.zoomToPoint(4, point);
     }
-    viewport.addEventListener("dblclick", (e) => toggleZoomAt(e));
+    viewport.addEventListener("dblclick", (e) => {
+      if (Date.now() < ignoreNextDblclickUntil) return; // déjà déclenché via le double-tap tactile ci-dessous
+      toggleZoomAt(e);
+    });
     let tapStartX = 0, tapStartY = 0, lastTapTime = 0, lastTapX = 0, lastTapY = 0;
     viewport.addEventListener("touchstart", (e) => {
       const t = e.touches[0];
@@ -9252,6 +9285,8 @@ function initDashboardsPanzoom() {
       const now = Date.now();
       const distFromLastTap = Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY);
       if (now - lastTapTime < 350 && distFromLastTap < 30) {
+        e.preventDefault(); // coupe le click/dblclick synthétique qui suivrait sinon
+        ignoreNextDblclickUntil = now + 400; // filet de sécurité si preventDefault est ignoré
         toggleZoomAt({ clientX: t.clientX, clientY: t.clientY });
         lastTapTime = 0; // absorbe un éventuel 3e tap rapide
       } else {
@@ -9259,7 +9294,7 @@ function initDashboardsPanzoom() {
         lastTapX = t.clientX;
         lastTapY = t.clientY;
       }
-    }, { passive: true });
+    }, { passive: false }); // requis pour que preventDefault() ci-dessus ait un effet réel
   } catch (e) {
     // Best-effort : le zoom/déplacement de la zone dashboards est un
     // confort, jamais une dépendance dure — une IA/un environnement où
@@ -9325,6 +9360,32 @@ function render() {
 // setupBoardScroll()/updateDashboardsViewportHeight(), rappelées à
 // chaque rendu — voir leurs commentaires respectifs).
 initDashboardsPanzoom();
+
+// Bouton plein écran (retour de Mayrik : voir le rendu réel sans la
+// barre d'adresse du navigateur, en attendant une vraie installation
+// PWA). API Fullscreen standard — NE FONCTIONNE PAS sur iOS
+// Safari/Chrome pour un élément quelconque (restriction délibérée
+// d'Apple, encore vraie aujourd'hui ; seul un PWA installé via
+// "Ajouter à l'écran d'accueil" donne cette expérience sur iPhone).
+// document.fullscreenEnabled détecte proprement ce cas : bouton
+// masqué plutôt que présent mais inopérant.
+const fullscreenBtn = document.getElementById("fullscreen-btn");
+if (fullscreenBtn) {
+  if (!document.fullscreenEnabled) {
+    fullscreenBtn.style.display = "none";
+  } else {
+    fullscreenBtn.addEventListener("click", () => {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    });
+    document.addEventListener("fullscreenchange", () => {
+      fullscreenBtn.textContent = document.fullscreenElement ? "⛶ Quitter" : "⛶ Plein écran";
+    });
+  }
+}
 document.getElementById("board-viewport").addEventListener("scroll", syncBoardSlider);
 document.getElementById("board-position-slider").addEventListener("input", onBoardSliderInput);
 window.addEventListener("resize", () => { syncBoardSlider(); if (typeof G !== "undefined" && G) updateDashboardsViewportHeight(); });

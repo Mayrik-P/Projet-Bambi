@@ -2,12 +2,26 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<!-- Retour de Mayrik (usage réel sur téléphone) : la balise viewport
+     avec maximum-scale=1/user-scalable=no (essayée d'abord) NE
+     FONCTIONNE PAS sur Safari iOS — ignorée depuis iOS 10 (confirmé,
+     Apple a délibérément arrêté de la respecter). La méthode robuste,
+     éprouvée et documentée (Microsoft, spec CSS touch-action,
+     fonctionne sur iOS Safari 13+ ET Android) : touch-action:
+     manipulation sur body (voir plus bas dans le CSS) — autorise
+     normalement le défilement et le pincement-zoom, mais désactive
+     SPÉCIFIQUEMENT le double-tap-zoom du navigateur, sans bloquer tout
+     zoom comme le ferait user-scalable=no (accessibilité préservée).
+     #dashboards-viewport garde son touch-action:none propre (Panzoom
+     y prend le contrôle total), qui l'emporte localement sur ce
+     réglage global. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Thunder Road Vendetta — Prototype jouable (humain vs IA)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Oswald:wght@500;700&display=swap" rel="stylesheet">
 <style>
-  body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 0; touch-action: manipulation; }
   #wrap { max-width: 1000px; margin: 0 auto; }
   .die { display: inline-block; background: #3a3a46; border-radius: 4px; padding: 2px 7px; margin-right: 3px; font-weight: bold; }
   .clickable { cursor: pointer; }
@@ -54,6 +68,19 @@
      dans un chantier séparé. Style "afficheur de flipper" en attendant
      mieux : police monospace, espacement des lettres, léger halo —
      approximation raisonnable sans police bitmap dédiée. */
+  /* Bouton plein écran (retour de Mayrik) : flottant et indépendant
+     des 3 zones — jamais placé DANS #info-band, dont le contenu est
+     entièrement réécrit à chaque tour (voir updateInfoBand), ce qui
+     l'aurait fait disparaître aussitôt. Masqué proprement en JS si
+     l'API Fullscreen n'est pas disponible (iOS Safari/Chrome ne la
+     supportent pas du tout pour un élément quelconque — restriction
+     délibérée d'Apple — plutôt que d'afficher un bouton qui ne ferait
+     rien). */
+  #fullscreen-btn { position: fixed; top: 8px; right: 8px; z-index: 2000;
+    background: rgba(30,30,36,0.85); border: 1px solid #555; color: #eee; border-radius: 6px;
+    padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  #fullscreen-btn:hover { background: rgba(60,60,70,0.9); }
+
   #info-band { width: 100%; box-sizing: border-box; min-height: 44px; background: #0d0d10;
     border-top: 2px solid #3a3a46; border-bottom: 2px solid #3a3a46;
     display: flex; align-items: center; justify-content: center; padding: 6px 14px;
@@ -156,6 +183,7 @@
   </div>
 </div>
 <div id="wrap">
+  <button id="fullscreen-btn" type="button" title="Plein écran">⛶ Plein écran</button>
   <div class="badges">
     <span class="badge" id="roundBadge"></span>
     <span class="badge" id="playerBadge"></span>
