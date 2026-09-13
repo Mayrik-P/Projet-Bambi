@@ -2594,14 +2594,72 @@ function initDashboardsPanzoom() {
     // geste tactile précis dans une zone qui capture le tactile.
     const resetBtn = document.getElementById("dashboards-reset-btn");
     if (resetBtn) resetBtn.addEventListener("click", () => dashboardsPanzoom.reset());
-    // Double-tap / double-clic -> réinitialise le zoom (retour de
-    // Mayrik) : geste standard (Google Maps, Photos...), en
-    // complément du bouton — Panzoom ne gère rien de tel nativement.
-    // Un vrai TAP (déplacement < 10px entre touchstart et touchend,
-    // jamais un glissé de panoramique) suivi d'un second dans les
-    // 350ms et à moins de 30px du premier -> reset. `dblclick` natif
-    // couvre la souris séparément (aucun geste tactile à reproduire).
-    viewport.addEventListener("dblclick", () => dashboardsPanzoom.reset());
+
+    // -----------------------------------------------------------
+    // Inertie après un panoramique relâché (retour de Mayrik : même
+    // sensation que le défilement natif du plateau, zone 1). Panzoom
+    // ne fournit aucune physique d'inertie — implémentée ici selon la
+    // méthode de référence "JavaScript Kinetic Scrolling" d'Ariya
+    // Hidayat (github.com/ariya/kinetic, source à laquelle remontent
+    // la plupart des bibliothèques de kinetic scrolling depuis 2013) :
+    // décroissance exponentielle de la vitesse, timeConstant=325ms —
+    // valeur qui reproduit VOLONTAIREMENT la même décélération que le
+    // scroll natif iOS (UIScrollView, decelerationRate "normal").
+    // panzoompan fournit x/y à chaque frame de panoramique (voir
+    // PanzoomEventDetail) ; on garde une petite fenêtre glissante de
+    // 200ms pour calculer la vitesse au relâché (panzoomend), plus
+    // robuste qu'un simple delta entre les 2 derniers échantillons.
+    const KINETIC_TIME_CONSTANT = 325;
+    let panSamples = [];
+    let momentumFrame = null;
+    function stopMomentum() {
+      if (momentumFrame) { cancelAnimationFrame(momentumFrame); momentumFrame = null; }
+    }
+    svg.addEventListener("panzoomstart", stopMomentum); // un nouveau geste coupe toujours le coast en cours
+    svg.addEventListener("panzoompan", (e) => {
+      const now = performance.now();
+      panSamples.push({ x: e.detail.x, y: e.detail.y, t: now });
+      panSamples = panSamples.filter((s) => now - s.t < 200);
+    });
+    svg.addEventListener("panzoomend", () => {
+      const samples = panSamples;
+      panSamples = [];
+      if (samples.length < 2) return;
+      const first = samples[0], last = samples[samples.length - 1];
+      const dt = last.t - first.t;
+      if (dt <= 0) return;
+      const vx = (last.x - first.x) / dt, vy = (last.y - first.y) / dt; // px/ms
+      const speed = Math.hypot(vx, vy);
+      if (speed < 0.05) return; // relâché trop lentement -> pas de coast, juste s'arrêter
+      const startX = last.x, startY = last.y;
+      const ampX = vx * KINETIC_TIME_CONSTANT, ampY = vy * KINETIC_TIME_CONSTANT;
+      const startTime = performance.now();
+      function step() {
+        const elapsed = performance.now() - startTime;
+        const factor = 1 - Math.exp(-elapsed / KINETIC_TIME_CONSTANT);
+        dashboardsPanzoom.pan(startX + ampX * factor, startY + ampY * factor, { animate: false });
+        const remainingSpeed = speed * Math.exp(-elapsed / KINETIC_TIME_CONSTANT);
+        momentumFrame = remainingSpeed > 0.02 ? requestAnimationFrame(step) : null;
+      }
+      momentumFrame = requestAnimationFrame(step);
+    });
+
+    // -----------------------------------------------------------
+    // Double-tap / double-clic (retour de Mayrik) : bascule comme
+    // dans Google Photos/Maps — zoomé (>1) -> retour plein écran ;
+    // plein écran (=1) -> zoom x4 CENTRÉ SUR LE POINT TAPÉ
+    // (zoomToPoint, pas un zoom générique au centre). Panzoom ne gère
+    // rien de tel nativement. Un vrai TAP (déplacement < 10px entre
+    // touchstart et touchend, jamais un glissé de panoramique) suivi
+    // d'un second dans les 350ms et à moins de 30px du premier ->
+    // bascule. `dblclick` natif couvre la souris séparément.
+    function toggleZoomAt(point) {
+      stopMomentum();
+      const scale = dashboardsPanzoom.getScale();
+      if (scale > 1.01) dashboardsPanzoom.reset();
+      else dashboardsPanzoom.zoomToPoint(4, point);
+    }
+    viewport.addEventListener("dblclick", (e) => toggleZoomAt(e));
     let tapStartX = 0, tapStartY = 0, lastTapTime = 0, lastTapX = 0, lastTapY = 0;
     viewport.addEventListener("touchstart", (e) => {
       const t = e.touches[0];
@@ -2615,7 +2673,7 @@ function initDashboardsPanzoom() {
       const now = Date.now();
       const distFromLastTap = Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY);
       if (now - lastTapTime < 350 && distFromLastTap < 30) {
-        dashboardsPanzoom.reset();
+        toggleZoomAt({ clientX: t.clientX, clientY: t.clientY });
         lastTapTime = 0; // absorbe un éventuel 3e tap rapide
       } else {
         lastTapTime = now;
