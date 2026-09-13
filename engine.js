@@ -5,11 +5,16 @@
  * règles qui le font évoluer. On le teste en lisant les résultats
  * dans la console (voir test-engine.js).
  *
- * ÉTAPE 1 (ce fichier) : une seule tuile, une seule voiture, le
- * mouvement de base (arc avant, coût des terrains). Pas encore de
- * slams, hazards, tir, dégâts, IA, ni plusieurs tuiles qui défilent.
- * On ajoutera ces briques une par une, chacune testée avant la
- * suivante.
+ * Couvre aujourd'hui l'intégralité du jeu de base (p.1-11 du
+ * rulebook) : mouvement (arc avant, entrée, Coast, bonus Road),
+ * Slams (direct, en chaîne, avec relance), hazards (tous types),
+ * dégâts et réparation, tir (normal et Airstrike), Commands
+ * (Nitro/Drift/Repair/Airstrike), progression des tuiles (défilement,
+ * ligne d'arrivée) et conditions de victoire — pour un nombre de
+ * joueurs quelconque (2 à 4). L'IA (ai-decision.js), la couche
+ * joueur humain (human-decision.js) et l'exécution de tour
+ * (turn-executor.js) sont des modules séparés qui s'appuient
+ * uniquement sur ce fichier.
  */
 
 // -----------------------------------------------------------------
@@ -131,12 +136,15 @@ function getSpace(tile, col, row) {
 // qui n'en est qu'une vue reconstruite à chaque fois). C'est cet
 // état qui évolue quand une voiture sort par l'avant.
 //
-// LIMITATION ACTUELLE, à corriger plus tard : pas de "retournement"
-// de tuile à proprement parler — chaque tuile physique a 2 faces
-// différentes (A/B) dans le vrai jeu, mais ici chaque face est un
-// fichier de données à part entière (voir tiles/data/), donc "choisir
-// une face" se fait en amont, au moment de choisir QUEL fichier
-// instancier, pas dans ce moteur.
+// Chaque tuile physique a 2 faces différentes (A/B) dans le vrai jeu ;
+// ici, chaque face est un fichier de données à part entière (voir
+// tiles/data/) — le "retournement" se traduit donc par un tirage
+// aléatoire entre ces fichiers au moment d'instancier la tuile
+// (pickRandomFace/groupTilesByNumber), jamais par une rotation gérée
+// par ce moteur. Choix de conception définitif, pas une limitation
+// temporaire : plus simple à raisonner, et strictement équivalent du
+// point de vue des règles (une face = un terrain figé, comme la vraie
+// tuile imprimée).
 //
 // Place automatiquement un jeton hazard sur chaque case marquée
 // hazardSpace=true des 3 tuiles de départ (mise en place physique du
@@ -563,9 +571,8 @@ function eliminateCarsOnChoppers(allCars, allChoppers) {
 // respectant la parité de la rangée de départ (voir getFrontArc).
 // Réutilisé par tout code qui marche une trajectoire hypothétique
 // (recherche IA) sans passer par moveCar — la table DIRECTIONS seule
-// ne suffit PAS ici : elle ignore la parité et ne doit servir que
-// pour rear/rear-left/rear-right (pas encore couverts par une règle
-// confirmée, voir DIRECTIONS plus bas).
+// ne suffit PAS ici : elle ignore la parité. Symétrique de
+// getBackwardDelta ci-dessous, pour rear/rear-left/rear-right.
 function getForwardDelta(dirName, fromCol, fromRow) {
   const arc = getFrontArc({ col: fromCol, row: fromRow });
   const target = arc.find((a) => a.name === dirName);
@@ -1189,12 +1196,14 @@ function rollShootingDie(injectedValue = null) {
 }
 
 // Dé Road à 6 faces : 1-1-1-2-2-3 (confirmé par Mayrik). Tiré une
-// seule fois par round, par le 1er joueur (p.9). NOTE : ce dé n'est
-// pour l'instant utilisé QUE pour la rotation de round (qui le tire,
-// quand) — le BONUS de déplacement qu'il donne aux voitures restées
-// sur route n'est pas encore implémenté dans moveCar (voir p.9 :
-// "if their car started on and moved on only road spaces, that car
-// may immediately gain moves equal to the road die").
+// seule fois par round, par le 1er joueur (p.9) — voir
+// ensureRoadDieRolled. Le BONUS de déplacement qu'il donne aux
+// voitures restées sur route (p.9 : "if their car started on and
+// moved on only road spaces, that car may immediately gain moves
+// equal to the road die") est implémenté dans
+// playTurnAssignMoveWithProgressionGen/playTurnAssignEnterWithProgressionGen
+// (options.roadDieValue + options.roadBonusPath, jamais ici — ce dé
+// n'est que le TIRAGE, pas son application).
 function rollRoadDie(injectedValue = null) {
   if (injectedValue) return injectedValue;
   return DICE_FACES.ROAD[Math.floor(Math.random() * DICE_FACES.ROAD.length)];
@@ -3122,6 +3131,7 @@ function rollMovementDie(injectedValue = null) {
 if (typeof module !== "undefined" && module.exports) {
 module.exports = {
 
+  driveSync,
   TERRAIN,
   MOVE_COST,
   CAR_SIZE,

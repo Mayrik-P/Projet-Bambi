@@ -14,11 +14,13 @@
  *     décision par rapport aux RÈGLES MÉCANIQUES DU JEU UNIQUEMENT
  *     (dé bien dans le pool, pas réutilisation du même dé physique,
  *     plage de valeur de Command) — jamais une préférence stratégique.
- *     Utilisée par tools/run-shadow-legality.js (pour DÉTECTER une
- *     décision IA illégale, sans bloquer son exécution — l'outil veut
- *     justement voir ces cas s'ils existent) ET par human-decision.js
- *     (pour REJETER une décision avant de l'exécuter — un humain ne
- *     doit jamais pouvoir soumettre un choix mécaniquement invalide).
+ *     Utilisée par tools/run-shadow-legality.js, pour DÉTECTER une
+ *     décision IA illégale sans bloquer son exécution (l'outil veut
+ *     justement voir ces cas s'ils existent). Le joueur humain, lui,
+ *     n'appelle jamais cette fonction : tools/ui-script.js ne
+ *     construit sa décision qu'à partir d'options déjà filtrées
+ *     légales (human-decision.js) — illégal par construction,
+ *     jamais besoin d'un contrôle a posteriori.
  *   - executeDecision(...) : exécute réellement une décision déjà
  *     prise (dés tirés du pool, Command résolue, mouvement/Coast/
  *     entrée joué, tour avancé) — ne prend AUCUNE décision elle-même,
@@ -35,14 +37,12 @@ const {
   drawSpecificDieFromPool, advanceTurn,
   resolveNitroCommand, resolveRepairCommand, resolveDriftCommand,
   resolveAirstrikeCommand, resolveAirstrikeShoot, placeChopperAirstrike,
-  playTurnAssignMoveWithProgression,
-  playTurnAssignEnterWithProgression, playTurnCoastWithProgression,
   playTurnAssignMoveWithProgressionGen, playTurnAssignEnterWithProgressionGen,
   playTurnCoastWithProgressionGen,
-  createChopper, buildBoardFromProgressionState, moveCarEnteringBoard,
-  moveCarEnteringBoardGen, moveCarWithProgression, moveCarWithProgressionGen,
-  resolveShoot, resolveShootGen, eliminateCarsOnChoppers,
-  checkGameEndConditions
+  createChopper, buildBoardFromProgressionState,
+  moveCarEnteringBoardGen, moveCarWithProgressionGen,
+  resolveShootGen, eliminateCarsOnChoppers,
+  checkGameEndConditions, driveSync
 } = engine;
 
 /**
@@ -84,87 +84,18 @@ function checkDecisionLegality(decision, poolBefore, playerName) {
  * client humain doit vérifier AVANT et ne jamais appeler ceci sur une
  * décision invalide).
  * Retourne { ok, log, decision, ...résultat de playTurn*WithProgression }.
+ *
+ * Simple pilote SYNCHRONE d'executeDecisionGen (voir driveSync,
+ * engine.js — même convention que TOUTES les paires Gen/non-Gen du
+ * moteur, ex. moveCar/moveCarGen) : sans `isHumanOwner` fourni,
+ * aucune pause n'est jamais déclenchée (resolveSlamGen retombe sur
+ * son défaut `() => false`), donc gen.next() unique suffit toujours.
+ * Ancienne duplication complète de la logique d'executeDecisionGen
+ * retirée ici (retour de Mayrik, revue de code) — comportement
+ * strictement identique, verrouillé par la suite de tests existante.
  */
 function executeDecision(progressionState, roundState, allCars, allChoppers, playerNames, currentPlayer, decision) {
-  const log = [];
-  const { car } = decision;
-  const isCoastTurn = decision.isCoast;
-  const command = decision.command;
-
-  drawSpecificDieFromPool(roundState.dicePool, currentPlayer, decision.dieValue);
-  log.push(`ASSIGN : dé ${decision.dieValue} → ${car.id}${isCoastTurn ? " (Coast)" : ""}`);
-
-  // Étape 2 (rewrite-plan.md) : le tir est calculé ICI, une seule
-  // fois, génériquement, après que la décision (donc la destination
-  // finale) est connue — quelle que soit la branche qui a produit
-  // cette décision (mouvement normal, Coast, Finish Line Rush,
-  // décision humaine...).
-  decision.shotTarget = ai.computeShotTargetForDecision(decision, allCars);
-
-  // La cible RÉELLEMENT utilisée pour le tir est recalculée par le
-  // moteur APRÈS résolution complète du mouvement (un Slam peut faire
-  // atterrir la voiture ailleurs qu'où prévu, via des dés tirés
-  // PENDANT la résolution) — voir engine.js, resolveShootStep.
-  const shootTargetFn = (currentCar, cars) => ai.chooseShootTarget(currentCar.col, currentCar.row, currentCar.owner, cars);
-
-  let effectiveDieValue = decision.dieValue;
-  const slamOptions = { decideReroll: ai.decideSlamRerollDefault };
-
-  if (command && !isCoastTurn) {
-    drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);
-    roundState.commandUsedThisRound[currentPlayer] = true;
-    log.push(`COMMAND : ${command.type} (dé ${command.dieValue})`);
-
-    if (command.type === "nitro") {
-      const r = resolveNitroCommand(command.dieValue);
-      if (r.ok) effectiveDieValue += r.bonus;
-    } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target, command.tokenValue);
-    } else if (command.type === "drift") {
-      const r = resolveDriftCommand(command.dieValue);
-      if (r.ok) slamOptions.driftAvailable = true;
-    } else if (command.type === "airstrike") {
-      let chopper = allChoppers.find((ch) => ch.owner === currentPlayer);
-      if (!chopper) { chopper = createChopper(currentPlayer); allChoppers.push(chopper); }
-      if (command.placement) {
-        resolveAirstrikeCommand(
-          engine.buildBoardFromProgressionState(progressionState), allCars, allChoppers, chopper, command.placement.col, command.placement.row,
-          { roundNumber: roundState.roundNumber, shootTarget: command.target, progressionState, allChoppers }
-        );
-      }
-    }
-  }
-
-  if (decision.isEntry) {
-    const result = playTurnAssignEnterWithProgression(
-      progressionState, car, effectiveDieValue, decision.destination.entryRow, decision.destination.path || [], allCars, allChoppers, playerNames,
-      { roundNumber: roundState.roundNumber, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
-    );
-    log.push(...(result.log || []));
-    if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log, decision };
-  }
-
-  if (isCoastTurn) {
-    const result = playTurnCoastWithProgression(progressionState, car, decision.destination.path || [], allCars, allChoppers, playerNames, { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn, ...slamOptions });
-    log.push(...(result.log || []));
-    if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log, decision };
-  }
-
-  if (car.status !== CAR_STATUS.OPERABLE) {
-    log.push(`${car.id} devenue inopérable pendant la Command → fin du tour.`);
-    log.push(...advanceTurn(roundState, allCars).log);
-    return { ok: true, log, car, decision };
-  }
-
-  const result = playTurnAssignMoveWithProgression(
-    progressionState, car, effectiveDieValue, decision.destination.path || [], allCars, allChoppers, playerNames,
-    { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
-  );
-  log.push(...(result.log || []));
-  if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-  return { ...result, log, decision };
+  return driveSync(executeDecisionGen(progressionState, roundState, allCars, allChoppers, playerNames, currentPlayer, decision));
 }
 
 /**
@@ -274,11 +205,11 @@ function* executeDecisionGen(progressionState, roundState, allCars, allChoppers,
 /**
  * ASSIGN + COMMAND — identique à la première moitié d'executeDecision,
  * mais sans rien exécuter du mouvement (qui devient interactif,
- * case par case, voir executeMoveStep/executeEntryStep plus bas).
+ * case par case, voir executeMoveStepGen/executeEntryStepGen plus bas).
  * `intent` = { car, dieValue, command, isCoast }. Retourne
  * { log, effectiveDieValue, slamOptions } — effectiveDieValue inclut
  * déjà le bonus Nitro éventuel ; slamOptions.driftAvailable est prêt à
- * être transmis à chaque appel d'executeMoveStep/executeEntryStep.
+ * être transmis à chaque appel d'executeMoveStepGen/executeEntryStepGen.
  */
 function executeAssignAndCommand(roundState, allCars, allChoppers, progressionState, currentPlayer, intent) {
   const log = [];
@@ -338,7 +269,7 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
  * executeAssignAndCommand ci-dessus) : résout le tir du chopper déjà
  * placé, séparément, pour que l'appelant puisse rendre l'écran entre
  * les deux étapes. `target` peut être null (joueur ayant décliné le
- * tir), auquel cas rien n'est résolu — même convention qu'executeShoot.
+ * tir), auquel cas rien n'est résolu — même convention qu'executeShootGen.
  */
 function executeAirstrikeShoot(progressionState, allCars, allChoppers, chopper, target, roundNumber) {
   const log = [];
@@ -357,25 +288,14 @@ function executeAirstrikeShoot(progressionState, allCars, allChoppers, chopper, 
  * la rangée d'entrée (voir human.getEntryRowOptions). Consomme le coût
  * de terrain de cette case, applique ses effets (hazard, slam éventuel
  * dès l'entrée), et rend le mouvement restant à l'appelant — la suite
- * du trajet (s'il en reste) redevient un pas normal via executeMoveStep.
- * Jamais de progression de tuile ni de tir possibles dès l'entrée
- * (impossible par construction / interdit au round 1, voir engine.js).
- */
-function executeEntryStep(progressionState, allCars, car, dieValue, entryRow, slamOptions = {}) {
-  const log = [];
-  log.push(`ASSIGN (entrée en jeu) : dé ${dieValue} assigné à ${car.id}`);
-  const board = buildBoardFromProgressionState(progressionState);
-  const result = moveCarEnteringBoard(board, car, dieValue, entryRow, [], allCars, slamOptions);
-  log.push(...result.log);
-  return { ...result, log };
-}
-
-/**
- * Variante GÉNÉRATRICE d'executeEntryStep — même usage que
- * executeDecisionGen (voir plus haut) : à utiliser quand l'appelant
- * veut pouvoir mettre le pas en pause pour un Slam (direct, Wreck, ou
- * en cascade via un dégât) impliquant une voiture dont
- * `options.isHumanOwner` renvoie vrai — typiquement, pendant le PROPRE
+ * du trajet (s'il en reste) redevient un pas normal via
+ * executeMoveStepGen. Jamais de progression de tuile ni de tir
+ * possibles dès l'entrée (impossible par construction / interdit au
+ * round 1, voir engine.js).
+ *
+ * `options.isHumanOwner` permet de mettre le pas en pause pour un Slam
+ * (direct, Wreck, ou en cascade via un dégât) impliquant une voiture
+ * dont cette fonction renvoie vrai — typiquement, pendant le PROPRE
  * tour du joueur, chaque fois que la voiture plus grande est la
  * sienne (`(owner) => owner === HUMAN`), remplaçant ainsi le hack de
  * prévisualisation (previewSlam/matchesPreviewedSlam côté
@@ -394,7 +314,7 @@ function* executeEntryStepGen(progressionState, allCars, car, dieValue, entryRow
 /**
  * Un seul pas de mouvement normal (voiture déjà sur le plateau) :
  * `direction` doit venir de human.getMovementStepOptions (donc déjà
- * filtrée légale). Réutilise moveCarWithProgression avec un chemin
+ * filtrée légale). Réutilise moveCarWithProgressionGen avec un chemin
  * d'UNE seule direction — la fonction elle-même gère intégralement les
  * effets de cette case (hazard, slam, sortie de tuile avec décalage
  * automatique, victoire éventuelle) avant de rendre la main : rien de
@@ -406,12 +326,6 @@ function* executeEntryStepGen(progressionState, allCars, car, dieValue, entryRow
  * détecte un arrêt forcé en comparant le `remaining` réellement obtenu
  * à ce que le coût de terrain normal aurait dû laisser.
  */
-function executeMoveStep(progressionState, allCars, allChoppers, playerNames, car, remaining, direction, slamOptions = {}) {
-  const result = moveCarWithProgression(progressionState, car, remaining, [direction], allCars, allChoppers, playerNames, slamOptions);
-  return result;
-}
-
-/** Variante GÉNÉRATRICE d'executeMoveStep — voir executeEntryStepGen. */
 function* executeMoveStepGen(progressionState, allCars, allChoppers, playerNames, car, remaining, direction, slamOptions = {}) {
   const result = yield* moveCarWithProgressionGen(progressionState, car, remaining, [direction], allCars, allChoppers, playerNames, slamOptions);
   return result;
@@ -420,36 +334,10 @@ function* executeMoveStepGen(progressionState, allCars, allChoppers, playerNames
 /**
  * Tir de fin de mouvement, avec cible LIBREMENT choisie par le joueur
  * (voir human.getShootTargetOptions) — `target` peut être null si le
- * joueur choisit de ne pas tirer, auquel cas rien n'est résolu.
- */
-function executeShoot(progressionState, allCars, allChoppers, car, target, roundNumber, options = {}) {
-  const log = [];
-  if (!target) {
-    log.push(`${car.id} choisit de ne pas tirer.`);
-    return { log, shootResult: null };
-  }
-  if (roundNumber === 1) {
-    log.push(`Tir impossible : les armes ne sont pas encore actives au 1er round (p.10)`);
-    return { log, shootResult: null };
-  }
-  if (car.status !== CAR_STATUS.OPERABLE) {
-    log.push(`${car.id} n'est plus opérable → tir impossible`);
-    return { log, shootResult: null };
-  }
-  const board = buildBoardFromProgressionState(progressionState);
-  const shootResult = resolveShoot(board, allCars, car, target, { roundNumber, progressionState, allChoppers, ...options });
-  log.push(...shootResult.log);
-  return { log, shootResult };
-}
-
-/**
- * Variante GÉNÉRATRICE d'executeShoot — voir executeEntryStepGen. Un
- * tir déclenchant un dégât Dazed en cascade peut, comme pendant le
- * tour de l'IA, percuter une voiture humaine plus grande — jusqu'ici
- * jamais géré du tout pour le PROPRE tir du joueur (aucune
- * `decideReroll`/`isHumanOwner` n'était transmise), corrigé au passage
- * en même temps que le nettoyage du hack Wreck (même catégorie de
- * gap que le correctif Coast, section 3bis du journal).
+ * joueur choisit de ne pas tirer, auquel cas rien n'est résolu. Un tir
+ * déclenchant un dégât Dazed en cascade peut percuter une voiture
+ * humaine plus grande — géré via `options.isHumanOwner`, comme pour
+ * le tour de l'IA.
  */
 function* executeShootGen(progressionState, allCars, allChoppers, car, target, roundNumber, options = {}) {
   const log = [];
@@ -522,11 +410,8 @@ module.exports = {
   driveInteractive,
   executeAssignAndCommand,
   executeAirstrikeShoot,
-  executeEntryStep,
   executeEntryStepGen,
-  executeMoveStep,
   executeMoveStepGen,
-  executeShoot,
   executeShootGen,
   executeEndOfTurn
 };

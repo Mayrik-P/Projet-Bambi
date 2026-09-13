@@ -20,21 +20,20 @@
  * inopérables), Airstrike (n'importe quel dé, case vide au choix) —
  * une seule Command par round, jamais sur un tour de Coast.
  *
- * Réutilise SANS LES DUPLIQUER : computeReachableDestinations /
- * computeReachableEntryDestinations / chooseShootTarget
- * (ai-decision.js — pure géométrie/règles de terrain, aucune
- * politique) et checkDecisionLegality / executeDecision
- * (turn-executor.js — mêmes règles mécaniques que celles qui
- * valident déjà les décisions de l'IA en self-play).
+ * Le mouvement se joue case par case (voir Section 2ter) — jamais une
+ * destination choisie d'un coup — donc ce module ne dépend QUE
+ * d'engine.js, jamais d'ai-decision.js (retiré ici lors d'une revue de
+ * code : l'ancienne Section 2, qui choisissait une destination
+ * complète via computeReachableDestinations/computeReachableEntryDestinations,
+ * n'était plus appelée par aucun code réel depuis ce passage au
+ * mouvement pas à pas).
  */
 
 "use strict";
 
 const engine = require("./engine.js");
-const ai = require("./ai-decision.js");
 
 const { CAR_STATUS, TERRAIN, MOVE_COST, getSpace, getCarAt, getFrontArc } = engine;
-const { computeReachableDestinations, computeReachableEntryDestinations } = ai;
 
 // ===================================================================
 // SECTION 1 — CONTEXTE DE TOUR : que peut faire ce joueur maintenant ?
@@ -91,72 +90,15 @@ function getTurnContext(progressionState, board, allCars, allChoppers, dicePool,
 }
 
 // ===================================================================
-// SECTION 2 — TRAJECTOIRES ATTEIGNABLES POUR UN CHOIX (voiture + dé)
-// ===================================================================
-/**
- * Renvoie toutes les cases atteignables (avec leurs métadonnées :
- * terminalReason, dangerousCellsCrossed, slamTarget, path...) pour la
- * voiture et le dé choisis par le joueur — jamais UNE seule "meilleure"
- * destination comme le ferait findBestTrajectory côté IA. Au
- * joueur de choisir librement parmi les options réellement légales.
- * `driftAvailable` doit être `true` seulement si le joueur a choisi de
- * jouer la Command Drift ce tour (voir Section 3).
- */
-function getReachableOptions(board, car, dieValue, allCars, allChoppers, driftAvailable = false) {
-  if (car.col === null) {
-    return computeReachableEntryDestinations(board, dieValue, allCars, allChoppers, driftAvailable);
-  }
-  return computeReachableDestinations(board, car, dieValue, allCars, allChoppers, driftAvailable);
-}
-
-// ===================================================================
-// SECTION 2bis — BONUS ROAD (optionnel, montant fixe imposé — p.7)
-// ===================================================================
-// CORRECTIF (Mayrik, en testant le prototype) : ce bonus n'était
-// simplement jamais proposé au joueur humain — la couche humaine
-// n'avait aucune fonction pour ça. Il s'agit d'une mécanique à part
-// du mouvement principal (voir engine.js, playTurnAssignMoveWithProgression :
-// une seconde application de moveCarWithProgression, APRÈS le
-// mouvement de base, avec le dé Road comme distance) — jamais une
-// simple addition à la distance de départ (contrairement au Nitro).
-/**
- * "This bonus is optional, but if you use it, you must use the full
- * amount." (p.7) — éligible seulement si le trajet choisi par le
- * joueur est resté ENTIÈREMENT sur route, sans case dangereuse
- * traversée, et qu'un dé Road a été tiré ce round.
- */
-function isRoadBonusEligible(destination, roadDieValue) {
-  return roadDieValue > 0 && destination.terminalReason === "normal" && destination.allRoad === true && destination.dangerousCellsCrossed === 0;
-}
-
-/**
- * Renvoie les destinations atteignables pour l'extension de bonus
- * Road (distance = roadDieValue PILE, jamais moins — "you must use
- * the full amount") depuis la destination de base déjà choisie.
- * "This extra movement does not need to be on the road" (p.7) — donc
- * aucun filtre de terrain ici, juste écarter les fins dangereuses,
- * comme pour le mouvement normal. Renvoie [] si non éligible (rien à
- * proposer) — à l'appelant de vérifier isRoadBonusEligible avant
- * d'offrir le choix "oui/non" au joueur.
- */
-function getRoadBonusOptions(board, car, destination, roadDieValue, allCars, allChoppers, driftAvailable = false) {
-  if (!isRoadBonusEligible(destination, roadDieValue)) return [];
-  const extCar = { ...car, col: destination.col, row: destination.row };
-  return computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable)
-    .filter((e) => (e.terminalReason === "normal" || e.terminalReason === "exits-front") && e.dangerousCellsCrossed === 0);
-}
-
-// ===================================================================
-// SECTION 2ter — MOUVEMENT CASE PAR CASE (retour d'usage de Mayrik,
-// Point 3 : remplace complètement getReachableOptions/Section 2 pour
-// le mouvement d'un joueur humain — la destination n'est plus choisie
-// d'un coup, le joueur avance une case à la fois dans l'arc avant
-// COURANT de sa voiture, les effets (hazard, slam, sortie de tuile)
-// s'appliquant réellement avant qu'on lui propose la case suivante).
-// Le même principe s'applique désormais au Bonus Road (Section 2bis) :
-// à l'appelant de reboucler sur cette fonction avec `remaining` =
-// roadDieValue au départ de l'extension, exactement comme pour le
-// mouvement principal.
+// SECTION 2 — MOUVEMENT CASE PAR CASE (retour d'usage de Mayrik,
+// Point 3) : la destination n'est jamais choisie d'un coup, le joueur
+// avance une case à la fois dans l'arc avant COURANT de sa voiture,
+// les effets (hazard, slam, sortie de tuile) s'appliquant réellement
+// avant qu'on lui propose la case suivante. Le même principe
+// s'applique au Bonus Road (p.7, montant fixe imposé) : à l'appelant
+// de reboucler sur cette fonction avec `remaining` = roadDieValue au
+// départ de l'extension, exactement comme pour le mouvement
+// principal.
 // ===================================================================
 /**
  * Liste les cases de l'arc avant COURANT que le joueur peut
@@ -253,7 +195,7 @@ function getEntryRowOptions(board, dieValue, allCars) {
 }
 
 // ===================================================================
-// SECTION 2quater — CIBLE DE TIR LIBRE (remplace le choix automatique
+// SECTION 2bis — CIBLE DE TIR LIBRE (remplace le choix automatique
 // ai.chooseShootTarget pour un joueur humain — Point 3, retour de
 // Mayrik : le joueur doit pouvoir choisir sa cible lui-même, et
 // choisir de NE PAS tirer).
@@ -279,7 +221,7 @@ function getShootTargetOptions(shooter, allCars) {
 }
 
 // ===================================================================
-// SECTION 2quinquies — POINTS DE MOUVEMENT PERDUS (retour de Mayrik,
+// SECTION 2ter — POINTS DE MOUVEMENT PERDUS (retour de Mayrik,
 // Point 3 : "reste des mouvements perdus à cause de [raison]" avec un
 // bouton Continuer, plutôt qu'un enchaînement automatique).
 // ===================================================================
@@ -394,57 +336,15 @@ function listValidAirstrikePlacements(board, allCars, allChoppers, chopper) {
   return placements;
 }
 
-// ===================================================================
-// SECTION 5 — CONSTRUCTION DE LA DÉCISION FINALE
-// ===================================================================
-/**
- * Assemble la décision du joueur dans EXACTEMENT la même forme que
- * celle produite par ai.decideAssignAndCommand — c'est ce qui permet
- * à turn-executor.js de l'exécuter sans aucune distinction entre une
- * décision humaine et une décision IA.
- *   - car, dieValue : la voiture et le dé de mouvement choisis.
- *   - command : null, ou { type, dieValue, target? } — pour
- *     "airstrike", target ET placement doivent être fournis (voir
- *     Section 4 pour les placements valides ; target est la voiture
- *     adverse visée, choisie librement par le joueur parmi les
- *     opérables, ou null si aucune n'est atteignable/souhaitée).
- *   - destination : UNE des options renvoyées par getReachableOptions
- *     (Section 2), choisie par le joueur — TOUJOURS la destination de
- *     base, jamais le point d'arrivée après bonus Road (voir
- *     roadBonusPath ci-dessous : le moteur rejoue cette extension
- *     comme un second mouvement séparé, après le premier).
- *   - isCoast : true si ce tour est un Coast (voir Section 1).
- *   - roadBonusPath : le `.path` d'UNE des options renvoyées par
- *     getRoadBonusOptions (Section 2bis), si le joueur a choisi
- *     d'utiliser le bonus Road ce tour — sinon null/omis.
- */
-function buildHumanDecision({ car, dieValue, command, destination, isCoast = false, roadBonusPath = null }) {
-  const isEntry = car.col === null && !isCoast;
-  return {
-    car,
-    dieValue,
-    command: command || null,
-    destination,
-    isEntry,
-    isCoast,
-    slam: destination.terminalReason === "slam",
-    roadBonusPath: roadBonusPath || null
-  };
-}
-
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     getTurnContext,
-    getReachableOptions,
-    isRoadBonusEligible,
-    getRoadBonusOptions,
     getMovementStepOptions,
     getEntryRowOptions,
     computePointsLost,
     getShootTargetOptions,
     getAvailableCommands,
     isValidAirstrikePlacement,
-    listValidAirstrikePlacements,
-    buildHumanDecision
+    listValidAirstrikePlacements
   };
 }

@@ -15,8 +15,9 @@ const engine = require("./engine.js");
 const human = require("./human-decision.js");
 const {
   checkDecisionLegality, executeDecision,
-  executeAssignAndCommand, executeEntryStep, executeMoveStep, executeShoot, executeEndOfTurn
+  executeAssignAndCommand, executeEntryStepGen, executeMoveStepGen, executeShootGen, executeEndOfTurn
 } = require("./turn-executor.js");
+const { driveSync } = engine;
 
 const {
   TERRAIN, CAR_SIZE, CAR_STATUS,
@@ -118,60 +119,6 @@ function freshProgressionSetup(playerNames, dicePool) {
 }
 
 // -----------------------------------------------------------------
-// SECTION 2 — getReachableOptions (délègue fidèlement à
-// computeReachableDestinations / computeReachableEntryDestinations,
-// AUCUNE présélection stratégique)
-// -----------------------------------------------------------------
-{
-  const board = emptyBoard();
-  const carOnBoard = createCar("A", CAR_SIZE.MEDIUM, 5, 2);
-  const optionsOnBoard = human.getReachableOptions(board, carOnBoard, 3, [carOnBoard], []);
-  assert(optionsOnBoard.length > 1, "getReachableOptions : plusieurs cases atteignables sur plateau ouvert (pas UNE seule présélectionnée)");
-  assert(optionsOnBoard.every((o) => typeof o.terminalReason === "string"), "getReachableOptions : chaque option porte ses métadonnées (terminalReason...)");
-
-  const carOffBoard = createCarOffBoard("A", CAR_SIZE.SMALL);
-  const optionsEntry = human.getReachableOptions(board, carOffBoard, 3, [carOffBoard], []);
-  assert(optionsEntry.every((o) => "entryRow" in o), "getReachableOptions : les options d'entrée portent bien entryRow");
-}
-
-// -----------------------------------------------------------------
-// SECTION 2bis — bonus Road (CORRECTIF : totalement absent de la
-// première version — jamais proposé au joueur humain)
-// -----------------------------------------------------------------
-{
-  const board = emptyBoard(); // tout ROAD par défaut
-  const car = createCar("A", CAR_SIZE.MEDIUM, 5, 2);
-  const destAllRoad = { col: 8, row: 2, terminalReason: "normal", allRoad: true, dangerousCellsCrossed: 0, path: ["front", "front", "front"] };
-
-  assert(human.isRoadBonusEligible(destAllRoad, 3) === true, "isRoadBonusEligible : éligible si trajet 100% route, sans case dangereuse, et dé Road > 0");
-  assert(human.isRoadBonusEligible(destAllRoad, 0) === false, "isRoadBonusEligible : jamais éligible si aucun dé Road n'a été tiré ce round (roadDieValue=0)");
-
-  const destWithDanger = { ...destAllRoad, dangerousCellsCrossed: 1 };
-  assert(human.isRoadBonusEligible(destWithDanger, 3) === false, "isRoadBonusEligible : inéligible si une case dangereuse a été traversée");
-
-  const destOffRoad = { ...destAllRoad, allRoad: false };
-  assert(human.isRoadBonusEligible(destOffRoad, 3) === false, "isRoadBonusEligible : inéligible si le trajet n'est pas resté 100% sur route");
-
-  const destSlam = { ...destAllRoad, terminalReason: "slam" };
-  assert(human.isRoadBonusEligible(destSlam, 3) === false, "isRoadBonusEligible : inéligible si le mouvement de base s'est terminé par un Slam");
-
-  const options = human.getRoadBonusOptions(board, car, destAllRoad, 3, [car], []);
-  assert(options.length > 0, "getRoadBonusOptions : propose des destinations quand éligible");
-  assert(options.every((o) => o.stepsUsed === 3), "getRoadBonusOptions : l'extension avance bien d'exactement le dé Road (\"must use the full amount\", p.7) — jamais moins");
-
-  const noOptions = human.getRoadBonusOptions(board, car, destOffRoad, 3, [car], []);
-  assert(noOptions.length === 0, "getRoadBonusOptions : liste vide si non éligible (pas d'exception, pas de crash)");
-
-  // L'extension "n'a pas besoin d'être sur route" (p.7) — un terrain
-  // varié après la destination de base reste valide.
-  const boardMixed = emptyBoard();
-  boardMixed.grid[2][8].terrain = TERRAIN.MUD;
-  boardMixed.grid[2][9].terrain = TERRAIN.OFF_ROAD;
-  const mixedOptions = human.getRoadBonusOptions(boardMixed, car, destAllRoad, 3, [car], []);
-  assert(mixedOptions.length > 0, "getRoadBonusOptions : l'extension n'est PAS tenue de rester sur route elle-même");
-}
-
-// -----------------------------------------------------------------
 // SECTION 3 — getAvailableCommands (règles du livret UNIQUEMENT —
 // AUCUNE condition de position façon IA : tuile Rear, adversaire à
 // telle distance... n'existent pas ici)
@@ -259,153 +206,31 @@ function freshProgressionSetup(playerNames, dicePool) {
 }
 
 // -----------------------------------------------------------------
-// SECTION 5 — buildHumanDecision (même forme que ai.decideAssignAndCommand)
+// SECTION 5 — checkDecisionLegality (turn-executor.js) : seule
+// couverture dédiée de ces contrôles de légalité mécanique — le
+// mouvement/Repair/bonus Road eux-mêmes sont déjà largement couverts
+// au niveau moteur par test-engine.js. `decision` construite ici
+// directement en objet littéral (buildHumanDecision, qui ne faisait
+// que recopier ces mêmes champs, a été retiré de human-decision.js —
+// code mort depuis le passage au mouvement pas à pas).
 // -----------------------------------------------------------------
-{
-  const car = createCar("A", CAR_SIZE.MEDIUM, 5, 2);
-  const destination = { col: 8, row: 2, terminalReason: "normal", path: ["front", "front", "front"] };
-  const d = human.buildHumanDecision({ car, dieValue: 3, command: null, destination });
-  assert(d.car === car && d.dieValue === 3 && d.command === null, "buildHumanDecision : champs de base correctement reportés");
-  assert(d.isEntry === false && d.isCoast === false, "buildHumanDecision : voiture déjà sur le plateau -> ni entrée ni Coast");
-  assert(d.slam === false, "buildHumanDecision : slam=false pour une destination 'normal'");
-
-  const carOffBoard = createCarOffBoard("A", CAR_SIZE.SMALL);
-  const dEntry = human.buildHumanDecision({ car: carOffBoard, dieValue: 4, command: null, destination: { col: 2, row: 3, terminalReason: "normal", entryRow: 3, path: [] } });
-  assert(dEntry.isEntry === true, "buildHumanDecision : voiture hors plateau -> isEntry=true");
-
-  const dSlam = human.buildHumanDecision({ car, dieValue: 2, command: null, destination: { col: 6, row: 2, terminalReason: "slam", slamTarget: {}, path: ["front"] } });
-  assert(dSlam.slam === true, "buildHumanDecision : slam=true si terminalReason='slam'");
-
-  const dCoast = human.buildHumanDecision({ car, dieValue: 1, command: null, destination: { col: 6, row: 2, terminalReason: "normal", path: ["front"] }, isCoast: true });
-  assert(dCoast.isCoast === true && dCoast.isEntry === false, "buildHumanDecision : isCoast respecté, jamais isEntry en même temps");
-}
-
-// -----------------------------------------------------------------
-// SECTION 6 — Intégration bout en bout : une décision humaine
-// s'exécute via le MÊME moteur que l'IA (turn-executor.js), sans
-// AUCUNE branche spécifique "humain" côté engine.js.
-// -----------------------------------------------------------------
-{
-  const { progressionState, allCars, allChoppers, roundState } = freshProgressionSetup(["Mayrik", "IA-Adverse"], { Mayrik: [4, 2, 6, 1], "IA-Adverse": [1, 1, 1, 1] });
-  roundState.roundNumber = 2;
-  roundState.roadDie = 1;
-  const board = buildBoardFromProgressionState(progressionState);
-
-  const ctx = human.getTurnContext(progressionState, board, allCars, allChoppers, roundState.dicePool, "Mayrik", roundState);
-  const car = ctx.activatableCars.find((c) => c.size === "small");
-  const dieValue = 4;
-  const options = human.getReachableOptions(board, car, dieValue, allCars, allChoppers);
-  const destination = options.find((o) => o.terminalReason === "normal") || options[0];
-  const decision = human.buildHumanDecision({ car, dieValue, command: null, destination });
-
-  const legality = checkDecisionLegality(decision, roundState.dicePool.Mayrik, "Mayrik");
-  assert(legality.allOk === true, "Intégration : une décision humaine correctement construite est jugée légale");
-
-  const result = executeDecision(progressionState, roundState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], "Mayrik", decision);
-  assert(result.ok === true, "Intégration : executeDecision exécute avec succès une décision humaine");
-  assert(car.col === destination.col && car.row === destination.row, "Intégration : la voiture atterrit bien là où le joueur l'a choisi");
-  assert(!roundState.dicePool.Mayrik.includes(4) || roundState.dicePool.Mayrik.filter((v) => v === 4).length < 1, "Intégration : le dé utilisé est bien retiré du pool");
-}
-{
-  // Repair : cible choisie LIBREMENT par le joueur (pas la logique de
-  // ciblage stratégique de l'IA), exécutée via le même moteur.
-  const { progressionState, allCars, allChoppers, roundState } = freshProgressionSetup(["Mayrik", "IA-Adverse"], { Mayrik: [6, 3, 2, 4], "IA-Adverse": [1, 1, 1, 1] });
-  roundState.roundNumber = 2;
-  roundState.roadDie = 1;
-  const board = buildBoardFromProgressionState(progressionState);
-
-  const myLarge = allCars.find((c) => c.owner === "Mayrik" && c.size === "large");
-  myLarge.col = 5; myLarge.row = 2; myLarge.status = CAR_STATUS.INOPERABLE; myLarge.damageTokens = ["skid"]; myLarge.movedThisRound = true;
-  const myMedium = allCars.find((c) => c.owner === "Mayrik" && c.size === "medium");
-  myMedium.col = 15; myMedium.row = 2; myMedium.status = CAR_STATUS.INOPERABLE; myMedium.damageTokens = ["skid"]; myMedium.movedThisRound = true;
-
-  const ctx = human.getTurnContext(progressionState, board, allCars, allChoppers, roundState.dicePool, "Mayrik", roundState);
-  const car = ctx.activatableCars[0]; // la seule voiture encore opérable et pas activée (small)
-  const dieValue = 4;
-  const remaining = ctx.pool.filter((v) => v !== dieValue);
-  const myInoperable = allCars.filter((c) => c.owner === "Mayrik" && c.status === CAR_STATUS.INOPERABLE);
-  const commands = human.getAvailableCommands(remaining, myInoperable);
-  const repairCmd = commands.find((c) => c.type === "repair");
-  assert(repairCmd.eligibleTargets.length === 2, "Intégration Repair : les deux voitures inopérables sont proposées comme cibles");
-
-  // Le joueur choisit délibérément celle qui est LA PLUS EN ARRIÈRE
-  // (myLarge, col 5) — l'inverse de ce que l'IA choisirait dans le
-  // même contexte (l'IA préfère celle en tête, myMedium, col 15).
-  const chosenTarget = repairCmd.eligibleTargets.find((c) => c === myLarge);
-  const options = human.getReachableOptions(board, car, dieValue, allCars, allChoppers);
-  const destination = options.find((o) => o.terminalReason === "normal") || options[0];
-  const decision = human.buildHumanDecision({ car, dieValue, command: { type: "repair", dieValue: 6, target: chosenTarget }, destination });
-
-  const legality = checkDecisionLegality(decision, roundState.dicePool.Mayrik, "Mayrik");
-  assert(legality.allOk === true, "Intégration Repair : décision légale (dé 6 bien dans le pool, distinct du dé de mouvement)");
-
-  const result = executeDecision(progressionState, roundState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], "Mayrik", decision);
-  assert(result.ok === true, "Intégration Repair : exécution réussie");
-  assert(myLarge.status === CAR_STATUS.OPERABLE, "Intégration Repair : la voiture choisie par le joueur (et PAS celle que l'IA aurait choisie) est bien réparée");
-  assert(myMedium.status === CAR_STATUS.INOPERABLE, "Intégration Repair : l'autre voiture inopérable reste inchangée");
-  assert(roundState.commandUsedThisRound.Mayrik === true, "Intégration Repair : la Command du round est bien marquée comme utilisée");
-}
-{
-  // Intégration Nitro + bonus Road ensemble (les deux corrections
-  // trouvées par Mayrik en testant le prototype réel) : dé mouvement
-  // 5 + Nitro 3 = 8 cases obligatoires, PUIS bonus Road (+2, trajet
-  // resté 100% route) proposé et pris.
-  const progressionState = createTileProgressionState(createTestTile(24, 6), createTestTile(24, 6), createTestTile(24, 6));
-  const board = buildBoardFromProgressionState(progressionState);
-  const car = createCar("Mayrik", CAR_SIZE.MEDIUM, 5, 2);
-  // Un second joueur (même hors-jeu du point de vue de ce test) est
-  // nécessaire : sinon "dernier joueur encore en jeu" se déclenche à
-  // tort dès ce tour et coupe l'exécution avant le bonus Road.
-  const dummyOpponent = createCar("IA-Adverse", CAR_SIZE.SMALL, 0, 0);
-  const allCars = [car, dummyOpponent];
-  const allChoppers = [];
-  const roundState = createRoundState(["Mayrik", "IA-Adverse"], { Mayrik: [5, 3, 2, 1], "IA-Adverse": [1, 1, 1, 1] });
-  roundState.roundNumber = 2;
-  roundState.roadDie = 2;
-
-  const dieValue = 5, nitroValue = 3;
-  const withNitro = human.getReachableOptions(board, car, dieValue + nitroValue, allCars, allChoppers);
-  assert(withNitro.some((o) => o.stepsUsed === 8), "Intégration Nitro : les options atteignables reflètent bien dé+Nitro cumulés (8 cases), pas le dé seul");
-  const destination = withNitro.find((o) => o.terminalReason === "normal" && o.allRoad === true && o.dangerousCellsCrossed === 0);
-
-  assert(human.isRoadBonusEligible(destination, roundState.roadDie) === true, "Intégration Road : la destination Nitro (100% route) reste éligible au bonus Road");
-  const bonusOptions = human.getRoadBonusOptions(board, car, destination, roundState.roadDie, allCars, allChoppers);
-  const bonusChoice = bonusOptions[0];
-
-  const decision = human.buildHumanDecision({ car, dieValue, command: { type: "nitro", dieValue: nitroValue }, destination, roadBonusPath: bonusChoice.path });
-  const legality = checkDecisionLegality(decision, roundState.dicePool.Mayrik, "Mayrik");
-  assert(legality.allOk === true, "Intégration Nitro+Road : décision légale");
-
-  const result = executeDecision(progressionState, roundState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], "Mayrik", decision);
-  assert(result.ok === true, "Intégration Nitro+Road : exécution réussie");
-  assert(car.col === bonusChoice.col && car.row === bonusChoice.row, "Intégration Nitro+Road : la voiture atterrit bien sur la case d'arrivée du bonus Road (au-delà des 8 cases du mouvement Nitro)");
-  assert(car.col > destination.col, "Intégration Nitro+Road : la voiture a bien progressé AU-DELÀ de la destination Nitro grâce au bonus Road");
-}
 {
   // Une décision illégale (dé pas dans le pool) doit être détectée
   // AVANT exécution — c'est tout l'intérêt de checkDecisionLegality
   // pour un client humain (contrairement au harnais self-play qui
   // logue et exécute quand même pour détecter les bugs de l'IA).
-  const { progressionState, allCars, allChoppers, roundState } = freshProgressionSetup(["Mayrik", "IA-Adverse"], { Mayrik: [4, 2, 6, 1], "IA-Adverse": [1, 1, 1, 1] });
-  const board = buildBoardFromProgressionState(progressionState);
-  const ctx = human.getTurnContext(progressionState, board, allCars, allChoppers, roundState.dicePool, "Mayrik", roundState);
-  const car = ctx.activatableCars[0];
-  const options = human.getReachableOptions(board, car, 5, allCars, allChoppers); // 5 n'est PAS dans le pool [4,2,6,1]
-  const destination = options[0];
-  const decision = human.buildHumanDecision({ car, dieValue: 5, command: null, destination });
+  const { allCars, roundState } = freshProgressionSetup(["Mayrik", "IA-Adverse"], { Mayrik: [4, 2, 6, 1], "IA-Adverse": [1, 1, 1, 1] });
+  const car = allCars.find((c) => c.owner === "Mayrik" && c.size === CAR_SIZE.SMALL);
+  const decision = { car, dieValue: 5, command: null, destination: { col: 0, row: 0, terminalReason: "normal" }, isEntry: true, isCoast: false, slam: false }; // 5 n'est PAS dans le pool [4,2,6,1]
   const legality = checkDecisionLegality(decision, roundState.dicePool.Mayrik, "Mayrik");
   assert(legality.allOk === false && legality.dieInPool === false, "checkDecisionLegality : détecte un dé de mouvement qui n'est pas dans le pool, avant toute exécution");
 }
 {
   // Command avec le MÊME dé physique que le mouvement, alors qu'un
   // seul exemplaire de cette valeur existe dans le pool -> illégal.
-  const { progressionState, allCars, allChoppers, roundState } = freshProgressionSetup(["Mayrik", "IA-Adverse"], { Mayrik: [4, 2, 6, 1], "IA-Adverse": [1, 1, 1, 1] });
-  const board = buildBoardFromProgressionState(progressionState);
-  const ctx = human.getTurnContext(progressionState, board, allCars, allChoppers, roundState.dicePool, "Mayrik", roundState);
-  const car = ctx.activatableCars[0];
-  const options = human.getReachableOptions(board, car, 2, allCars, allChoppers);
-  const destination = options[0];
-  const decision = human.buildHumanDecision({ car, dieValue: 2, command: { type: "nitro", dieValue: 2 }, destination });
+  const { allCars, roundState } = freshProgressionSetup(["Mayrik", "IA-Adverse"], { Mayrik: [4, 2, 6, 1], "IA-Adverse": [1, 1, 1, 1] });
+  const car = allCars.find((c) => c.owner === "Mayrik" && c.size === CAR_SIZE.SMALL);
+  const decision = { car, dieValue: 2, command: { type: "nitro", dieValue: 2 }, destination: { col: 0, row: 0, terminalReason: "normal" }, isEntry: true, isCoast: false, slam: false };
   const legality = checkDecisionLegality(decision, roundState.dicePool.Mayrik, "Mayrik");
   assert(legality.allOk === false && legality.commandDieDistinct === false, "checkDecisionLegality : refuse d'utiliser deux fois le même dé physique (une seule occurrence de 2 dans le pool)");
 }
@@ -560,10 +385,10 @@ function freshProgressionSetup(playerNames, dicePool) {
   const board = buildBoardFromProgressionState(progressionState);
   const entryOptions = human.getEntryRowOptions(board, 4, allCars);
   const chosen = entryOptions[0];
-  const result = executeEntryStep(progressionState, allCars, car, 4, chosen.entryRow, {});
-  assert(result.ok === true, "executeEntryStep : entrée réussie");
-  assert(car.col === 0 && car.row === chosen.entryRow, "executeEntryStep : la voiture est bien positionnée sur la rangée d'entrée choisie");
-  assert(result.remaining === 4 - chosen.cost, "executeEntryStep : le mouvement restant reflète le coût de la case d'entrée");
+  const result = driveSync(executeEntryStepGen(progressionState, allCars, car, 4, chosen.entryRow, {}));
+  assert(result.ok === true, "executeEntryStepGen : entrée réussie");
+  assert(car.col === 0 && car.row === chosen.entryRow, "executeEntryStepGen : la voiture est bien positionnée sur la rangée d'entrée choisie");
+  assert(result.remaining === 4 - chosen.cost, "executeEntryStepGen : le mouvement restant reflète le coût de la case d'entrée");
 }
 {
   // Un pas de mouvement normal : le mouvement restant diminue
@@ -579,9 +404,9 @@ function freshProgressionSetup(playerNames, dicePool) {
   const board = buildBoardFromProgressionState(progressionState);
   const step1Options = human.getMovementStepOptions(board, car, 3, allCars);
   const step1 = step1Options.find((o) => o.outcome === "normal");
-  const result1 = executeMoveStep(progressionState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], car, 3, step1.direction, {});
-  assert(result1.ok === true, "executeMoveStep : un pas normal s'exécute normalement");
-  assert(result1.moveResult.remaining === 3 - step1.cost, "executeMoveStep : le mouvement restant après un seul pas correspond exactement au coût de ce pas");
+  const result1 = driveSync(executeMoveStepGen(progressionState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], car, 3, step1.direction, {}));
+  assert(result1.ok === true, "executeMoveStepGen : un pas normal s'exécute normalement");
+  assert(result1.moveResult.remaining === 3 - step1.cost, "executeMoveStepGen : le mouvement restant après un seul pas correspond exactement au coût de ce pas");
   assert(human.computePointsLost(3, step1, result1.moveResult.remaining) === 0, "computePointsLost : aucune perte sur un pas normal");
 }
 {
@@ -600,8 +425,8 @@ function freshProgressionSetup(playerNames, dicePool) {
   opponent.col = frontCell.col; opponent.row = frontCell.row;
   const options = human.getMovementStepOptions(board, car, 4, allCars);
   const slamOption = options.find((o) => o.outcome === "slam");
-  const result = executeMoveStep(progressionState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], car, 4, slamOption.direction, { forcedDice: { slam: "top", direction: "front" } });
-  assert(result.moveResult.remaining === 0, "executeMoveStep : plus aucun point de mouvement restant après un Slam");
+  const result = driveSync(executeMoveStepGen(progressionState, allCars, allChoppers, ["Mayrik", "IA-Adverse"], car, 4, slamOption.direction, { forcedDice: { slam: "top", direction: "front" } }));
+  assert(result.moveResult.remaining === 0, "executeMoveStepGen : plus aucun point de mouvement restant après un Slam");
   const lost = human.computePointsLost(4, slamOption, result.moveResult.remaining);
   assert(lost === 4 - slamOption.cost, "computePointsLost : détecte correctement les points perdus à cause du Slam (coût de la case payé, le reste forcé à 0)");
 }
@@ -633,14 +458,14 @@ function freshProgressionSetup(playerNames, dicePool) {
   const frontArc = engine.getFrontArc(car);
   opponent.col = frontArc[1].col; opponent.row = frontArc[1].row;
 
-  const noShot = executeShoot(progressionState, allCars, allChoppers, car, null, 2);
-  assert(noShot.shootResult === null, "executeShoot : cible null -> aucun tir résolu (le joueur choisit de ne pas tirer)");
+  const noShot = driveSync(executeShootGen(progressionState, allCars, allChoppers, car, null, 2));
+  assert(noShot.shootResult === null, "executeShootGen : cible null -> aucun tir résolu (le joueur choisit de ne pas tirer)");
 
-  const round1Shot = executeShoot(progressionState, allCars, allChoppers, car, opponent, 1);
-  assert(round1Shot.shootResult === null, "executeShoot : tir toujours refusé au round 1, même avec une cible valide");
+  const round1Shot = driveSync(executeShootGen(progressionState, allCars, allChoppers, car, opponent, 1));
+  assert(round1Shot.shootResult === null, "executeShootGen : tir toujours refusé au round 1, même avec une cible valide");
 
-  const realShot = executeShoot(progressionState, allCars, allChoppers, car, opponent, 2, { forcedDice: { shootingDie: "any" } });
-  assert(realShot.shootResult.hit === true, "executeShoot : cible choisie librement par le joueur, tir résolu normalement");
+  const realShot = driveSync(executeShootGen(progressionState, allCars, allChoppers, car, opponent, 2, { forcedDice: { shootingDie: "any" } }));
+  assert(realShot.shootResult.hit === true, "executeShootGen : cible choisie librement par le joueur, tir résolu normalement");
 }
 {
   // Fin de tour : marque la voiture comme activée, avance le tour.
