@@ -162,6 +162,16 @@ win = dom.window;
 win.newGame();
 win.render();
 const viewport9 = dom.window.document.getElementById("dashboards-viewport");
+
+// dblclick testé EN PREMIER, avant tout tap tactile (qui poserait le
+// drapeau de garde anti-double-déclenchement — voir Test 9bis plus
+// bas — et fausserait ce test-ci s'il suivait immédiatement).
+console.log("Échelle de départ = 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
+viewport9.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
+console.log("dblclick (souris, ordinateur) bascule bien vers x4 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
+viewport9.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
+console.log("...et un 2e dblclick redescend bien à l'échelle 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
+
 win.eval("dashboardsPanzoom.zoom(2, { animate: false })");
 console.log("Zoom bien actif avant le test (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
 
@@ -181,17 +191,40 @@ dragFromTo(win, viewport9, 100, 100, 250, 100); // glissé, pas un tap
 dragFromTo(win, viewport9, 260, 100, 105, 102); // 2e glissé revenant près du point de départ initial
 console.log("Un glissé (panoramique) n'est jamais compté comme un tap, même répété (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
 
-viewport9.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
-console.log("dblclick (souris, ordinateur) réinitialise aussi le zoom (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
-
 // Bascule (retour de Mayrik) : à l'échelle 1 (plein écran), un
 // double-tap doit ZOOMER (x4), pas re-réinitialiser sur place.
-tapAt(win, viewport9, 200, 150);
-tapAt(win, viewport9, 205, 152);
+// Repart d'une fenêtre fraîche : le test précédent a laissé le
+// drapeau de garde anti-double-déclenchement actif (voir Test 9bis),
+// qui ignorerait à tort un dblclick mais n'affecte pas les taps
+// tactiles eux-mêmes (le drapeau n'est vérifié QUE côté dblclick) —
+// fenêtre fraîche uniquement par clarté, pas par nécessité stricte ici.
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+const viewport9c = dom.window.document.getElementById("dashboards-viewport");
+tapAt(win, viewport9c, 200, 150);
+tapAt(win, viewport9c, 205, 152);
 console.log("Depuis l'échelle 1, un double-tap zoome bien à x4 (bascule, pas un simple reset) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
-tapAt(win, viewport9, 200, 150);
-tapAt(win, viewport9, 205, 152);
+tapAt(win, viewport9c, 200, 150);
+tapAt(win, viewport9c, 205, 152);
 console.log("Un 2e double-tap (maintenant zoomé) redescend bien à l'échelle 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
+
+section("Test 9bis — BUG CORRIGÉ : un double-tap tactile ne déclenche pas AUSSI le dblclick synthétique du navigateur (double bascule qui s'annule)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+const viewport9b = dom.window.document.getElementById("dashboards-viewport");
+win.eval("dashboardsPanzoom.zoom(2, { animate: false })");
+tapAt(win, viewport9b, 100, 100);
+tapAt(win, viewport9b, 105, 102); // double-tap tactile -> devrait dézoomer UNE fois
+console.log("Le double-tap tactile dézoome bien à l'échelle 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
+// Le navigateur synthétise ENSUITE un dblclick pour la même paire de
+// taps (comportement standard documenté) — ne doit PAS re-basculer.
+viewport9b.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
+console.log("...et le dblclick synthétique qui suit ne re-bascule PAS (reste à l'échelle 1) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
 
 section("Test 10 — Retour de Mayrik (usage réel, conflit double-tap navigateur) : touch-action:manipulation plutôt que user-scalable=no (inefficace sur iOS)");
 
@@ -270,6 +303,14 @@ setTimeout(() => {
         const panAfterInterrupt = win.eval("dashboardsPanzoom.getPan().x");
         console.log("Démarrer un nouveau panoramique coupe bien l'inertie en cours (attendu true) :", panAfterInterrupt === panAtInterrupt);
         console.log("\n=== Fin du Test 11 ===");
+
+section("Test 12 — Bouton plein écran : présent, masqué proprement si l'API Fullscreen n'est pas disponible (ex. iOS Safari/Chrome)");
+
+dom = makeDom();
+win = dom.window;
+const fsBtn12 = dom.window.document.getElementById("fullscreen-btn");
+console.log("Le bouton existe dans le DOM (attendu true) :", !!fsBtn12);
+console.log("Masqué proprement quand document.fullscreenEnabled est absent (comme sur iOS) (attendu true) :", fsBtn12.style.display === "none");
       }, 50);
     }, 30);
   }, 50);
