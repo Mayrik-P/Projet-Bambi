@@ -122,7 +122,7 @@ winNoRaf.newGame();
 winNoRaf.render();
 console.log("Le jeu démarre et se rend normalement malgré l'échec de Panzoom (attendu true) :", winNoRaf.eval("G") !== null && winNoRaf.eval("G.allCars").length > 0);
 
-section("Test 8 — Retours de Mayrik (usage réel) : scrollbar native masquée, marges de secours tactile, bouton de réinitialisation");
+section("Test 8 — Retours de Mayrik (usage réel) : scrollbar native masquée, marges de secours tactile");
 
 dom = makeDom();
 win = dom.window;
@@ -134,16 +134,7 @@ console.log("Les 2 marges de secours (au-dessus/dessous des dashboards) sont pr�
 const marginCss8 = dom.window.getComputedStyle(margins8[0]);
 console.log("...et restent en touch-action normal (jamais capturées par Panzoom) (attendu true) :", marginCss8.touchAction !== "none");
 
-const resetBtn8 = dom.window.document.getElementById("dashboards-reset-btn");
-console.log("Le bouton de réinitialisation du zoom est présent (attendu true) :", !!resetBtn8);
-
-win.newGame();
-win.render();
-if (win.eval("dashboardsPanzoom") !== null) {
-  win.eval("dashboardsPanzoom.zoom(2, { animate: false })"); // simule un zoom actif
-  resetBtn8.dispatchEvent(new win.Event("click", { bubbles: true }));
-  console.log("Cliquer le bouton ramène bien le zoom à 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
-}
+console.log("Le bouton de réinitialisation a bien été retiré (retour de Mayrik : le double-tap suffit) (attendu true) :", !dom.window.document.getElementById("dashboards-reset-btn"));
 
 section("Test 9 — Double-tap / double-clic réinitialise le zoom (retour de Mayrik)");
 
@@ -278,6 +269,11 @@ svg11.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: tru
 setTimeout(() => {
   const panAfterCoast = win.eval("dashboardsPanzoom.getPan().x");
   console.log("Le panoramique continue bien tout seul après le relâché (inertie) (attendu true) :", panAfterCoast > panBeforeEnd);
+  // Retour de Mayrik : un grand geste doit maintenant suffire à
+  // atteindre l'autre bout de la zone (plus besoin de ~4 gestes) —
+  // vérifie que le coast atteint bien la limite de containment
+  // (125px dans ce scénario simulé), pas juste "un peu plus loin".
+  console.log("...et va bien jusqu'au bout de la zone en UN SEUL geste (limite de containment atteinte) (attendu true) :", panAfterCoast >= 124);
 
   // Un panoramique lent (quasi immobile) ne doit déclencher AUCUNE inertie.
   win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
