@@ -136,7 +136,7 @@ console.log("...et restent en touch-action normal (jamais capturées par Panzoom
 
 console.log("Le bouton de réinitialisation a bien été retiré (retour de Mayrik : le double-tap suffit) (attendu true) :", !dom.window.document.getElementById("dashboards-reset-btn"));
 
-section("Test 9 — Double-tap / double-clic réinitialise le zoom (retour de Mayrik)");
+section("Test 9 — Double-tap / double-clic bascule x1 ↔ x4 (retour de Mayrik)");
 
 function tapAt(win, el, x, y) {
   const touch = { identifier: 1, clientX: x, clientY: y };
@@ -307,6 +307,36 @@ win = dom.window;
 const fsBtn12 = dom.window.document.getElementById("fullscreen-btn");
 console.log("Le bouton existe dans le DOM (attendu true) :", !!fsBtn12);
 console.log("Masqué proprement quand document.fullscreenEnabled est absent (comme sur iOS) (attendu true) :", fsBtn12.style.display === "none");
+
+section("Test 13 — 3 boutons de préréglage de zoom (x1/x2/x4), retour à l'angle haut gauche à chaque fois (retour de Mayrik)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+const presetBtns13 = [...dom.window.document.querySelectorAll("#dashboards-zoom-presets button")];
+console.log("Les 3 boutons x1/x2/x4 sont bien présents, dans cet ordre (attendu true) :",
+  presetBtns13.map((b) => b.dataset.zoomPreset).join(",") === "1,2,4");
+
+const btnX2_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "2");
+win.eval("dashboardsPanzoom.pan(37, 21, { animate: false })"); // simule un déplacement quelconque au préalable
+btnX2_13.dispatchEvent(new win.Event("click", { bubbles: true }));
+console.log("Cliquer sur x2 règle bien l'échelle à 2 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
+console.log("...et ramène bien le panoramique à (0,0), l'angle haut gauche (attendu true) :",
+  JSON.stringify(win.eval("dashboardsPanzoom.getPan()")) === '{"x":0,"y":0}');
+
+const btnX4_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "4");
+btnX4_13.dispatchEvent(new win.Event("click", { bubbles: true }));
+console.log("Cliquer sur x4 règle bien l'échelle à 4 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
+
+const btnX1_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "1");
+btnX1_13.dispatchEvent(new win.Event("click", { bubbles: true }));
+console.log("Cliquer sur x1 règle bien l'échelle à 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
+
+const dashViewport13 = dom.window.document.getElementById("dashboards-viewport");
+tapAt(win, dashViewport13, 200, 150);
+tapAt(win, dashViewport13, 205, 152);
+console.log("Le double-tap x1/x4 continue bien de fonctionner en parallèle (retour de Mayrik : gardé) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
       }, 50);
     }, 30);
   }, 50);
