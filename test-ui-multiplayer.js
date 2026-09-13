@@ -194,4 +194,26 @@ const dashHtml10 = dom.window.document.getElementById("dashboards").innerHTML;
 const cmdImgs10 = [...dom.window.document.querySelectorAll("#dashboards image")].filter((img) => (img.getAttribute("href") || "").includes("command-"));
 console.log("Le rendu affiche bien les 4 command boards après restauration (attendu true) :", cmdImgs10.length === 4);
 
+section("Test 11 — BUG CORRIGÉ : l'ordre des lignes suit la vraie rotation du tour, pas juste \"joueur actif en tête\"");
+
+dom = makeDom();
+win = dom.window;
+win.configurePlayers(3); // blue, orange, green, purple
+win.newGame();
+G = win.eval("G");
+// Force le joueur courant à "green" (3e de playerOrder) — l'ordre
+// attendu doit être [green, purple, blue, orange] (rotation complète
+// de playerOrder à partir de green), PAS [green, blue, orange, purple]
+// (ancien bug : green en tête, puis le reste dans l'ordre fixe).
+G.roundState.currentPlayerIndex = G.roundState.playerOrder.indexOf("green");
+win.render();
+const dashSvg11 = dom.window.document.getElementById("dashboards");
+function rowYFor11(color) {
+  const img = [...dashSvg11.querySelectorAll("image")].find((el) => (el.getAttribute("href") || "").includes(`dashboard-${color}-small`));
+  return parseFloat(img.getAttribute("y"));
+}
+const yGreen = rowYFor11("green"), yPurple = rowYFor11("purple"), yBlue = rowYFor11("blue"), yOrange = rowYFor11("orange");
+console.log("Ordre des lignes = rotation complète de playerOrder (green, purple, blue, orange) (attendu true) :",
+  yGreen < yPurple && yPurple < yBlue && yBlue < yOrange);
+
 console.log("\n=== Fin des tests dédiés (support multi-IA) ===");
