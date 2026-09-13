@@ -716,7 +716,15 @@ function renderDashboards() {
     ? new Set(G.allCars.filter((c) => c.owner === HUMAN && c.status !== "eliminated" && c.damageTokens.length > 0))
     : new Set();
 
-  const order = cp ? [cp, ...PLAYER_NAMES.filter((p) => p !== cp)] : PLAYER_NAMES;
+  // Retour de Mayrik : l'ordre des lignes doit suivre l'ORDRE RÉEL DU
+  // TOUR (rotation de playerOrder à partir du joueur actif), jamais
+  // juste "cp en tête, les autres dans leur ordre fixe de table" —
+  // sinon HUMAN restait coincé en 2e position pendant TOUS les tours
+  // de chaque IA, au lieu de descendre progressivement selon sa vraie
+  // place dans la rotation.
+  const po = G.roundState.playerOrder;
+  const cpIdx = cp ? po.indexOf(cp) : -1;
+  const order = cpIdx >= 0 ? [...po.slice(cpIdx), ...po.slice(0, cpIdx)] : PLAYER_NAMES;
 
   let maxRight = 0;
   let pendingAiButton = null;
@@ -2581,6 +2589,40 @@ function initDashboardsPanzoom() {
     dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: "outside", canvas: true });
     const viewport = document.getElementById("dashboards-viewport");
     viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
+    // Bouton de secours (retour de Mayrik) : toujours un moyen sûr de
+    // revenir à l'affichage complet sur téléphone, sans dépendre d'un
+    // geste tactile précis dans une zone qui capture le tactile.
+    const resetBtn = document.getElementById("dashboards-reset-btn");
+    if (resetBtn) resetBtn.addEventListener("click", () => dashboardsPanzoom.reset());
+    // Double-tap / double-clic -> réinitialise le zoom (retour de
+    // Mayrik) : geste standard (Google Maps, Photos...), en
+    // complément du bouton — Panzoom ne gère rien de tel nativement.
+    // Un vrai TAP (déplacement < 10px entre touchstart et touchend,
+    // jamais un glissé de panoramique) suivi d'un second dans les
+    // 350ms et à moins de 30px du premier -> reset. `dblclick` natif
+    // couvre la souris séparément (aucun geste tactile à reproduire).
+    viewport.addEventListener("dblclick", () => dashboardsPanzoom.reset());
+    let tapStartX = 0, tapStartY = 0, lastTapTime = 0, lastTapX = 0, lastTapY = 0;
+    viewport.addEventListener("touchstart", (e) => {
+      const t = e.touches[0];
+      if (t) { tapStartX = t.clientX; tapStartY = t.clientY; }
+    }, { passive: true });
+    viewport.addEventListener("touchend", (e) => {
+      const t = e.changedTouches[0];
+      if (!t) return;
+      const movedDuringTouch = Math.hypot(t.clientX - tapStartX, t.clientY - tapStartY);
+      if (movedDuringTouch > 10) return; // glissé (panoramique), pas un tap
+      const now = Date.now();
+      const distFromLastTap = Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY);
+      if (now - lastTapTime < 350 && distFromLastTap < 30) {
+        dashboardsPanzoom.reset();
+        lastTapTime = 0; // absorbe un éventuel 3e tap rapide
+      } else {
+        lastTapTime = now;
+        lastTapX = t.clientX;
+        lastTapY = t.clientY;
+      }
+    }, { passive: true });
   } catch (e) {
     // Best-effort : le zoom/déplacement de la zone dashboards est un
     // confort, jamais une dépendance dure — une IA/un environnement où
