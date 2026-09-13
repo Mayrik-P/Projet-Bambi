@@ -2591,6 +2591,23 @@ function initDashboardsPanzoom() {
     viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
 
     // -----------------------------------------------------------
+    // 3 préréglages de zoom (retour de Mayrik) : x1/x2/x4, ramène à
+    // chaque fois l'affichage à l'angle haut gauche en même temps.
+    // pan(0,0) correspond TOUJOURS à ce coin, quelle que soit
+    // l'échelle : Panzoom utilise par défaut transform-origin:"0 0"
+    // pour un élément SVG (confirmé dans son propre code source,
+    // panzoom.js — différent du cas HTML général, "50% 50%"), donc le
+    // point (0,0) du contenu reste fixe pendant un zoom, jamais besoin
+    // de recalculer une position selon l'échelle courante.
+    document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        stopMomentum();
+        dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false });
+        dashboardsPanzoom.pan(0, 0, { animate: false });
+      });
+    });
+
+    // -----------------------------------------------------------
     // Inertie après un panoramique relâché (retour de Mayrik : même
     // sensation que le défilement natif du plateau, zone 1). Panzoom
     // ne fournit aucune physique d'inertie — implémentée ici selon la
@@ -2641,9 +2658,9 @@ function initDashboardsPanzoom() {
       const startTime = performance.now();
       function step() {
         const elapsed = performance.now() - startTime;
-        const factor = 1 - Math.exp(-elapsed / KINETIC_TIME_CONSTANT);
-        dashboardsPanzoom.pan(startX + ampX * factor, startY + ampY * factor, { animate: false });
-        const remainingSpeed = speed * Math.exp(-elapsed / KINETIC_TIME_CONSTANT);
+        const decay = Math.exp(-elapsed / KINETIC_TIME_CONSTANT); // calculé UNE fois, réutilisé pour la position ET la vitesse restante (mathématiquement liées : factor = 1 - decay)
+        dashboardsPanzoom.pan(startX + ampX * (1 - decay), startY + ampY * (1 - decay), { animate: false });
+        const remainingSpeed = speed * decay;
         momentumFrame = remainingSpeed > 0.02 ? requestAnimationFrame(step) : null;
       }
       momentumFrame = requestAnimationFrame(step);
@@ -2800,7 +2817,7 @@ if (fullscreenBtn) {
 }
 document.getElementById("board-viewport").addEventListener("scroll", syncBoardSlider);
 document.getElementById("board-position-slider").addEventListener("input", onBoardSliderInput);
-window.addEventListener("resize", () => { syncBoardSlider(); if (typeof G !== "undefined" && G) updateDashboardsViewportHeight(); });
+window.addEventListener("resize", () => { syncBoardSlider(); if (G) updateDashboardsViewportHeight(); });
 
 // Écran d'accueil (retour de Mayrik) : visible par défaut (voir
 // template.html), masqué dès qu'une partie démarre — que ce soit par

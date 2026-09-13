@@ -110,6 +110,17 @@
   #dashboards-margin { width: 100%; height: 14px; background: #1e1e24; }
   #dashboards-viewport { width: 100%; overflow: hidden; position: relative; touch-action: none; background: #26262e; }
   #dashboards-viewport svg { display: block; width: 100%; height: auto; }
+  /* 3 préréglages de zoom (retour de Mayrik) : carrés accolés en haut
+     droit de la zone dashboards. touch-action:auto : ce sont des
+     boutons normaux, jamais capturés par Panzoom (touch-action:none
+     du conteneur parent). */
+  #dashboards-zoom-presets { position: absolute; top: 8px; right: 8px; z-index: 10; display: flex; touch-action: auto; }
+  #dashboards-zoom-presets button { width: 32px; height: 32px; background: rgba(30,30,36,0.85);
+    border: 1px solid #555; color: #eee; font-size: 12px; font-weight: bold; cursor: pointer; padding: 0; }
+  #dashboards-zoom-presets button + button { border-left: none; }
+  #dashboards-zoom-presets button:first-child { border-radius: 6px 0 0 6px; }
+  #dashboards-zoom-presets button:last-child { border-radius: 0 6px 6px 0; }
+  #dashboards-zoom-presets button:hover { background: rgba(60,60,70,0.9); }
 
   /* --------------------------------------------------------------
      Écran d'accueil (retour de Mayrik) : choix du nombre d'IA avant
@@ -202,10 +213,17 @@
        (Panzoom), contenus à cette seule zone. Marge de secours
        au-dessus/dessous (touch-action normal), pour toujours pouvoir
        redéfiler la page sur téléphone (retour de Mayrik). Le
-       double-tap/double-clic (voir ui-script.js) bascule vers
-       l'affichage plein écran — plus besoin de bouton dédié. -->
+       double-tap/double-clic (voir ui-script.js) bascule x1/x4 ; les 3
+       boutons x1/x2/x4 (retour de Mayrik) donnent en plus un accès
+       direct à chaque palier, en revenant systématiquement à l'angle
+       haut gauche. -->
   <div id="dashboards-margin"></div>
   <div id="dashboards-viewport">
+    <div id="dashboards-zoom-presets">
+      <button type="button" data-zoom-preset="1">x1</button>
+      <button type="button" data-zoom-preset="2">x2</button>
+      <button type="button" data-zoom-preset="4">x4</button>
+    </div>
     <svg id="dashboards" viewBox="0 0 900 300"></svg>
   </div>
   <div id="dashboards-margin"></div>
