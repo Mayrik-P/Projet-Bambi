@@ -10,7 +10,6 @@
   body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 0; }
   #wrap { max-width: 1000px; margin: 0 auto; }
   .die { display: inline-block; background: #3a3a46; border-radius: 4px; padding: 2px 7px; margin-right: 3px; font-weight: bold; }
-  svg { display: block; width: 100%; height: auto; background: #26262e; }
   .clickable { cursor: pointer; }
   .clickable:hover { filter: brightness(1.3); }
   /* Retirés de l'affichage (retour de Mayrik) — gardés dans le DOM
@@ -28,8 +27,52 @@
   #log div.line { margin-bottom: 2px; }
   #log div.turn-sep { color: #ffb347; font-weight: bold; margin: 6px 0 2px 0; }
   #winnerBanner { display: none; }
-  #panel .stop-message { background: #4a2020; border: 1px solid #a04040; padding: 10px; border-radius: 6px; margin-bottom: 8px; }
-  #panel .tile-message { background: #204a3a; border: 1px solid #3ba07a; padding: 10px; border-radius: 6px; margin-bottom: 8px; }
+
+  /* --------------------------------------------------------------
+     Zone 1 — plateau de jeu (retour de Mayrik) : zoom FIXE, toujours
+     calé pour qu'1 tuile de route remplisse la largeur de l'écran —
+     jamais de pincement ici, juste un défilement horizontal natif
+     (scroll natif du conteneur = zoom fixe + panoramique gratuits,
+     avec l'inertie tactile native en prime). La largeur réelle du SVG
+     est posée en JS (voir setupBoardScroll()) à un multiple de 100% du
+     conteneur, calculé depuis BOARD_VIEW/largeur d'une tuile — jamais
+     une valeur en dur, pour rester juste si la géométrie du plateau
+     change un jour. Le curseur en dessous n'est qu'un INDICATEUR/
+     raccourci de position par rapport au plateau assemblé complet
+     (pas un zoom) — synchronisé dans les deux sens avec scrollLeft. */
+  #board-viewport { width: 100%; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; background: #26262e; }
+  #board-viewport svg { display: block; height: auto; }
+  #board-position-slider { width: 100%; display: block; margin: 6px 0 10px; accent-color: #ffb347; height: 18px; cursor: pointer; }
+
+  /* --------------------------------------------------------------
+     Zone 2 — bande d'info (retour de Mayrik) : hauteur fixe, pleine
+     largeur, pas de zoom — juste une adaptation naturelle aux
+     différentes largeurs d'écran. Structure posée maintenant ; le
+     contenu (informations/explications de jeu) viendra étoffer ceci
+     dans un chantier séparé. Style "afficheur de flipper" en attendant
+     mieux : police monospace, espacement des lettres, léger halo —
+     approximation raisonnable sans police bitmap dédiée. */
+  #info-band { width: 100%; box-sizing: border-box; min-height: 44px; background: #0d0d10;
+    border-top: 2px solid #3a3a46; border-bottom: 2px solid #3a3a46;
+    display: flex; align-items: center; justify-content: center; padding: 6px 14px;
+    font-family: "Courier New", monospace; font-weight: bold; font-size: 15px;
+    letter-spacing: 2px; color: #ffb347; text-shadow: 0 0 6px rgba(255,179,71,0.55);
+    text-align: center; }
+
+  /* --------------------------------------------------------------
+     Zone 3 — dashboards des joueurs (retour de Mayrik) : librement
+     zoomable/déplaçable au pincement tactile ET à la souris, mais
+     CONTENUE à cette seule zone (contrairement au pincement natif du
+     téléphone, qui zoomait toute la page HTML avant ce correctif).
+     Gérée par Panzoom (voir tools/panzoom.min.js, vendorisé — voir
+     initDashboardsPanzoom() dans ui-script.js). touch-action:none
+     laisse Panzoom gérer lui-même tous les gestes tactiles sans que le
+     navigateur ne s'en mêle. La hauteur du conteneur est posée
+     dynamiquement en JS pour toujours cadrer exactement l'ensemble des
+     dashboards à l'échelle 1 (comme aujourd'hui) — le zoom du joueur
+     s'applique PAR-DESSUS cette base. */
+  #dashboards-viewport { width: 100%; overflow: hidden; position: relative; touch-action: none; background: #26262e; }
+  #dashboards-viewport svg { display: block; width: 100%; height: auto; }
 
   /* --------------------------------------------------------------
      Écran d'accueil (retour de Mayrik) : choix du nombre d'IA avant
@@ -106,8 +149,23 @@
     <span class="badge" id="commandUsedBadge"></span>
     <span class="badge">Pool : <span id="dicePool"></span></span>
   </div>
-  <svg id="board" viewBox="0 0 900 500"></svg>
-  <svg id="dashboards" viewBox="0 0 900 300"></svg>
+
+  <!-- Zone 1 : plateau de jeu — zoom fixe (1 tuile = largeur écran),
+       défilement horizontal natif, curseur de position en dessous. -->
+  <div id="board-viewport">
+    <svg id="board" viewBox="0 0 900 500"></svg>
+  </div>
+  <input type="range" id="board-position-slider" min="0" max="1000" value="0" aria-label="Position sur le plateau assemblé">
+
+  <!-- Zone 2 : bande d'info (structure posée, contenu à venir). -->
+  <div id="info-band"></div>
+
+  <!-- Zone 3 : dashboards des joueurs — librement zoomables/déplaçables
+       (Panzoom), contenus à cette seule zone. -->
+  <div id="dashboards-viewport">
+    <svg id="dashboards" viewBox="0 0 900 300"></svg>
+  </div>
+
   <div id="panel"></div>
   <div class="damageList" id="damageRow"></div>
   <div id="winnerBanner"></div>
@@ -126,11 +184,16 @@
  * règles qui le font évoluer. On le teste en lisant les résultats
  * dans la console (voir test-engine.js).
  *
- * ÉTAPE 1 (ce fichier) : une seule tuile, une seule voiture, le
- * mouvement de base (arc avant, coût des terrains). Pas encore de
- * slams, hazards, tir, dégâts, IA, ni plusieurs tuiles qui défilent.
- * On ajoutera ces briques une par une, chacune testée avant la
- * suivante.
+ * Couvre aujourd'hui l'intégralité du jeu de base (p.1-11 du
+ * rulebook) : mouvement (arc avant, entrée, Coast, bonus Road),
+ * Slams (direct, en chaîne, avec relance), hazards (tous types),
+ * dégâts et réparation, tir (normal et Airstrike), Commands
+ * (Nitro/Drift/Repair/Airstrike), progression des tuiles (défilement,
+ * ligne d'arrivée) et conditions de victoire — pour un nombre de
+ * joueurs quelconque (2 à 4). L'IA (ai-decision.js), la couche
+ * joueur humain (human-decision.js) et l'exécution de tour
+ * (turn-executor.js) sont des modules séparés qui s'appuient
+ * uniquement sur ce fichier.
  */
 
 // -----------------------------------------------------------------
@@ -252,12 +315,15 @@ function getSpace(tile, col, row) {
 // qui n'en est qu'une vue reconstruite à chaque fois). C'est cet
 // état qui évolue quand une voiture sort par l'avant.
 //
-// LIMITATION ACTUELLE, à corriger plus tard : pas de "retournement"
-// de tuile à proprement parler — chaque tuile physique a 2 faces
-// différentes (A/B) dans le vrai jeu, mais ici chaque face est un
-// fichier de données à part entière (voir tiles/data/), donc "choisir
-// une face" se fait en amont, au moment de choisir QUEL fichier
-// instancier, pas dans ce moteur.
+// Chaque tuile physique a 2 faces différentes (A/B) dans le vrai jeu ;
+// ici, chaque face est un fichier de données à part entière (voir
+// tiles/data/) — le "retournement" se traduit donc par un tirage
+// aléatoire entre ces fichiers au moment d'instancier la tuile
+// (pickRandomFace/groupTilesByNumber), jamais par une rotation gérée
+// par ce moteur. Choix de conception définitif, pas une limitation
+// temporaire : plus simple à raisonner, et strictement équivalent du
+// point de vue des règles (une face = un terrain figé, comme la vraie
+// tuile imprimée).
 //
 // Place automatiquement un jeton hazard sur chaque case marquée
 // hazardSpace=true des 3 tuiles de départ (mise en place physique du
@@ -684,9 +750,8 @@ function eliminateCarsOnChoppers(allCars, allChoppers) {
 // respectant la parité de la rangée de départ (voir getFrontArc).
 // Réutilisé par tout code qui marche une trajectoire hypothétique
 // (recherche IA) sans passer par moveCar — la table DIRECTIONS seule
-// ne suffit PAS ici : elle ignore la parité et ne doit servir que
-// pour rear/rear-left/rear-right (pas encore couverts par une règle
-// confirmée, voir DIRECTIONS plus bas).
+// ne suffit PAS ici : elle ignore la parité. Symétrique de
+// getBackwardDelta ci-dessous, pour rear/rear-left/rear-right.
 function getForwardDelta(dirName, fromCol, fromRow) {
   const arc = getFrontArc({ col: fromCol, row: fromRow });
   const target = arc.find((a) => a.name === dirName);
@@ -1310,12 +1375,14 @@ function rollShootingDie(injectedValue = null) {
 }
 
 // Dé Road à 6 faces : 1-1-1-2-2-3 (confirmé par Mayrik). Tiré une
-// seule fois par round, par le 1er joueur (p.9). NOTE : ce dé n'est
-// pour l'instant utilisé QUE pour la rotation de round (qui le tire,
-// quand) — le BONUS de déplacement qu'il donne aux voitures restées
-// sur route n'est pas encore implémenté dans moveCar (voir p.9 :
-// "if their car started on and moved on only road spaces, that car
-// may immediately gain moves equal to the road die").
+// seule fois par round, par le 1er joueur (p.9) — voir
+// ensureRoadDieRolled. Le BONUS de déplacement qu'il donne aux
+// voitures restées sur route (p.9 : "if their car started on and
+// moved on only road spaces, that car may immediately gain moves
+// equal to the road die") est implémenté dans
+// playTurnAssignMoveWithProgressionGen/playTurnAssignEnterWithProgressionGen
+// (options.roadDieValue + options.roadBonusPath, jamais ici — ce dé
+// n'est que le TIRAGE, pas son application).
 function rollRoadDie(injectedValue = null) {
   if (injectedValue) return injectedValue;
   return DICE_FACES.ROAD[Math.floor(Math.random() * DICE_FACES.ROAD.length)];
@@ -3243,6 +3310,7 @@ function rollMovementDie(injectedValue = null) {
 if (typeof module !== "undefined" && module.exports) {
 module.exports = {
 
+  driveSync,
   TERRAIN,
   MOVE_COST,
   CAR_SIZE,
@@ -5538,19 +5606,19 @@ if (typeof module !== "undefined" && module.exports) {
  * inopérables), Airstrike (n'importe quel dé, case vide au choix) —
  * une seule Command par round, jamais sur un tour de Coast.
  *
- * Réutilise SANS LES DUPLIQUER : computeReachableDestinations /
- * computeReachableEntryDestinations / chooseShootTarget
- * (ai-decision.js — pure géométrie/règles de terrain, aucune
- * politique) et checkDecisionLegality / executeDecision
- * (turn-executor.js — mêmes règles mécaniques que celles qui
- * valident déjà les décisions de l'IA en self-play).
+ * Le mouvement se joue case par case (voir Section 2ter) — jamais une
+ * destination choisie d'un coup — donc ce module ne dépend QUE
+ * d'engine.js, jamais d'ai-decision.js (retiré ici lors d'une revue de
+ * code : l'ancienne Section 2, qui choisissait une destination
+ * complète via computeReachableDestinations/computeReachableEntryDestinations,
+ * n'était plus appelée par aucun code réel depuis ce passage au
+ * mouvement pas à pas).
  */
 
 
 
 
 // (destructuring engine.js retiré pour le bundle navigateur — noms déjà globaux)
-// (destructuring ai-decision.js retiré pour le bundle navigateur — noms déjà globaux)
 
 // ===================================================================
 // SECTION 1 — CONTEXTE DE TOUR : que peut faire ce joueur maintenant ?
@@ -5607,72 +5675,15 @@ function getTurnContext(progressionState, board, allCars, allChoppers, dicePool,
 }
 
 // ===================================================================
-// SECTION 2 — TRAJECTOIRES ATTEIGNABLES POUR UN CHOIX (voiture + dé)
-// ===================================================================
-/**
- * Renvoie toutes les cases atteignables (avec leurs métadonnées :
- * terminalReason, dangerousCellsCrossed, slamTarget, path...) pour la
- * voiture et le dé choisis par le joueur — jamais UNE seule "meilleure"
- * destination comme le ferait findBestTrajectory côté IA. Au
- * joueur de choisir librement parmi les options réellement légales.
- * `driftAvailable` doit être `true` seulement si le joueur a choisi de
- * jouer la Command Drift ce tour (voir Section 3).
- */
-function getReachableOptions(board, car, dieValue, allCars, allChoppers, driftAvailable = false) {
-  if (car.col === null) {
-    return computeReachableEntryDestinations(board, dieValue, allCars, allChoppers, driftAvailable);
-  }
-  return computeReachableDestinations(board, car, dieValue, allCars, allChoppers, driftAvailable);
-}
-
-// ===================================================================
-// SECTION 2bis — BONUS ROAD (optionnel, montant fixe imposé — p.7)
-// ===================================================================
-// CORRECTIF (Mayrik, en testant le prototype) : ce bonus n'était
-// simplement jamais proposé au joueur humain — la couche humaine
-// n'avait aucune fonction pour ça. Il s'agit d'une mécanique à part
-// du mouvement principal (voir engine.js, playTurnAssignMoveWithProgression :
-// une seconde application de moveCarWithProgression, APRÈS le
-// mouvement de base, avec le dé Road comme distance) — jamais une
-// simple addition à la distance de départ (contrairement au Nitro).
-/**
- * "This bonus is optional, but if you use it, you must use the full
- * amount." (p.7) — éligible seulement si le trajet choisi par le
- * joueur est resté ENTIÈREMENT sur route, sans case dangereuse
- * traversée, et qu'un dé Road a été tiré ce round.
- */
-function isRoadBonusEligible(destination, roadDieValue) {
-  return roadDieValue > 0 && destination.terminalReason === "normal" && destination.allRoad === true && destination.dangerousCellsCrossed === 0;
-}
-
-/**
- * Renvoie les destinations atteignables pour l'extension de bonus
- * Road (distance = roadDieValue PILE, jamais moins — "you must use
- * the full amount") depuis la destination de base déjà choisie.
- * "This extra movement does not need to be on the road" (p.7) — donc
- * aucun filtre de terrain ici, juste écarter les fins dangereuses,
- * comme pour le mouvement normal. Renvoie [] si non éligible (rien à
- * proposer) — à l'appelant de vérifier isRoadBonusEligible avant
- * d'offrir le choix "oui/non" au joueur.
- */
-function getRoadBonusOptions(board, car, destination, roadDieValue, allCars, allChoppers, driftAvailable = false) {
-  if (!isRoadBonusEligible(destination, roadDieValue)) return [];
-  const extCar = { ...car, col: destination.col, row: destination.row };
-  return computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable)
-    .filter((e) => (e.terminalReason === "normal" || e.terminalReason === "exits-front") && e.dangerousCellsCrossed === 0);
-}
-
-// ===================================================================
-// SECTION 2ter — MOUVEMENT CASE PAR CASE (retour d'usage de Mayrik,
-// Point 3 : remplace complètement getReachableOptions/Section 2 pour
-// le mouvement d'un joueur humain — la destination n'est plus choisie
-// d'un coup, le joueur avance une case à la fois dans l'arc avant
-// COURANT de sa voiture, les effets (hazard, slam, sortie de tuile)
-// s'appliquant réellement avant qu'on lui propose la case suivante).
-// Le même principe s'applique désormais au Bonus Road (Section 2bis) :
-// à l'appelant de reboucler sur cette fonction avec `remaining` =
-// roadDieValue au départ de l'extension, exactement comme pour le
-// mouvement principal.
+// SECTION 2 — MOUVEMENT CASE PAR CASE (retour d'usage de Mayrik,
+// Point 3) : la destination n'est jamais choisie d'un coup, le joueur
+// avance une case à la fois dans l'arc avant COURANT de sa voiture,
+// les effets (hazard, slam, sortie de tuile) s'appliquant réellement
+// avant qu'on lui propose la case suivante. Le même principe
+// s'applique au Bonus Road (p.7, montant fixe imposé) : à l'appelant
+// de reboucler sur cette fonction avec `remaining` = roadDieValue au
+// départ de l'extension, exactement comme pour le mouvement
+// principal.
 // ===================================================================
 /**
  * Liste les cases de l'arc avant COURANT que le joueur peut
@@ -5769,7 +5780,7 @@ function getEntryRowOptions(board, dieValue, allCars) {
 }
 
 // ===================================================================
-// SECTION 2quater — CIBLE DE TIR LIBRE (remplace le choix automatique
+// SECTION 2bis — CIBLE DE TIR LIBRE (remplace le choix automatique
 // ai.chooseShootTarget pour un joueur humain — Point 3, retour de
 // Mayrik : le joueur doit pouvoir choisir sa cible lui-même, et
 // choisir de NE PAS tirer).
@@ -5795,7 +5806,7 @@ function getShootTargetOptions(shooter, allCars) {
 }
 
 // ===================================================================
-// SECTION 2quinquies — POINTS DE MOUVEMENT PERDUS (retour de Mayrik,
+// SECTION 2ter — POINTS DE MOUVEMENT PERDUS (retour de Mayrik,
 // Point 3 : "reste des mouvements perdus à cause de [raison]" avec un
 // bouton Continuer, plutôt qu'un enchaînement automatique).
 // ===================================================================
@@ -5910,58 +5921,16 @@ function listValidAirstrikePlacements(board, allCars, allChoppers, chopper) {
   return placements;
 }
 
-// ===================================================================
-// SECTION 5 — CONSTRUCTION DE LA DÉCISION FINALE
-// ===================================================================
-/**
- * Assemble la décision du joueur dans EXACTEMENT la même forme que
- * celle produite par ai.decideAssignAndCommand — c'est ce qui permet
- * à turn-executor.js de l'exécuter sans aucune distinction entre une
- * décision humaine et une décision IA.
- *   - car, dieValue : la voiture et le dé de mouvement choisis.
- *   - command : null, ou { type, dieValue, target? } — pour
- *     "airstrike", target ET placement doivent être fournis (voir
- *     Section 4 pour les placements valides ; target est la voiture
- *     adverse visée, choisie librement par le joueur parmi les
- *     opérables, ou null si aucune n'est atteignable/souhaitée).
- *   - destination : UNE des options renvoyées par getReachableOptions
- *     (Section 2), choisie par le joueur — TOUJOURS la destination de
- *     base, jamais le point d'arrivée après bonus Road (voir
- *     roadBonusPath ci-dessous : le moteur rejoue cette extension
- *     comme un second mouvement séparé, après le premier).
- *   - isCoast : true si ce tour est un Coast (voir Section 1).
- *   - roadBonusPath : le `.path` d'UNE des options renvoyées par
- *     getRoadBonusOptions (Section 2bis), si le joueur a choisi
- *     d'utiliser le bonus Road ce tour — sinon null/omis.
- */
-function buildHumanDecision({ car, dieValue, command, destination, isCoast = false, roadBonusPath = null }) {
-  const isEntry = car.col === null && !isCoast;
-  return {
-    car,
-    dieValue,
-    command: command || null,
-    destination,
-    isEntry,
-    isCoast,
-    slam: destination.terminalReason === "slam",
-    roadBonusPath: roadBonusPath || null
-  };
-}
-
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     getTurnContext,
-    getReachableOptions,
-    isRoadBonusEligible,
-    getRoadBonusOptions,
     getMovementStepOptions,
     getEntryRowOptions,
     computePointsLost,
     getShootTargetOptions,
     getAvailableCommands,
     isValidAirstrikePlacement,
-    listValidAirstrikePlacements,
-    buildHumanDecision
+    listValidAirstrikePlacements
   };
 }
 
@@ -5984,11 +5953,13 @@ if (typeof module !== "undefined" && module.exports) {
  *     décision par rapport aux RÈGLES MÉCANIQUES DU JEU UNIQUEMENT
  *     (dé bien dans le pool, pas réutilisation du même dé physique,
  *     plage de valeur de Command) — jamais une préférence stratégique.
- *     Utilisée par tools/run-shadow-legality.js (pour DÉTECTER une
- *     décision IA illégale, sans bloquer son exécution — l'outil veut
- *     justement voir ces cas s'ils existent) ET par human-decision.js
- *     (pour REJETER une décision avant de l'exécuter — un humain ne
- *     doit jamais pouvoir soumettre un choix mécaniquement invalide).
+ *     Utilisée par tools/run-shadow-legality.js, pour DÉTECTER une
+ *     décision IA illégale sans bloquer son exécution (l'outil veut
+ *     justement voir ces cas s'ils existent). Le joueur humain, lui,
+ *     n'appelle jamais cette fonction : tools/ui-script.js ne
+ *     construit sa décision qu'à partir d'options déjà filtrées
+ *     légales (human-decision.js) — illégal par construction,
+ *     jamais besoin d'un contrôle a posteriori.
  *   - executeDecision(...) : exécute réellement une décision déjà
  *     prise (dés tirés du pool, Command résolue, mouvement/Coast/
  *     entrée joué, tour avancé) — ne prend AUCUNE décision elle-même,
@@ -6039,87 +6010,18 @@ function checkDecisionLegality(decision, poolBefore, playerName) {
  * client humain doit vérifier AVANT et ne jamais appeler ceci sur une
  * décision invalide).
  * Retourne { ok, log, decision, ...résultat de playTurn*WithProgression }.
+ *
+ * Simple pilote SYNCHRONE d'executeDecisionGen (voir driveSync,
+ * engine.js — même convention que TOUTES les paires Gen/non-Gen du
+ * moteur, ex. moveCar/moveCarGen) : sans `isHumanOwner` fourni,
+ * aucune pause n'est jamais déclenchée (resolveSlamGen retombe sur
+ * son défaut `() => false`), donc gen.next() unique suffit toujours.
+ * Ancienne duplication complète de la logique d'executeDecisionGen
+ * retirée ici (retour de Mayrik, revue de code) — comportement
+ * strictement identique, verrouillé par la suite de tests existante.
  */
 function executeDecision(progressionState, roundState, allCars, allChoppers, playerNames, currentPlayer, decision) {
-  const log = [];
-  const { car } = decision;
-  const isCoastTurn = decision.isCoast;
-  const command = decision.command;
-
-  drawSpecificDieFromPool(roundState.dicePool, currentPlayer, decision.dieValue);
-  log.push(`ASSIGN : dé ${decision.dieValue} → ${car.id}${isCoastTurn ? " (Coast)" : ""}`);
-
-  // Étape 2 (rewrite-plan.md) : le tir est calculé ICI, une seule
-  // fois, génériquement, après que la décision (donc la destination
-  // finale) est connue — quelle que soit la branche qui a produit
-  // cette décision (mouvement normal, Coast, Finish Line Rush,
-  // décision humaine...).
-  decision.shotTarget = computeShotTargetForDecision(decision, allCars);
-
-  // La cible RÉELLEMENT utilisée pour le tir est recalculée par le
-  // moteur APRÈS résolution complète du mouvement (un Slam peut faire
-  // atterrir la voiture ailleurs qu'où prévu, via des dés tirés
-  // PENDANT la résolution) — voir engine.js, resolveShootStep.
-  const shootTargetFn = (currentCar, cars) => chooseShootTarget(currentCar.col, currentCar.row, currentCar.owner, cars);
-
-  let effectiveDieValue = decision.dieValue;
-  const slamOptions = { decideReroll: decideSlamRerollDefault };
-
-  if (command && !isCoastTurn) {
-    drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);
-    roundState.commandUsedThisRound[currentPlayer] = true;
-    log.push(`COMMAND : ${command.type} (dé ${command.dieValue})`);
-
-    if (command.type === "nitro") {
-      const r = resolveNitroCommand(command.dieValue);
-      if (r.ok) effectiveDieValue += r.bonus;
-    } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target, command.tokenValue);
-    } else if (command.type === "drift") {
-      const r = resolveDriftCommand(command.dieValue);
-      if (r.ok) slamOptions.driftAvailable = true;
-    } else if (command.type === "airstrike") {
-      let chopper = allChoppers.find((ch) => ch.owner === currentPlayer);
-      if (!chopper) { chopper = createChopper(currentPlayer); allChoppers.push(chopper); }
-      if (command.placement) {
-        resolveAirstrikeCommand(
-          buildBoardFromProgressionState(progressionState), allCars, allChoppers, chopper, command.placement.col, command.placement.row,
-          { roundNumber: roundState.roundNumber, shootTarget: command.target, progressionState, allChoppers }
-        );
-      }
-    }
-  }
-
-  if (decision.isEntry) {
-    const result = playTurnAssignEnterWithProgression(
-      progressionState, car, effectiveDieValue, decision.destination.entryRow, decision.destination.path || [], allCars, allChoppers, playerNames,
-      { roundNumber: roundState.roundNumber, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
-    );
-    log.push(...(result.log || []));
-    if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log, decision };
-  }
-
-  if (isCoastTurn) {
-    const result = playTurnCoastWithProgression(progressionState, car, decision.destination.path || [], allCars, allChoppers, playerNames, { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn, ...slamOptions });
-    log.push(...(result.log || []));
-    if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log, decision };
-  }
-
-  if (car.status !== CAR_STATUS.OPERABLE) {
-    log.push(`${car.id} devenue inopérable pendant la Command → fin du tour.`);
-    log.push(...advanceTurn(roundState, allCars).log);
-    return { ok: true, log, car, decision };
-  }
-
-  const result = playTurnAssignMoveWithProgression(
-    progressionState, car, effectiveDieValue, decision.destination.path || [], allCars, allChoppers, playerNames,
-    { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
-  );
-  log.push(...(result.log || []));
-  if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-  return { ...result, log, decision };
+  return driveSync(executeDecisionGen(progressionState, roundState, allCars, allChoppers, playerNames, currentPlayer, decision));
 }
 
 /**
@@ -6229,11 +6131,11 @@ function* executeDecisionGen(progressionState, roundState, allCars, allChoppers,
 /**
  * ASSIGN + COMMAND — identique à la première moitié d'executeDecision,
  * mais sans rien exécuter du mouvement (qui devient interactif,
- * case par case, voir executeMoveStep/executeEntryStep plus bas).
+ * case par case, voir executeMoveStepGen/executeEntryStepGen plus bas).
  * `intent` = { car, dieValue, command, isCoast }. Retourne
  * { log, effectiveDieValue, slamOptions } — effectiveDieValue inclut
  * déjà le bonus Nitro éventuel ; slamOptions.driftAvailable est prêt à
- * être transmis à chaque appel d'executeMoveStep/executeEntryStep.
+ * être transmis à chaque appel d'executeMoveStepGen/executeEntryStepGen.
  */
 function executeAssignAndCommand(roundState, allCars, allChoppers, progressionState, currentPlayer, intent) {
   const log = [];
@@ -6293,7 +6195,7 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
  * executeAssignAndCommand ci-dessus) : résout le tir du chopper déjà
  * placé, séparément, pour que l'appelant puisse rendre l'écran entre
  * les deux étapes. `target` peut être null (joueur ayant décliné le
- * tir), auquel cas rien n'est résolu — même convention qu'executeShoot.
+ * tir), auquel cas rien n'est résolu — même convention qu'executeShootGen.
  */
 function executeAirstrikeShoot(progressionState, allCars, allChoppers, chopper, target, roundNumber) {
   const log = [];
@@ -6312,25 +6214,14 @@ function executeAirstrikeShoot(progressionState, allCars, allChoppers, chopper, 
  * la rangée d'entrée (voir human.getEntryRowOptions). Consomme le coût
  * de terrain de cette case, applique ses effets (hazard, slam éventuel
  * dès l'entrée), et rend le mouvement restant à l'appelant — la suite
- * du trajet (s'il en reste) redevient un pas normal via executeMoveStep.
- * Jamais de progression de tuile ni de tir possibles dès l'entrée
- * (impossible par construction / interdit au round 1, voir engine.js).
- */
-function executeEntryStep(progressionState, allCars, car, dieValue, entryRow, slamOptions = {}) {
-  const log = [];
-  log.push(`ASSIGN (entrée en jeu) : dé ${dieValue} assigné à ${car.id}`);
-  const board = buildBoardFromProgressionState(progressionState);
-  const result = moveCarEnteringBoard(board, car, dieValue, entryRow, [], allCars, slamOptions);
-  log.push(...result.log);
-  return { ...result, log };
-}
-
-/**
- * Variante GÉNÉRATRICE d'executeEntryStep — même usage que
- * executeDecisionGen (voir plus haut) : à utiliser quand l'appelant
- * veut pouvoir mettre le pas en pause pour un Slam (direct, Wreck, ou
- * en cascade via un dégât) impliquant une voiture dont
- * `options.isHumanOwner` renvoie vrai — typiquement, pendant le PROPRE
+ * du trajet (s'il en reste) redevient un pas normal via
+ * executeMoveStepGen. Jamais de progression de tuile ni de tir
+ * possibles dès l'entrée (impossible par construction / interdit au
+ * round 1, voir engine.js).
+ *
+ * `options.isHumanOwner` permet de mettre le pas en pause pour un Slam
+ * (direct, Wreck, ou en cascade via un dégât) impliquant une voiture
+ * dont cette fonction renvoie vrai — typiquement, pendant le PROPRE
  * tour du joueur, chaque fois que la voiture plus grande est la
  * sienne (`(owner) => owner === HUMAN`), remplaçant ainsi le hack de
  * prévisualisation (previewSlam/matchesPreviewedSlam côté
@@ -6349,7 +6240,7 @@ function* executeEntryStepGen(progressionState, allCars, car, dieValue, entryRow
 /**
  * Un seul pas de mouvement normal (voiture déjà sur le plateau) :
  * `direction` doit venir de human.getMovementStepOptions (donc déjà
- * filtrée légale). Réutilise moveCarWithProgression avec un chemin
+ * filtrée légale). Réutilise moveCarWithProgressionGen avec un chemin
  * d'UNE seule direction — la fonction elle-même gère intégralement les
  * effets de cette case (hazard, slam, sortie de tuile avec décalage
  * automatique, victoire éventuelle) avant de rendre la main : rien de
@@ -6361,12 +6252,6 @@ function* executeEntryStepGen(progressionState, allCars, car, dieValue, entryRow
  * détecte un arrêt forcé en comparant le `remaining` réellement obtenu
  * à ce que le coût de terrain normal aurait dû laisser.
  */
-function executeMoveStep(progressionState, allCars, allChoppers, playerNames, car, remaining, direction, slamOptions = {}) {
-  const result = moveCarWithProgression(progressionState, car, remaining, [direction], allCars, allChoppers, playerNames, slamOptions);
-  return result;
-}
-
-/** Variante GÉNÉRATRICE d'executeMoveStep — voir executeEntryStepGen. */
 function* executeMoveStepGen(progressionState, allCars, allChoppers, playerNames, car, remaining, direction, slamOptions = {}) {
   const result = yield* moveCarWithProgressionGen(progressionState, car, remaining, [direction], allCars, allChoppers, playerNames, slamOptions);
   return result;
@@ -6375,36 +6260,10 @@ function* executeMoveStepGen(progressionState, allCars, allChoppers, playerNames
 /**
  * Tir de fin de mouvement, avec cible LIBREMENT choisie par le joueur
  * (voir human.getShootTargetOptions) — `target` peut être null si le
- * joueur choisit de ne pas tirer, auquel cas rien n'est résolu.
- */
-function executeShoot(progressionState, allCars, allChoppers, car, target, roundNumber, options = {}) {
-  const log = [];
-  if (!target) {
-    log.push(`${car.id} choisit de ne pas tirer.`);
-    return { log, shootResult: null };
-  }
-  if (roundNumber === 1) {
-    log.push(`Tir impossible : les armes ne sont pas encore actives au 1er round (p.10)`);
-    return { log, shootResult: null };
-  }
-  if (car.status !== CAR_STATUS.OPERABLE) {
-    log.push(`${car.id} n'est plus opérable → tir impossible`);
-    return { log, shootResult: null };
-  }
-  const board = buildBoardFromProgressionState(progressionState);
-  const shootResult = resolveShoot(board, allCars, car, target, { roundNumber, progressionState, allChoppers, ...options });
-  log.push(...shootResult.log);
-  return { log, shootResult };
-}
-
-/**
- * Variante GÉNÉRATRICE d'executeShoot — voir executeEntryStepGen. Un
- * tir déclenchant un dégât Dazed en cascade peut, comme pendant le
- * tour de l'IA, percuter une voiture humaine plus grande — jusqu'ici
- * jamais géré du tout pour le PROPRE tir du joueur (aucune
- * `decideReroll`/`isHumanOwner` n'était transmise), corrigé au passage
- * en même temps que le nettoyage du hack Wreck (même catégorie de
- * gap que le correctif Coast, section 3bis du journal).
+ * joueur choisit de ne pas tirer, auquel cas rien n'est résolu. Un tir
+ * déclenchant un dégât Dazed en cascade peut percuter une voiture
+ * humaine plus grande — géré via `options.isHumanOwner`, comme pour
+ * le tour de l'IA.
  */
 function* executeShootGen(progressionState, allCars, allChoppers, car, target, roundNumber, options = {}) {
   const log = [];
@@ -6666,6 +6525,24 @@ function loadRealTiles() {
 
 </script>
 <script>
+/**
+* Panzoom 4.6.2 for panning and zooming elements using CSS transforms
+* Copyright Timmy Willison and other contributors
+* https://github.com/timmywil/panzoom/blob/main/MIT-License.txt
+*/
+((e,t)=>{"object"==typeof exports&&"undefined"!=typeof module?module.exports=t():"function"==typeof define&&define.amd?define(t):(e="undefined"!=typeof globalThis?globalThis:e||self).Panzoom=t()})(this,function(){"undefined"!=typeof window&&(window.NodeList&&!NodeList.prototype.forEach&&(NodeList.prototype.forEach=Array.prototype.forEach),"function"!=typeof window.CustomEvent)&&(window.CustomEvent=function(e,t){t=t||{bubbles:!1,cancelable:!1,detail:null};var n=document.createEvent("CustomEvent");return n.initCustomEvent(e,t.bubbles,t.cancelable,t.detail),n});let i="undefined"!=typeof document&&!!document.documentMode,a;let l=["webkit","moz","ms"],s={};function z(e){if(s[e])return s[e];var t=a=a||document.createElement("div").style;if(e in t)return s[e]=e;var n=e[0].toUpperCase()+e.slice(1);let o=l.length;for(;o--;){var r=""+l[o]+n;if(r in t)return s[e]=r}}function r(e,t){return parseFloat(t[z(e)])||0}function c(e,t,n=window.getComputedStyle(e)){var o="border"===t?"Width":"";return{left:r(t+"Left"+o,n),right:r(t+"Right"+o,n),top:r(t+"Top"+o,n),bottom:r(t+"Bottom"+o,n)}}function X(e,t,n){e.style[z(t)]=n}function Y(e){let t=e.parentNode;t&&1===t.nodeType||(t=document.documentElement);var n=window.getComputedStyle(e),o=window.getComputedStyle(t),r=e.getBoundingClientRect(),a=t.getBoundingClientRect();return{elem:{style:n,width:r.width,height:r.height,top:r.top,bottom:r.bottom,left:r.left,right:r.right,margin:c(e,"margin",n),border:c(e,"border",n)},parent:{style:o,width:a.width,height:a.height,top:a.top,bottom:a.bottom,left:a.left,right:a.right,padding:c(t,"padding",o),border:c(t,"border",o)}}}let C={down:"mousedown",move:"mousemove",up:"mouseup mouseleave"};function N(e,t,n,o){C[e].split(" ").forEach(e=>{t.addEventListener(e,n,o)})}function T(e,t,n){C[e].split(" ").forEach(e=>{t.removeEventListener(e,n)})}function $(e,t){let n=e.length;for(;n--;)if(e[n].pointerId===t.pointerId)return n;return-1}function L(e,t){let n;if(t.touches){n=0;for(var o of t.touches)o.pointerId=n++,L(e,o)}else-1<(n=$(e,t))&&e.splice(n,1),e.push(t)}function V(e){let t=(e=e.slice(0)).pop();for(var n;n=e.pop();)t={clientX:(n.clientX-t.clientX)/2+t.clientX,clientY:(n.clientY-t.clientY)/2+t.clientY};return t}function G(e){var t;return e.length<2?0:(t=e[0],e=e[1],Math.sqrt(Math.pow(Math.abs(e.clientX-t.clientX),2)+Math.pow(Math.abs(e.clientY-t.clientY),2)))}"undefined"!=typeof window&&("function"==typeof window.PointerEvent?C={down:"pointerdown",move:"pointermove",up:"pointerup pointerleave pointercancel"}:"function"==typeof window.TouchEvent&&(C={down:"touchstart",move:"touchmove",up:"touchend touchcancel"}));let I=/^http:[\w\.\/]+svg$/;
+/**
+   * Panzoom for panning and zooming elements using CSS transforms
+   * https://github.com/timmywil/panzoom
+   *
+   * Copyright Timmy Willison and other contributors
+   * Released under the MIT license
+   * https://github.com/timmywil/panzoom/blob/main/MIT-License.txt
+   *
+   */
+let R={animate:!1,canvas:!1,cursor:"move",disablePan:!1,disableZoom:!1,disableXAxis:!1,disableYAxis:!1,duration:200,easing:"ease-in-out",exclude:[],excludeClass:"panzoom-exclude",handleStartEvent:e=>{e.preventDefault(),e.stopPropagation()},maxScale:4,minScale:.125,overflow:"hidden",panOnlyWhenZoomed:!1,pinchAndPan:!1,relative:!1,setTransform:function(e,{x:t,y:n,scale:o,isSVG:r},a){X(e,"transform",`scale(${o}) translate(${t}px, ${n}px)`),r&&i&&(o=window.getComputedStyle(e).getPropertyValue("transform"),e.setAttribute("transform",o))},startX:0,startY:0,startScale:1,step:.3,touchAction:"none"};function e(d,p){if(!d)throw new Error("Panzoom requires an element as an argument");if(1!==d.nodeType)throw new Error("Panzoom requires an element with a nodeType of 1");if(!(e=>{let t=e;for(;t&&t.parentNode;){if(t.parentNode===document)return 1;t=t.parentNode instanceof ShadowRoot?t.parentNode.host:t.parentNode}})(d))throw new Error("Panzoom should be called on elements that have been attached to the DOM");p=Object.assign(Object.assign({},R),p);e=d;let c=I.test(e.namespaceURI)&&"svg"!==e.nodeName.toLowerCase();var e;let n=d.parentNode;n.style.overflow=p.overflow,n.style.userSelect="none",n.style.touchAction=p.touchAction,(p.canvas?n:d).style.cursor=p.cursor,d.style.userSelect="none",d.style.touchAction=p.touchAction,X(d,"transformOrigin","string"==typeof p.origin?p.origin:c?"0 0":"50% 50%");let u=0,m=0,f=1,a=!1;function r(e,t,n){n.silent||(n=new CustomEvent(e,{detail:t}),d.dispatchEvent(n))}function l(t,n,e){let o={x:u,y:m,scale:f,isSVG:c,originalEvent:e};return requestAnimationFrame(()=>{var e;"boolean"==typeof n.animate&&(n.animate?(e=n,X(d,"transition",`${z("transform")} ${e.duration}ms `+e.easing)):X(d,"transition","none")),n.setTransform(d,o,n),r(t,o,n),r("panzoomchange",o,n)}),o}function s(e,t,n,o){var r,a,i,l,s=Object.assign(Object.assign({},p),o),c={x:u,y:m,opts:s};return(null!=o&&o.force||!(s.disablePan||s.panOnlyWhenZoomed&&f===s.startScale))&&(e=parseFloat(e),t=parseFloat(t),s.disableXAxis||(c.x=(s.relative?u:0)+e),s.disableYAxis||(c.y=(s.relative?m:0)+t),s.contain&&(e=((t=(e=(o=Y(d)).elem.width/f)*n)-e)/2,a=((r=(a=o.elem.height/f)*n)-a)/2,"inside"===s.contain?(i=(-o.elem.margin.left-o.parent.padding.left+e)/n,l=(o.parent.width-t-o.parent.padding.left-o.elem.margin.left-o.parent.border.left-o.parent.border.right+e)/n,c.x=Math.max(Math.min(c.x,l),i),l=(-o.elem.margin.top-o.parent.padding.top+a)/n,i=(o.parent.height-r-o.parent.padding.top-o.elem.margin.top-o.parent.border.top-o.parent.border.bottom+a)/n,c.y=Math.max(Math.min(c.y,i),l)):"outside"===s.contain&&(i=(-(t-o.parent.width)-o.parent.padding.left-o.parent.border.left-o.parent.border.right+e)/n,l=(e-o.parent.padding.left)/n,c.x=Math.max(Math.min(c.x,l),i),t=(-(r-o.parent.height)-o.parent.padding.top-o.parent.border.top-o.parent.border.bottom+a)/n,e=(a-o.parent.padding.top)/n,c.y=Math.max(Math.min(c.y,e),t))),s.roundPixels)&&(c.x=Math.round(c.x),c.y=Math.round(c.y)),c}function h(n,o){var r,a=Object.assign(Object.assign({},p),o),i={scale:f,opts:a};if(null!=o&&o.force||!a.disableZoom){let e=p.minScale,t=p.maxScale;a.contain&&(a=(o=Y(d)).elem.width/f,r=o.elem.height/f,1<a)&&1<r&&(a=(o.parent.width-o.parent.border.left-o.parent.border.right)/a,o=(o.parent.height-o.parent.border.top-o.parent.border.bottom)/r,"inside"===p.contain?t=Math.min(t,a,o):"outside"===p.contain&&(e=Math.max(e,a,o))),i.scale=Math.min(Math.max(n,e),t)}return i}function i(e,t,n,o){e=s(e,t,f,n);return u!==e.x||m!==e.y?(u=e.x,m=e.y,l("panzoompan",e.opts,o)):{x:u,y:m,scale:f,isSVG:c,originalEvent:o}}function g(n,o,r){var a=h(n,o),i=a.opts;if(null!=o&&o.force||!i.disableZoom){n=a.scale;let e=u,t=m;i.focal&&(o=i.focal,e=(o.x/n-o.x/f+u*n)/n,t=(o.y/n-o.y/f+m*n)/n);a=s(e,t,n,{relative:!1,force:!0});return u=a.x,m=a.y,f=n,l("panzoomzoom",i,r)}}function t(e,t){t=Object.assign(Object.assign(Object.assign({},p),{animate:!0}),t);return g(f*Math.exp((e?1:-1)*t.step),t)}function v(e,t,n,o){var r=Y(d);const a=r.parent.width-r.parent.padding.left-r.parent.padding.right-r.parent.border.left-r.parent.border.right,i=r.parent.height-r.parent.padding.top-r.parent.padding.bottom-r.parent.border.top-r.parent.border.bottom;let l=t.clientX-r.parent.left-r.parent.padding.left-r.parent.border.left-r.elem.margin.left,s=t.clientY-r.parent.top-r.parent.padding.top-r.parent.border.top-r.elem.margin.top;c||(l-=r.elem.width/f/2,s-=r.elem.height/f/2);t={x:l/a*(a*e),y:s/i*(i*e)};return g(e,Object.assign(Object.assign({},n),{animate:!1,focal:t}),o)}g(p.startScale,{animate:!1,force:!0}),setTimeout(()=>{i(p.startX,p.startY,{animate:!1,force:!0})});let y,b,w,x,O,E,S=[];function o(e){((t,n)=>{for(let e=t;null!=e;e=e.parentNode)if(o=e,r=n.excludeClass,1===o.nodeType&&-1<` ${o=o,(o.getAttribute("class")||"").trim()} `.indexOf(` ${r} `)||-1<n.exclude.indexOf(e))return 1;var o,r})(e.target,p)||(L(S,e),a=!0,p.handleStartEvent(e),y=u,b=m,r("panzoomstart",{x:u,y:m,scale:f,isSVG:c,originalEvent:e},p),e=V(S),w=e.clientX,x=e.clientY,O=f,E=G(S))}function M(t){if(a&&void 0!==y&&void 0!==b&&void 0!==w&&void 0!==x){L(S,t);var n,o=V(S),r=1<S.length;let e=f;r&&(0===E&&(E=G(S)),n=G(S)-E,v(e=h(n*p.step/80+O).scale,o,{animate:!1},t)),r&&!p.pinchAndPan||i(y+(o.clientX-w)/e,b+(o.clientY-x)/e,{animate:!1},t)}}function A(e){1===S.length&&r("panzoomend",{x:u,y:m,scale:f,isSVG:c,originalEvent:e},p);var t=S;if(e.touches)for(;t.length;)t.pop();else{e=$(t,e);-1<e&&t.splice(e,1)}a&&(a=!1,y=b=w=x=void 0)}let P=!1;function j(){P||(P=!0,N("down",p.canvas?n:d,o),N("move",document,M,{passive:!0}),N("up",document,A,{passive:!0}))}return p.noBind||j(),{bind:j,destroy:function(){P=!1,T("down",p.canvas?n:d,o),T("move",document,M),T("up",document,A)},eventNames:C,getPan:()=>({x:u,y:m}),getScale:()=>f,getOptions:()=>{var e,t=p,n={};for(e in t)t.hasOwnProperty(e)&&(n[e]=t[e]);return n},handleDown:o,handleMove:M,handleUp:A,pan:i,reset:function(e){var e=Object.assign(Object.assign(Object.assign({},p),{animate:!0,force:!0}),e),t=(f=h(e.startScale,e).scale,s(e.startX,e.startY,f,e));return u=t.x,m=t.y,l("panzoomreset",e)},resetStyle:function(){n.style.overflow="",n.style.userSelect="",n.style.touchAction="",n.style.cursor="",d.style.cursor="",d.style.userSelect="",d.style.touchAction="",X(d,"transformOrigin","")},setOptions:function(e={}){for(var t in e)e.hasOwnProperty(t)&&(p[t]=e[t]);(e.hasOwnProperty("cursor")||e.hasOwnProperty("canvas"))&&(n.style.cursor=d.style.cursor="",(p.canvas?n:d).style.cursor=p.cursor),e.hasOwnProperty("overflow")&&(n.style.overflow=e.overflow),e.hasOwnProperty("touchAction")&&(n.style.touchAction=e.touchAction,d.style.touchAction=e.touchAction)},setStyle:(e,t)=>X(d,e,t),zoom:g,zoomIn:function(e){return t(!0,e)},zoomOut:function(e){return t(!1,e)},zoomToPoint:v,zoomWithWheel:function(e,t){e.preventDefault();var t=Object.assign(Object.assign(Object.assign({},p),t),{animate:!1}),n=(0===e.deltaY&&e.deltaX?e.deltaX:e.deltaY)<0?1:-1;return v(h(f*Math.exp(n*t.step/3),t).scale,e,t,e)}}}return e.defaultOptions=R,e});
+</script>
+<script>
 "use strict";
 
 // ===================================================================
@@ -6818,6 +6695,15 @@ function cellPoly(col, row) {
   return [[x0, rowTop], [x0 + GRID_CELL_W, rowTop], [rx, mid], [x0 + GRID_CELL_W, rowBot], [x0, rowBot], [x0 + NOTCH, mid]];
 }
 function pts2s(p) { return p.map((v) => v[0].toFixed(1) + "," + v[1].toFixed(1)).join(" "); }
+// Petit utilitaire (revue de code : factorise 12 occurrences
+// identiques de cette balise <image> SVG à travers le fichier) —
+// jamais un comportement nouveau, juste le même texte généré,
+// jusqu'ici recopié à chaque appel. href/xlink:href dupliqués pour la
+// compatibilité SVG1 (certains navigateurs/exports n'honorent que
+// l'un des deux) — inchangé.
+function drawImage(svg, path, x, y, w, h, extraAttrs = 'pointer-events="none"') {
+  svg.insertAdjacentHTML("beforeend", `<image href="${path}" xlink:href="${path}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" ${extraAttrs}/>`);
+}
 function cellCenter(col, row) {
   const p = cellPoly(col, row);
   const cx = (p[0][0] + p[1][0] + p[3][0] + p[4][0]) / 4 + NOTCH / 2;
@@ -7114,6 +7000,16 @@ function damageTokenBox(size, slotKey) {
   const s = scaledSize(DAMAGE_TOKEN_NATIVE_W, DAMAGE_TOKEN_NATIVE_H);
   return { x: board.x + f.x * board.w - s.w / 2, y: board.y + f.y * board.h - s.h / 2, w: s.w, h: s.h };
 }
+// Position d'un dé (taille DIE_DISPLAY_SIZE) centré sur un slot
+// fractionnaire d'une boîte donnée (command board, dashboard véhicule...)
+// — factorise un calcul répété à l'identique à 6 endroits de
+// renderDashboards (retour de Mayrik, revue de code). `cx`/`cy` (le
+// centre, avant recentrage) restent utiles à l'appelant pour la
+// rotation SVG (`transform="rotate(deg cx cy)"`), donc renvoyés aussi.
+function slotDieOrigin(box, fraction) {
+  const cx = box.x + fraction.x * box.w, cy = box.y + fraction.y * box.h;
+  return { x: cx - DIE_DISPLAY_SIZE / 2, y: cy - DIE_DISPLAY_SIZE / 2, cx, cy };
+}
 // Boîte englobante de TOUS les boards d'un même joueur, jetons dégât
 // compris (repère local ci-dessus) — sert à empiler les lignes des
 // différents joueurs sans chevauchement, quelle que soit la géométrie
@@ -7384,7 +7280,7 @@ function renderDashboards() {
     // dessous des autres à l'emboîtement) ---
     const cmd = at("command");
     const cmdPath = dashboardImagePath(playerName, "command");
-    svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${cmd.x.toFixed(1)}" y="${cmd.y.toFixed(1)}" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" pointer-events="none"/>`);
+    drawImage(svg, cmdPath, cmd.x, cmd.y, cmd.w, cmd.h);
 
     // Bouton "Jouer le tour de l'IA" — retour de Mayrik : plus de
     // question texte séparée dans le panneau. Position calculée ici
@@ -7409,9 +7305,7 @@ function renderDashboards() {
     if (playerName === HUMAN && commandTypeStep) {
       ["nitro", "drift", "repair", "airstrike"].forEach((type) => {
         if (!eligibleCommandTypes.has(type)) return;
-        const f = COMMAND_SLOT_FRACTION[type];
-        const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
-        const sx = cx - DIE_DISPLAY_SIZE / 2, sy = cy - DIE_DISPLAY_SIZE / 2;
+        const { x: sx, y: sy, cx, cy } = slotDieOrigin(cmd, COMMAND_SLOT_FRACTION[type]);
         const rotAttr = SLOT_ROTATION[type] ? ` transform="rotate(${SLOT_ROTATION[type]} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
         svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
         svg.lastElementChild.addEventListener("click", () => { pickCommandChoice(type); render(); });
@@ -7429,9 +7323,7 @@ function renderDashboards() {
     // END TURN/Coast, retour de Mayrik : ne restait affiché ni pour le
     // joueur ni pour l'IA jusqu'à la fin du round.
     if (playerName === HUMAN && ctx && sel.commandType) {
-      const f = COMMAND_SLOT_FRACTION[sel.commandType];
-      const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
-      const dieX = cx - DIE_DISPLAY_SIZE / 2, dieY = cy - DIE_DISPLAY_SIZE / 2;
+      const { x: dieX, y: dieY } = slotDieOrigin(cmd, COMMAND_SLOT_FRACTION[sel.commandType]);
       const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
       svg.insertAdjacentHTML("beforeend", dieMarkup(sel.commandDieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[sel.commandType]));
       if (isCancelable) {
@@ -7441,16 +7333,12 @@ function renderDashboards() {
       // Même affichage "vivant" que côté humain (retour de Mayrik) —
       // visible dès que la décision de l'IA est connue, avant même le
       // début du mouvement. Jamais cliquable.
-      const f = COMMAND_SLOT_FRACTION[currentAiDecision.command.type];
-      const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
-      const dieX = cx - DIE_DISPLAY_SIZE / 2, dieY = cy - DIE_DISPLAY_SIZE / 2;
+      const { x: dieX, y: dieY } = slotDieOrigin(cmd, COMMAND_SLOT_FRACTION[currentAiDecision.command.type]);
       svg.insertAdjacentHTML("beforeend", dieMarkup(currentAiDecision.command.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[currentAiDecision.command.type]));
     } else {
       const cd = commandDieState[playerName];
       if (cd && cd.round === G.roundState.roundNumber) {
-        const f = COMMAND_SLOT_FRACTION[cd.commandType];
-        const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
-        const dieX = cx - DIE_DISPLAY_SIZE / 2, dieY = cy - DIE_DISPLAY_SIZE / 2;
+        const { x: dieX, y: dieY } = slotDieOrigin(cmd, COMMAND_SLOT_FRACTION[cd.commandType]);
         svg.insertAdjacentHTML("beforeend", dieMarkup(cd.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[cd.commandType]));
       }
     }
@@ -7461,12 +7349,11 @@ function renderDashboards() {
     // haut. Dessiné APRÈS le command board (par-dessus à l'emboîtement).
     const dice = at("diceboard");
     const dicePath = dashboardImagePath(playerName, "diceboard");
-    svg.insertAdjacentHTML("beforeend", `<image href="${dicePath}" xlink:href="${dicePath}" x="${dice.x.toFixed(1)}" y="${dice.y.toFixed(1)}" width="${dice.w.toFixed(1)}" height="${dice.h.toFixed(1)}" pointer-events="none"/>`);
+    drawImage(svg, dicePath, dice.x, dice.y, dice.w, dice.h);
     diceboardSlots(playerName).forEach((value, i) => {
       if (value === null) return;
       const slotKey = "slot" + i;
-      const f = DICEBOARD_SLOT_FRACTION[slotKey];
-      const dx = dice.x + f.x * dice.w - DIE_DISPLAY_SIZE / 2, dy = dice.y + f.y * dice.h - DIE_DISPLAY_SIZE / 2;
+      const { x: dx, y: dy } = slotDieOrigin(dice, DICEBOARD_SLOT_FRACTION[slotKey]);
       const isClickable = playerName === HUMAN && (dieStep || commandDieStep);
       svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
       if (isClickable) {
@@ -7498,10 +7385,9 @@ function renderDashboards() {
       // différentes, retour de Mayrik : il paraissait plus petit).
       const roundStartPlayer = G.roundState.playerOrder[G.roundState.roundStartIndex];
       if (size === "small" && G.roundState.roadDie && playerName === roundStartPlayer) {
-        const rdX = dim.x + ROAD_DIE_FRACTION.x * dim.w - DIE_DISPLAY_SIZE / 2;
-        const rdY = dim.y + ROAD_DIE_FRACTION.y * dim.h - DIE_DISPLAY_SIZE / 2;
+        const { x: rdX, y: rdY } = slotDieOrigin(dim, ROAD_DIE_FRACTION);
         const rdPath = `../images/dice/die-fx-road-${G.roundState.roadDie}.webp`;
-        svg.insertAdjacentHTML("beforeend", `<image href="${rdPath}" xlink:href="${rdPath}" x="${rdX.toFixed(1)}" y="${rdY.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" pointer-events="none"/>`);
+        drawImage(svg, rdPath, rdX, rdY, DIE_DISPLAY_SIZE, DIE_DISPLAY_SIZE);
       }
 
       const car = G.allCars.find((c) => c.owner === playerName && c.size === size && c.status !== "eliminated");
@@ -7510,7 +7396,7 @@ function renderDashboards() {
 
       if (car) {
         const imgPath = dashboardImagePath(playerName, kind);
-        svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${dim.x.toFixed(1)}" y="${dim.y.toFixed(1)}" width="${dim.w.toFixed(1)}" height="${dim.h.toFixed(1)}" pointer-events="none"/>`);
+        drawImage(svg, imgPath, dim.x, dim.y, dim.w, dim.h);
       }
       // Véhicule éliminé (car === undefined ici) -> emplacement laissé
       // vide, voir spec-dashboards.md section 2.
@@ -7538,7 +7424,7 @@ function renderDashboards() {
             const rx = box.x + box.w / 2 - rw / 2, ry = box.y + box.h / 2 - rh / 2;
             svg.insertAdjacentHTML("beforeend", `<rect x="${rx.toFixed(1)}" y="${ry.toFixed(1)}" width="${rw.toFixed(1)}" height="${rh.toFixed(1)}" rx="6" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="2"/>`);
           }
-          svg.insertAdjacentHTML("beforeend", `<image href="${damagePath}" xlink:href="${damagePath}" x="${box.x.toFixed(1)}" y="${box.y.toFixed(1)}" width="${box.w.toFixed(1)}" height="${box.h.toFixed(1)}" class="${isRepairable ? "clickable" : ""}" ${isRepairable ? "" : 'pointer-events="none"'}/>`);
+          drawImage(svg, damagePath, box.x, box.y, box.w, box.h, isRepairable ? 'class="clickable"' : 'pointer-events="none"');
           if (isRepairable) svg.lastElementChild.addEventListener("click", () => { pickRepairTarget(car, tokenValue); render(); });
         };
         const slots = damageSlots(car);
@@ -7553,9 +7439,7 @@ function renderDashboards() {
         // tour terminé (voir finishHumanTurn), jamais pour la sélection
         // elle-même.
         const slotKey = ctx.mode === "coast" ? "coast1" : "any";
-        const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const cx = dim.x + f.x * dim.w, cy = dim.y + f.y * dim.h;
-        const sx = cx - DIE_DISPLAY_SIZE / 2, sy = cy - DIE_DISPLAY_SIZE / 2;
+        const { x: sx, y: sy, cx, cy } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
         const rotAttr = SLOT_ROTATION[slotKey] ? ` transform="rotate(${SLOT_ROTATION[slotKey]} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
         svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
         svg.lastElementChild.addEventListener("click", () => { pickCar(car); render(); });
@@ -7578,8 +7462,7 @@ function renderDashboards() {
         // bascule vers coast2 (stockage définitif) qu'une fois le tour
         // terminé, voir finishHumanTurn/coastDieState ci-dessous.
         const slotKey = sel.mode === "coast" ? "coast1" : "any";
-        const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const dieX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+        const { x: dieX, y: dieY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
         const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
         svg.insertAdjacentHTML("beforeend", dieMarkup(sel.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
         if (isCancelable) {
@@ -7592,8 +7475,7 @@ function renderDashboards() {
         // interaction possible sur la décision de l'IA), sinon même
         // convention coast1 que côté humain.
         const slotKey = currentAiDecision.isCoast ? "coast1" : "any";
-        const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const dieX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+        const { x: dieX, y: dieY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
         svg.insertAdjacentHTML("beforeend", dieMarkup(currentAiDecision.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[slotKey]));
       }
 
@@ -7605,8 +7487,7 @@ function renderDashboards() {
       if (car) {
         const et = endTurnDieState[car.id];
         if (et && et.round === G.roundState.roundNumber) {
-          const f = VEHICLE_SLOT_FRACTION[size].endTurn;
-          const etX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, etY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+          const { x: etX, y: etY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size].endTurn);
           svg.insertAdjacentHTML("beforeend", dieMarkup(et.dieValue, PLAYER_CAR_COLOR[playerName], etX, etY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION.endTurn));
         }
       }
@@ -7621,8 +7502,7 @@ function renderDashboards() {
           ["coast1", "coast2"].forEach((slotKey, idx) => {
             const dieValue = cd.slots[idx];
             if (dieValue === null || dieValue === undefined) return;
-            const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-            const cdX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, cdY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+            const { x: cdX, y: cdY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
             svg.insertAdjacentHTML("beforeend", dieMarkup(dieValue, PLAYER_CAR_COLOR[playerName], cdX, cdY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[slotKey]));
           });
         }
@@ -8839,14 +8719,14 @@ function renderBoard() {
     targets.forEach((target) => {
       const { cx, cy } = cellCenter(target.col, target.row);
       const markerPath = `../images/markers/target-${target.size}.webp`;
-      svg.insertAdjacentHTML("beforeend", `<image href="${markerPath}" xlink:href="${markerPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, markerPath, cx - MARKER_ICON_SIZE / 2, cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { onPickTarget(target); render(); });
     });
     const rear = getRearArc(shooterColRow).find((a) => a.name === "rear");
     if (rear && isOnBoard(board(), rear.col, rear.row)) {
       const { cx, cy } = cellCenter(rear.col, rear.row);
       const noPath = "../images/markers/marker-no.webp";
-      svg.insertAdjacentHTML("beforeend", `<image href="${noPath}" xlink:href="${noPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, noPath, cx - MARKER_ICON_SIZE / 2, cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { onDecline(); render(); });
     }
   }
@@ -8900,7 +8780,7 @@ function renderBoard() {
     const { ctx, resume } = pendingSlam;
     const { cx, cy } = cellCenter(ctx.topCar.col, ctx.topCar.row);
     const rerollPath = "../images/markers/marker-reroll.webp";
-    svg.insertAdjacentHTML("beforeend", `<image href="${rerollPath}" xlink:href="${rerollPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+    drawImage(svg, rerollPath, cx - MARKER_ICON_SIZE / 2, cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
     svg.lastElementChild.addEventListener("click", () => { resume(true); render(); });
     // Face du dé Slam SEULE (pas le dé Direction, qui reste invisible)
     // sur la case de DESTINATION désignée par le dé Direction — retour
@@ -8917,7 +8797,7 @@ function renderBoard() {
     const dest = { col: ctx.topCar.col + delta.dCol, row: ctx.topCar.row + delta.dRow };
     const dc = cellCenter(dest.col, dest.row);
     const slamPath = `../images/dice/die-fx-slam-${ctx.slamRoll}.webp`;
-    svg.insertAdjacentHTML("beforeend", `<image href="${slamPath}" xlink:href="${slamPath}" x="${(dc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(dc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>`);
+    drawImage(svg, slamPath, dc.cx - MARKER_ICON_SIZE / 2, dc.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE);
     const rearArc = getRearArc(ctx.largerCar);
     const rear = rearArc.find((a) => a.name === "rear");
     // Retour de Mayrik : si la case de destination du dé Slam est
@@ -8934,7 +8814,7 @@ function renderBoard() {
       // pour le joueur formulé comme "j'accepte ce résultat" plutôt
       // que "je refuse la relance".
       const yesPath = "../images/markers/marker-yes.webp";
-      svg.insertAdjacentHTML("beforeend", `<image href="${yesPath}" xlink:href="${yesPath}" x="${(rc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, yesPath, rc.cx - MARKER_ICON_SIZE / 2, rc.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { resume(false); render(); });
     }
   }
@@ -8971,14 +8851,14 @@ function renderBoard() {
     if (front) {
       const fc = cellCenter(front.col, front.row);
       const roadPath = `../images/markers/marker-road-${G.roundState.roadDie}.webp`;
-      svg.insertAdjacentHTML("beforeend", `<image href="${roadPath}" xlink:href="${roadPath}" x="${(fc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(fc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, roadPath, fc.cx - MARKER_ICON_SIZE / 2, fc.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { acceptRoadBonus(); render(); });
     }
     const rearRB = getRearArc(sel.car).find((a) => a.name === "rear");
     if (rearRB && isOnBoard(board(), rearRB.col, rearRB.row)) {
       const rc2 = cellCenter(rearRB.col, rearRB.row);
       const noPath2 = "../images/markers/marker-no.webp";
-      svg.insertAdjacentHTML("beforeend", `<image href="${noPath2}" xlink:href="${noPath2}" x="${(rc2.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc2.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, noPath2, rc2.cx - MARKER_ICON_SIZE / 2, rc2.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { declineRoadBonus(); render(); });
     }
   }
@@ -9015,6 +8895,23 @@ function choiceButton(label, onClick, selected) {
 // de retour en arrière — un dé assigné ne se rend pas.
 const PRE_COMMIT_STEPS = new Set(["car", "die", "command", "command-die", "repair-target", "airstrike-placement", "airstrike-shoot-arc", "commit"]);
 
+// ATTENTION (retour de revue de code) : #panel est display:none en CSS
+// (template.html) — le joueur ne voit et ne clique JAMAIS rien de ce
+// que cette fonction construit ci-dessous. Chaque interaction a son
+// propre point d'accroche VISIBLE ailleurs (renderBoard/renderDashboards
+// — dés, voitures, cases, jetons, cibles de tir cliqués directement).
+// Cette fonction remplit malgré tout DEUX rôles bien réels :
+//   1. Effets de bord ESSENTIELS, lus dans tout le reste du fichier
+//      (sel.mode, sel.commandAvailable — voir leurs usages ailleurs
+//      dans ui-script.js) et le passage automatique du tour humain
+//      (passHumanTurnIfImpossible) — À NE JAMAIS RETIRER.
+//   2. Construction du contenu de #panel — sans effet visible pour le
+//      joueur, mais plusieurs test-ui-*.js lisent ce texte comme
+//      vérification indirecte (ex. "le panneau propose bien Repair").
+//      Retirer cette partie est possible mais demande de d'abord faire
+//      migrer ces tests vers une vérification sur l'élément VISIBLE
+//      correspondant (dashboard/plateau) — pas fait ici pour ne pas
+//      risquer de perdre leur couverture sans un vrai remplacement.
 function renderPanel() {
   const panel = document.getElementById("panel");
   panel.innerHTML = "";
@@ -9164,6 +9061,96 @@ function renderPanel() {
   }
 }
 
+// ===================================================================
+// ZONE 1 — Plateau de jeu : zoom FIXE (1 tuile = largeur écran),
+// défilement horizontal natif du conteneur (voir le commentaire CSS
+// détaillé dans template.html). setupBoardScroll() pose la largeur
+// réelle du SVG une fois pour toutes (BOARD_VIEW est une constante,
+// jamais recalculée en cours de partie) — idempotent, sans risque à
+// rappeler à chaque render().
+// ===================================================================
+let boardScrollReady = false;
+function setupBoardScroll() {
+  if (boardScrollReady) return;
+  const svg = document.getElementById("board");
+  const oneTileWidth = TILE_NATIVE_COLS * IMG_CELL_W;
+  const ratio = BOARD_VIEW.w / oneTileWidth; // ~3 tuiles sur toute la largeur assemblée
+  svg.style.width = (ratio * 100).toFixed(2) + "%";
+  boardScrollReady = true;
+}
+
+// Curseur de position (PAS un zoom, retour de Mayrik) : simple
+// raccourci + repère visuel de la position horizontale sur le plateau
+// assemblé complet, synchronisé dans les deux sens avec scrollLeft.
+function syncBoardSlider() {
+  const viewport = document.getElementById("board-viewport");
+  const slider = document.getElementById("board-position-slider");
+  const maxScroll = viewport.scrollWidth - viewport.clientWidth;
+  slider.value = maxScroll > 0 ? Math.round((viewport.scrollLeft / maxScroll) * 1000) : 0;
+}
+function onBoardSliderInput() {
+  const viewport = document.getElementById("board-viewport");
+  const slider = document.getElementById("board-position-slider");
+  const maxScroll = viewport.scrollWidth - viewport.clientWidth;
+  viewport.scrollLeft = (Number(slider.value) / 1000) * maxScroll;
+}
+
+// ===================================================================
+// ZONE 2 — Bande d'info : structure posée maintenant (retour de
+// Mayrik), contenu minimal pour l'instant (round + joueur actif) en
+// remplacement des anciens badges texte retirés — sera étoffée dans
+// un chantier séparé.
+// ===================================================================
+function updateInfoBand(cp) {
+  const el = document.getElementById("info-band");
+  if (!el) return;
+  el.textContent = gameOver
+    ? "PARTIE TERMINÉE"
+    : cp ? `ROUND ${G.roundState.roundNumber} — ${playerLabel(cp).toUpperCase()}` : "";
+}
+
+// ===================================================================
+// ZONE 3 — Dashboards des joueurs : librement zoomables/déplaçables
+// (Panzoom, vendorisé — voir tools/panzoom.min.js), CONTENUS à cette
+// seule zone (retour de Mayrik : le pincement tactile du téléphone
+// zoomait toute la page avant ce correctif). initDashboardsPanzoom()
+// tourne une seule fois au démarrage ; updateDashboardsViewportHeight()
+// tourne à CHAQUE render() car le nombre de lignes (donc la hauteur du
+// contenu) dépend du nombre de joueurs.
+// ===================================================================
+let dashboardsPanzoom = null;
+function initDashboardsPanzoom() {
+  if (typeof Panzoom === "undefined") return; // filet de sécurité : jamais bloquant si la lib ne charge pas
+  try {
+    const svg = document.getElementById("dashboards");
+    dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: "outside", canvas: true });
+    const viewport = document.getElementById("dashboards-viewport");
+    viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
+  } catch (e) {
+    // Best-effort : le zoom/déplacement de la zone dashboards est un
+    // confort, jamais une dépendance dure — une IA/un environnement où
+    // Panzoom échouerait à s'initialiser (ex. requestAnimationFrame
+    // absent, comme dans jsdom) ne doit jamais empêcher le jeu de
+    // fonctionner par ailleurs.
+    dashboardsPanzoom = null;
+  }
+}
+
+// Cale la hauteur du conteneur pour cadrer EXACTEMENT l'ensemble des
+// dashboards à l'échelle 1 (comme aujourd'hui, retour de Mayrik) —
+// calculé depuis le viewBox plutôt que mesuré sur le DOM, pour rester
+// correct même si un zoom Panzoom est déjà appliqué au moment de
+// l'appel (measurer directement donnerait la taille TRANSFORMÉE, pas
+// la taille de base).
+function updateDashboardsViewportHeight() {
+  const svg = document.getElementById("dashboards");
+  const viewport = document.getElementById("dashboards-viewport");
+  const vb = svg.viewBox.baseVal;
+  if (!vb || vb.width === 0) return;
+  const naturalHeight = viewport.clientWidth * (vb.height / vb.width);
+  viewport.style.height = naturalHeight.toFixed(1) + "px";
+}
+
 function render() {
   saveGameState(); // point de contrôle sûr : voir le commentaire détaillé près de SAVE_KEY
 
@@ -9175,9 +9162,12 @@ function render() {
   document.getElementById("commandUsedBadge").textContent = cp ? `Command déjà utilisée par ${cp} : ${G.roundState.commandUsedThisRound[cp] ? "oui" : "non"}` : "";
   document.getElementById("dicePool").innerHTML = cp ? (G.roundState.dicePool[cp] || []).map((d) => `<span class="die">${d}</span>`).join("") : "";
 
+  setupBoardScroll();
   renderBoard();
   renderDashboards();
   renderPanel();
+  updateInfoBand(cp);
+  updateDashboardsViewportHeight();
 
   document.getElementById("damageRow").innerHTML = G.allCars
     .filter((car) => car.status !== "eliminated" && !car.isWreck) // les épaves n'ont aucun affichage UI (retour de Mayrik)
@@ -9196,6 +9186,15 @@ function render() {
 // ===================================================================
 // DÉMARRAGE
 // ===================================================================
+// Mise en page des 3 zones (retour de Mayrik) : câblage des écouteurs
+// une seule fois ici, jamais répété dans render() (contrairement à
+// setupBoardScroll()/updateDashboardsViewportHeight(), rappelées à
+// chaque rendu — voir leurs commentaires respectifs).
+initDashboardsPanzoom();
+document.getElementById("board-viewport").addEventListener("scroll", syncBoardSlider);
+document.getElementById("board-position-slider").addEventListener("input", onBoardSliderInput);
+window.addEventListener("resize", () => { syncBoardSlider(); if (typeof G !== "undefined" && G) updateDashboardsViewportHeight(); });
+
 // Écran d'accueil (retour de Mayrik) : visible par défaut (voir
 // template.html), masqué dès qu'une partie démarre — que ce soit par
 // un choix explicite (bouton 1/2/3 IA) ou par la reprise d'une

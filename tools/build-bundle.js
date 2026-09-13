@@ -44,10 +44,9 @@ aiSrc = aiSrc.replace(
 // --- human-decision.js ---
 let humanSrc = fs.readFileSync(path.join(repoRoot, "human-decision.js"), "utf8");
 humanSrc = stripRequiresAndDestructuring(humanSrc, [
-  'const engine = require("./engine.js");\nconst ai = require("./ai-decision.js");\n'
+  'const engine = require("./engine.js");\n'
 ]);
 humanSrc = humanSrc.replace(/const \{([\s\S]*?)\} = engine;/, "// (destructuring engine.js retiré pour le bundle navigateur — noms déjà globaux)");
-humanSrc = humanSrc.replace(/const \{([\s\S]*?)\} = ai;/, "// (destructuring ai-decision.js retiré pour le bundle navigateur — noms déjà globaux)");
 
 // --- turn-executor.js ---
 let executorSrc = fs.readFileSync(path.join(repoRoot, "turn-executor.js"), "utf8");
@@ -107,10 +106,18 @@ console.log("Bundle écrit :", outPath, "(" + bundle.length + " octets)");
 // à le faire à la main à chaque régénération.
 const templatePath = path.join(__dirname, "template.html");
 const uiScriptPath = path.join(__dirname, "ui-script.js");
+const panzoomPath = path.join(__dirname, "panzoom.min.js");
 if (fs.existsSync(templatePath) && fs.existsSync(uiScriptPath)) {
   const template = fs.readFileSync(templatePath, "utf8");
   const uiScript = fs.readFileSync(uiScriptPath, "utf8");
-  const finalHtml = template.replace("__ENGINE_BUNDLE__", bundle).replace("__UI_SCRIPT__", uiScript);
+  // Panzoom (retour de Mayrik, zoom/défilement de la zone 3) : petite
+  // bibliothèque tierce (~3.7ko gzippé, zéro dépendance, gère
+  // nativement SVG + pincement tactile) vendorisée ici plutôt que
+  // chargée depuis un CDN externe — cohérent avec le reste du projet
+  // (tout tient dans un seul fichier autonome, aucune dépendance
+  // réseau au chargement).
+  const panzoomSrc = fs.existsSync(panzoomPath) ? fs.readFileSync(panzoomPath, "utf8") : "";
+  const finalHtml = template.replace("__ENGINE_BUNDLE__", bundle).replace("__UI_SCRIPT__", uiScript).replace("__PANZOOM_BUNDLE__", panzoomSrc);
   const finalPath = path.join(__dirname, "prototype.html");
   fs.writeFileSync(finalPath, finalHtml);
   console.log("Prototype assemblé :", finalPath, "(" + finalHtml.length + " octets)");

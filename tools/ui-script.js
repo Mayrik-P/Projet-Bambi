@@ -150,6 +150,15 @@ function cellPoly(col, row) {
   return [[x0, rowTop], [x0 + GRID_CELL_W, rowTop], [rx, mid], [x0 + GRID_CELL_W, rowBot], [x0, rowBot], [x0 + NOTCH, mid]];
 }
 function pts2s(p) { return p.map((v) => v[0].toFixed(1) + "," + v[1].toFixed(1)).join(" "); }
+// Petit utilitaire (revue de code : factorise 12 occurrences
+// identiques de cette balise <image> SVG à travers le fichier) —
+// jamais un comportement nouveau, juste le même texte généré,
+// jusqu'ici recopié à chaque appel. href/xlink:href dupliqués pour la
+// compatibilité SVG1 (certains navigateurs/exports n'honorent que
+// l'un des deux) — inchangé.
+function drawImage(svg, path, x, y, w, h, extraAttrs = 'pointer-events="none"') {
+  svg.insertAdjacentHTML("beforeend", `<image href="${path}" xlink:href="${path}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" ${extraAttrs}/>`);
+}
 function cellCenter(col, row) {
   const p = cellPoly(col, row);
   const cx = (p[0][0] + p[1][0] + p[3][0] + p[4][0]) / 4 + NOTCH / 2;
@@ -446,6 +455,16 @@ function damageTokenBox(size, slotKey) {
   const s = scaledSize(DAMAGE_TOKEN_NATIVE_W, DAMAGE_TOKEN_NATIVE_H);
   return { x: board.x + f.x * board.w - s.w / 2, y: board.y + f.y * board.h - s.h / 2, w: s.w, h: s.h };
 }
+// Position d'un dé (taille DIE_DISPLAY_SIZE) centré sur un slot
+// fractionnaire d'une boîte donnée (command board, dashboard véhicule...)
+// — factorise un calcul répété à l'identique à 6 endroits de
+// renderDashboards (retour de Mayrik, revue de code). `cx`/`cy` (le
+// centre, avant recentrage) restent utiles à l'appelant pour la
+// rotation SVG (`transform="rotate(deg cx cy)"`), donc renvoyés aussi.
+function slotDieOrigin(box, fraction) {
+  const cx = box.x + fraction.x * box.w, cy = box.y + fraction.y * box.h;
+  return { x: cx - DIE_DISPLAY_SIZE / 2, y: cy - DIE_DISPLAY_SIZE / 2, cx, cy };
+}
 // Boîte englobante de TOUS les boards d'un même joueur, jetons dégât
 // compris (repère local ci-dessus) — sert à empiler les lignes des
 // différents joueurs sans chevauchement, quelle que soit la géométrie
@@ -716,7 +735,7 @@ function renderDashboards() {
     // dessous des autres à l'emboîtement) ---
     const cmd = at("command");
     const cmdPath = dashboardImagePath(playerName, "command");
-    svg.insertAdjacentHTML("beforeend", `<image href="${cmdPath}" xlink:href="${cmdPath}" x="${cmd.x.toFixed(1)}" y="${cmd.y.toFixed(1)}" width="${cmd.w.toFixed(1)}" height="${cmd.h.toFixed(1)}" pointer-events="none"/>`);
+    drawImage(svg, cmdPath, cmd.x, cmd.y, cmd.w, cmd.h);
 
     // Bouton "Jouer le tour de l'IA" — retour de Mayrik : plus de
     // question texte séparée dans le panneau. Position calculée ici
@@ -741,9 +760,7 @@ function renderDashboards() {
     if (playerName === HUMAN && commandTypeStep) {
       ["nitro", "drift", "repair", "airstrike"].forEach((type) => {
         if (!eligibleCommandTypes.has(type)) return;
-        const f = COMMAND_SLOT_FRACTION[type];
-        const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
-        const sx = cx - DIE_DISPLAY_SIZE / 2, sy = cy - DIE_DISPLAY_SIZE / 2;
+        const { x: sx, y: sy, cx, cy } = slotDieOrigin(cmd, COMMAND_SLOT_FRACTION[type]);
         const rotAttr = SLOT_ROTATION[type] ? ` transform="rotate(${SLOT_ROTATION[type]} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
         svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
         svg.lastElementChild.addEventListener("click", () => { pickCommandChoice(type); render(); });
@@ -761,9 +778,7 @@ function renderDashboards() {
     // END TURN/Coast, retour de Mayrik : ne restait affiché ni pour le
     // joueur ni pour l'IA jusqu'à la fin du round.
     if (playerName === HUMAN && ctx && sel.commandType) {
-      const f = COMMAND_SLOT_FRACTION[sel.commandType];
-      const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
-      const dieX = cx - DIE_DISPLAY_SIZE / 2, dieY = cy - DIE_DISPLAY_SIZE / 2;
+      const { x: dieX, y: dieY } = slotDieOrigin(cmd, COMMAND_SLOT_FRACTION[sel.commandType]);
       const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
       svg.insertAdjacentHTML("beforeend", dieMarkup(sel.commandDieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[sel.commandType]));
       if (isCancelable) {
@@ -773,16 +788,12 @@ function renderDashboards() {
       // Même affichage "vivant" que côté humain (retour de Mayrik) —
       // visible dès que la décision de l'IA est connue, avant même le
       // début du mouvement. Jamais cliquable.
-      const f = COMMAND_SLOT_FRACTION[currentAiDecision.command.type];
-      const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
-      const dieX = cx - DIE_DISPLAY_SIZE / 2, dieY = cy - DIE_DISPLAY_SIZE / 2;
+      const { x: dieX, y: dieY } = slotDieOrigin(cmd, COMMAND_SLOT_FRACTION[currentAiDecision.command.type]);
       svg.insertAdjacentHTML("beforeend", dieMarkup(currentAiDecision.command.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[currentAiDecision.command.type]));
     } else {
       const cd = commandDieState[playerName];
       if (cd && cd.round === G.roundState.roundNumber) {
-        const f = COMMAND_SLOT_FRACTION[cd.commandType];
-        const cx = cmd.x + f.x * cmd.w, cy = cmd.y + f.y * cmd.h;
-        const dieX = cx - DIE_DISPLAY_SIZE / 2, dieY = cy - DIE_DISPLAY_SIZE / 2;
+        const { x: dieX, y: dieY } = slotDieOrigin(cmd, COMMAND_SLOT_FRACTION[cd.commandType]);
         svg.insertAdjacentHTML("beforeend", dieMarkup(cd.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[cd.commandType]));
       }
     }
@@ -793,12 +804,11 @@ function renderDashboards() {
     // haut. Dessiné APRÈS le command board (par-dessus à l'emboîtement).
     const dice = at("diceboard");
     const dicePath = dashboardImagePath(playerName, "diceboard");
-    svg.insertAdjacentHTML("beforeend", `<image href="${dicePath}" xlink:href="${dicePath}" x="${dice.x.toFixed(1)}" y="${dice.y.toFixed(1)}" width="${dice.w.toFixed(1)}" height="${dice.h.toFixed(1)}" pointer-events="none"/>`);
+    drawImage(svg, dicePath, dice.x, dice.y, dice.w, dice.h);
     diceboardSlots(playerName).forEach((value, i) => {
       if (value === null) return;
       const slotKey = "slot" + i;
-      const f = DICEBOARD_SLOT_FRACTION[slotKey];
-      const dx = dice.x + f.x * dice.w - DIE_DISPLAY_SIZE / 2, dy = dice.y + f.y * dice.h - DIE_DISPLAY_SIZE / 2;
+      const { x: dx, y: dy } = slotDieOrigin(dice, DICEBOARD_SLOT_FRACTION[slotKey]);
       const isClickable = playerName === HUMAN && (dieStep || commandDieStep);
       svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
       if (isClickable) {
@@ -830,10 +840,9 @@ function renderDashboards() {
       // différentes, retour de Mayrik : il paraissait plus petit).
       const roundStartPlayer = G.roundState.playerOrder[G.roundState.roundStartIndex];
       if (size === "small" && G.roundState.roadDie && playerName === roundStartPlayer) {
-        const rdX = dim.x + ROAD_DIE_FRACTION.x * dim.w - DIE_DISPLAY_SIZE / 2;
-        const rdY = dim.y + ROAD_DIE_FRACTION.y * dim.h - DIE_DISPLAY_SIZE / 2;
+        const { x: rdX, y: rdY } = slotDieOrigin(dim, ROAD_DIE_FRACTION);
         const rdPath = `../images/dice/die-fx-road-${G.roundState.roadDie}.webp`;
-        svg.insertAdjacentHTML("beforeend", `<image href="${rdPath}" xlink:href="${rdPath}" x="${rdX.toFixed(1)}" y="${rdY.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" pointer-events="none"/>`);
+        drawImage(svg, rdPath, rdX, rdY, DIE_DISPLAY_SIZE, DIE_DISPLAY_SIZE);
       }
 
       const car = G.allCars.find((c) => c.owner === playerName && c.size === size && c.status !== "eliminated");
@@ -842,7 +851,7 @@ function renderDashboards() {
 
       if (car) {
         const imgPath = dashboardImagePath(playerName, kind);
-        svg.insertAdjacentHTML("beforeend", `<image href="${imgPath}" xlink:href="${imgPath}" x="${dim.x.toFixed(1)}" y="${dim.y.toFixed(1)}" width="${dim.w.toFixed(1)}" height="${dim.h.toFixed(1)}" pointer-events="none"/>`);
+        drawImage(svg, imgPath, dim.x, dim.y, dim.w, dim.h);
       }
       // Véhicule éliminé (car === undefined ici) -> emplacement laissé
       // vide, voir spec-dashboards.md section 2.
@@ -870,7 +879,7 @@ function renderDashboards() {
             const rx = box.x + box.w / 2 - rw / 2, ry = box.y + box.h / 2 - rh / 2;
             svg.insertAdjacentHTML("beforeend", `<rect x="${rx.toFixed(1)}" y="${ry.toFixed(1)}" width="${rw.toFixed(1)}" height="${rh.toFixed(1)}" rx="6" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="2"/>`);
           }
-          svg.insertAdjacentHTML("beforeend", `<image href="${damagePath}" xlink:href="${damagePath}" x="${box.x.toFixed(1)}" y="${box.y.toFixed(1)}" width="${box.w.toFixed(1)}" height="${box.h.toFixed(1)}" class="${isRepairable ? "clickable" : ""}" ${isRepairable ? "" : 'pointer-events="none"'}/>`);
+          drawImage(svg, damagePath, box.x, box.y, box.w, box.h, isRepairable ? 'class="clickable"' : 'pointer-events="none"');
           if (isRepairable) svg.lastElementChild.addEventListener("click", () => { pickRepairTarget(car, tokenValue); render(); });
         };
         const slots = damageSlots(car);
@@ -885,9 +894,7 @@ function renderDashboards() {
         // tour terminé (voir finishHumanTurn), jamais pour la sélection
         // elle-même.
         const slotKey = ctx.mode === "coast" ? "coast1" : "any";
-        const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const cx = dim.x + f.x * dim.w, cy = dim.y + f.y * dim.h;
-        const sx = cx - DIE_DISPLAY_SIZE / 2, sy = cy - DIE_DISPLAY_SIZE / 2;
+        const { x: sx, y: sy, cx, cy } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
         const rotAttr = SLOT_ROTATION[slotKey] ? ` transform="rotate(${SLOT_ROTATION[slotKey]} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
         svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
         svg.lastElementChild.addEventListener("click", () => { pickCar(car); render(); });
@@ -910,8 +917,7 @@ function renderDashboards() {
         // bascule vers coast2 (stockage définitif) qu'une fois le tour
         // terminé, voir finishHumanTurn/coastDieState ci-dessous.
         const slotKey = sel.mode === "coast" ? "coast1" : "any";
-        const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const dieX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+        const { x: dieX, y: dieY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
         const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
         svg.insertAdjacentHTML("beforeend", dieMarkup(sel.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
         if (isCancelable) {
@@ -924,8 +930,7 @@ function renderDashboards() {
         // interaction possible sur la décision de l'IA), sinon même
         // convention coast1 que côté humain.
         const slotKey = currentAiDecision.isCoast ? "coast1" : "any";
-        const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-        const dieX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, dieY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+        const { x: dieX, y: dieY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
         svg.insertAdjacentHTML("beforeend", dieMarkup(currentAiDecision.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[slotKey]));
       }
 
@@ -937,8 +942,7 @@ function renderDashboards() {
       if (car) {
         const et = endTurnDieState[car.id];
         if (et && et.round === G.roundState.roundNumber) {
-          const f = VEHICLE_SLOT_FRACTION[size].endTurn;
-          const etX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, etY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+          const { x: etX, y: etY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size].endTurn);
           svg.insertAdjacentHTML("beforeend", dieMarkup(et.dieValue, PLAYER_CAR_COLOR[playerName], etX, etY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION.endTurn));
         }
       }
@@ -953,8 +957,7 @@ function renderDashboards() {
           ["coast1", "coast2"].forEach((slotKey, idx) => {
             const dieValue = cd.slots[idx];
             if (dieValue === null || dieValue === undefined) return;
-            const f = VEHICLE_SLOT_FRACTION[size][slotKey];
-            const cdX = dim.x + f.x * dim.w - DIE_DISPLAY_SIZE / 2, cdY = dim.y + f.y * dim.h - DIE_DISPLAY_SIZE / 2;
+            const { x: cdX, y: cdY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
             svg.insertAdjacentHTML("beforeend", dieMarkup(dieValue, PLAYER_CAR_COLOR[playerName], cdX, cdY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[slotKey]));
           });
         }
@@ -2171,14 +2174,14 @@ function renderBoard() {
     targets.forEach((target) => {
       const { cx, cy } = cellCenter(target.col, target.row);
       const markerPath = `../images/markers/target-${target.size}.webp`;
-      svg.insertAdjacentHTML("beforeend", `<image href="${markerPath}" xlink:href="${markerPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, markerPath, cx - MARKER_ICON_SIZE / 2, cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { onPickTarget(target); render(); });
     });
     const rear = getRearArc(shooterColRow).find((a) => a.name === "rear");
     if (rear && isOnBoard(board(), rear.col, rear.row)) {
       const { cx, cy } = cellCenter(rear.col, rear.row);
       const noPath = "../images/markers/marker-no.webp";
-      svg.insertAdjacentHTML("beforeend", `<image href="${noPath}" xlink:href="${noPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, noPath, cx - MARKER_ICON_SIZE / 2, cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { onDecline(); render(); });
     }
   }
@@ -2232,7 +2235,7 @@ function renderBoard() {
     const { ctx, resume } = pendingSlam;
     const { cx, cy } = cellCenter(ctx.topCar.col, ctx.topCar.row);
     const rerollPath = "../images/markers/marker-reroll.webp";
-    svg.insertAdjacentHTML("beforeend", `<image href="${rerollPath}" xlink:href="${rerollPath}" x="${(cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+    drawImage(svg, rerollPath, cx - MARKER_ICON_SIZE / 2, cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
     svg.lastElementChild.addEventListener("click", () => { resume(true); render(); });
     // Face du dé Slam SEULE (pas le dé Direction, qui reste invisible)
     // sur la case de DESTINATION désignée par le dé Direction — retour
@@ -2249,7 +2252,7 @@ function renderBoard() {
     const dest = { col: ctx.topCar.col + delta.dCol, row: ctx.topCar.row + delta.dRow };
     const dc = cellCenter(dest.col, dest.row);
     const slamPath = `../images/dice/die-fx-slam-${ctx.slamRoll}.webp`;
-    svg.insertAdjacentHTML("beforeend", `<image href="${slamPath}" xlink:href="${slamPath}" x="${(dc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(dc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" pointer-events="none"/>`);
+    drawImage(svg, slamPath, dc.cx - MARKER_ICON_SIZE / 2, dc.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE);
     const rearArc = getRearArc(ctx.largerCar);
     const rear = rearArc.find((a) => a.name === "rear");
     // Retour de Mayrik : si la case de destination du dé Slam est
@@ -2266,7 +2269,7 @@ function renderBoard() {
       // pour le joueur formulé comme "j'accepte ce résultat" plutôt
       // que "je refuse la relance".
       const yesPath = "../images/markers/marker-yes.webp";
-      svg.insertAdjacentHTML("beforeend", `<image href="${yesPath}" xlink:href="${yesPath}" x="${(rc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, yesPath, rc.cx - MARKER_ICON_SIZE / 2, rc.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { resume(false); render(); });
     }
   }
@@ -2303,14 +2306,14 @@ function renderBoard() {
     if (front) {
       const fc = cellCenter(front.col, front.row);
       const roadPath = `../images/markers/marker-road-${G.roundState.roadDie}.webp`;
-      svg.insertAdjacentHTML("beforeend", `<image href="${roadPath}" xlink:href="${roadPath}" x="${(fc.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(fc.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, roadPath, fc.cx - MARKER_ICON_SIZE / 2, fc.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { acceptRoadBonus(); render(); });
     }
     const rearRB = getRearArc(sel.car).find((a) => a.name === "rear");
     if (rearRB && isOnBoard(board(), rearRB.col, rearRB.row)) {
       const rc2 = cellCenter(rearRB.col, rearRB.row);
       const noPath2 = "../images/markers/marker-no.webp";
-      svg.insertAdjacentHTML("beforeend", `<image href="${noPath2}" xlink:href="${noPath2}" x="${(rc2.cx - MARKER_ICON_SIZE / 2).toFixed(1)}" y="${(rc2.cy - MARKER_ICON_SIZE / 2).toFixed(1)}" width="${MARKER_ICON_SIZE.toFixed(1)}" height="${MARKER_ICON_SIZE.toFixed(1)}" class="clickable"/>`);
+      drawImage(svg, noPath2, rc2.cx - MARKER_ICON_SIZE / 2, rc2.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
       svg.lastElementChild.addEventListener("click", () => { declineRoadBonus(); render(); });
     }
   }
@@ -2347,6 +2350,23 @@ function choiceButton(label, onClick, selected) {
 // de retour en arrière — un dé assigné ne se rend pas.
 const PRE_COMMIT_STEPS = new Set(["car", "die", "command", "command-die", "repair-target", "airstrike-placement", "airstrike-shoot-arc", "commit"]);
 
+// ATTENTION (retour de revue de code) : #panel est display:none en CSS
+// (template.html) — le joueur ne voit et ne clique JAMAIS rien de ce
+// que cette fonction construit ci-dessous. Chaque interaction a son
+// propre point d'accroche VISIBLE ailleurs (renderBoard/renderDashboards
+// — dés, voitures, cases, jetons, cibles de tir cliqués directement).
+// Cette fonction remplit malgré tout DEUX rôles bien réels :
+//   1. Effets de bord ESSENTIELS, lus dans tout le reste du fichier
+//      (sel.mode, sel.commandAvailable — voir leurs usages ailleurs
+//      dans ui-script.js) et le passage automatique du tour humain
+//      (passHumanTurnIfImpossible) — À NE JAMAIS RETIRER.
+//   2. Construction du contenu de #panel — sans effet visible pour le
+//      joueur, mais plusieurs test-ui-*.js lisent ce texte comme
+//      vérification indirecte (ex. "le panneau propose bien Repair").
+//      Retirer cette partie est possible mais demande de d'abord faire
+//      migrer ces tests vers une vérification sur l'élément VISIBLE
+//      correspondant (dashboard/plateau) — pas fait ici pour ne pas
+//      risquer de perdre leur couverture sans un vrai remplacement.
 function renderPanel() {
   const panel = document.getElementById("panel");
   panel.innerHTML = "";
@@ -2496,6 +2516,96 @@ function renderPanel() {
   }
 }
 
+// ===================================================================
+// ZONE 1 — Plateau de jeu : zoom FIXE (1 tuile = largeur écran),
+// défilement horizontal natif du conteneur (voir le commentaire CSS
+// détaillé dans template.html). setupBoardScroll() pose la largeur
+// réelle du SVG une fois pour toutes (BOARD_VIEW est une constante,
+// jamais recalculée en cours de partie) — idempotent, sans risque à
+// rappeler à chaque render().
+// ===================================================================
+let boardScrollReady = false;
+function setupBoardScroll() {
+  if (boardScrollReady) return;
+  const svg = document.getElementById("board");
+  const oneTileWidth = TILE_NATIVE_COLS * IMG_CELL_W;
+  const ratio = BOARD_VIEW.w / oneTileWidth; // ~3 tuiles sur toute la largeur assemblée
+  svg.style.width = (ratio * 100).toFixed(2) + "%";
+  boardScrollReady = true;
+}
+
+// Curseur de position (PAS un zoom, retour de Mayrik) : simple
+// raccourci + repère visuel de la position horizontale sur le plateau
+// assemblé complet, synchronisé dans les deux sens avec scrollLeft.
+function syncBoardSlider() {
+  const viewport = document.getElementById("board-viewport");
+  const slider = document.getElementById("board-position-slider");
+  const maxScroll = viewport.scrollWidth - viewport.clientWidth;
+  slider.value = maxScroll > 0 ? Math.round((viewport.scrollLeft / maxScroll) * 1000) : 0;
+}
+function onBoardSliderInput() {
+  const viewport = document.getElementById("board-viewport");
+  const slider = document.getElementById("board-position-slider");
+  const maxScroll = viewport.scrollWidth - viewport.clientWidth;
+  viewport.scrollLeft = (Number(slider.value) / 1000) * maxScroll;
+}
+
+// ===================================================================
+// ZONE 2 — Bande d'info : structure posée maintenant (retour de
+// Mayrik), contenu minimal pour l'instant (round + joueur actif) en
+// remplacement des anciens badges texte retirés — sera étoffée dans
+// un chantier séparé.
+// ===================================================================
+function updateInfoBand(cp) {
+  const el = document.getElementById("info-band");
+  if (!el) return;
+  el.textContent = gameOver
+    ? "PARTIE TERMINÉE"
+    : cp ? `ROUND ${G.roundState.roundNumber} — ${playerLabel(cp).toUpperCase()}` : "";
+}
+
+// ===================================================================
+// ZONE 3 — Dashboards des joueurs : librement zoomables/déplaçables
+// (Panzoom, vendorisé — voir tools/panzoom.min.js), CONTENUS à cette
+// seule zone (retour de Mayrik : le pincement tactile du téléphone
+// zoomait toute la page avant ce correctif). initDashboardsPanzoom()
+// tourne une seule fois au démarrage ; updateDashboardsViewportHeight()
+// tourne à CHAQUE render() car le nombre de lignes (donc la hauteur du
+// contenu) dépend du nombre de joueurs.
+// ===================================================================
+let dashboardsPanzoom = null;
+function initDashboardsPanzoom() {
+  if (typeof Panzoom === "undefined") return; // filet de sécurité : jamais bloquant si la lib ne charge pas
+  try {
+    const svg = document.getElementById("dashboards");
+    dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: "outside", canvas: true });
+    const viewport = document.getElementById("dashboards-viewport");
+    viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
+  } catch (e) {
+    // Best-effort : le zoom/déplacement de la zone dashboards est un
+    // confort, jamais une dépendance dure — une IA/un environnement où
+    // Panzoom échouerait à s'initialiser (ex. requestAnimationFrame
+    // absent, comme dans jsdom) ne doit jamais empêcher le jeu de
+    // fonctionner par ailleurs.
+    dashboardsPanzoom = null;
+  }
+}
+
+// Cale la hauteur du conteneur pour cadrer EXACTEMENT l'ensemble des
+// dashboards à l'échelle 1 (comme aujourd'hui, retour de Mayrik) —
+// calculé depuis le viewBox plutôt que mesuré sur le DOM, pour rester
+// correct même si un zoom Panzoom est déjà appliqué au moment de
+// l'appel (measurer directement donnerait la taille TRANSFORMÉE, pas
+// la taille de base).
+function updateDashboardsViewportHeight() {
+  const svg = document.getElementById("dashboards");
+  const viewport = document.getElementById("dashboards-viewport");
+  const vb = svg.viewBox.baseVal;
+  if (!vb || vb.width === 0) return;
+  const naturalHeight = viewport.clientWidth * (vb.height / vb.width);
+  viewport.style.height = naturalHeight.toFixed(1) + "px";
+}
+
 function render() {
   saveGameState(); // point de contrôle sûr : voir le commentaire détaillé près de SAVE_KEY
 
@@ -2507,9 +2617,12 @@ function render() {
   document.getElementById("commandUsedBadge").textContent = cp ? `Command déjà utilisée par ${cp} : ${G.roundState.commandUsedThisRound[cp] ? "oui" : "non"}` : "";
   document.getElementById("dicePool").innerHTML = cp ? (G.roundState.dicePool[cp] || []).map((d) => `<span class="die">${d}</span>`).join("") : "";
 
+  setupBoardScroll();
   renderBoard();
   renderDashboards();
   renderPanel();
+  updateInfoBand(cp);
+  updateDashboardsViewportHeight();
 
   document.getElementById("damageRow").innerHTML = G.allCars
     .filter((car) => car.status !== "eliminated" && !car.isWreck) // les épaves n'ont aucun affichage UI (retour de Mayrik)
@@ -2528,6 +2641,15 @@ function render() {
 // ===================================================================
 // DÉMARRAGE
 // ===================================================================
+// Mise en page des 3 zones (retour de Mayrik) : câblage des écouteurs
+// une seule fois ici, jamais répété dans render() (contrairement à
+// setupBoardScroll()/updateDashboardsViewportHeight(), rappelées à
+// chaque rendu — voir leurs commentaires respectifs).
+initDashboardsPanzoom();
+document.getElementById("board-viewport").addEventListener("scroll", syncBoardSlider);
+document.getElementById("board-position-slider").addEventListener("input", onBoardSliderInput);
+window.addEventListener("resize", () => { syncBoardSlider(); if (typeof G !== "undefined" && G) updateDashboardsViewportHeight(); });
+
 // Écran d'accueil (retour de Mayrik) : visible par défaut (voir
 // template.html), masqué dès qu'une partie démarre — que ce soit par
 // un choix explicite (bouton 1/2/3 IA) ou par la reprise d'une

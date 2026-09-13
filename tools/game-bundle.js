@@ -9,11 +9,16 @@
  * règles qui le font évoluer. On le teste en lisant les résultats
  * dans la console (voir test-engine.js).
  *
- * ÉTAPE 1 (ce fichier) : une seule tuile, une seule voiture, le
- * mouvement de base (arc avant, coût des terrains). Pas encore de
- * slams, hazards, tir, dégâts, IA, ni plusieurs tuiles qui défilent.
- * On ajoutera ces briques une par une, chacune testée avant la
- * suivante.
+ * Couvre aujourd'hui l'intégralité du jeu de base (p.1-11 du
+ * rulebook) : mouvement (arc avant, entrée, Coast, bonus Road),
+ * Slams (direct, en chaîne, avec relance), hazards (tous types),
+ * dégâts et réparation, tir (normal et Airstrike), Commands
+ * (Nitro/Drift/Repair/Airstrike), progression des tuiles (défilement,
+ * ligne d'arrivée) et conditions de victoire — pour un nombre de
+ * joueurs quelconque (2 à 4). L'IA (ai-decision.js), la couche
+ * joueur humain (human-decision.js) et l'exécution de tour
+ * (turn-executor.js) sont des modules séparés qui s'appuient
+ * uniquement sur ce fichier.
  */
 
 // -----------------------------------------------------------------
@@ -135,12 +140,15 @@ function getSpace(tile, col, row) {
 // qui n'en est qu'une vue reconstruite à chaque fois). C'est cet
 // état qui évolue quand une voiture sort par l'avant.
 //
-// LIMITATION ACTUELLE, à corriger plus tard : pas de "retournement"
-// de tuile à proprement parler — chaque tuile physique a 2 faces
-// différentes (A/B) dans le vrai jeu, mais ici chaque face est un
-// fichier de données à part entière (voir tiles/data/), donc "choisir
-// une face" se fait en amont, au moment de choisir QUEL fichier
-// instancier, pas dans ce moteur.
+// Chaque tuile physique a 2 faces différentes (A/B) dans le vrai jeu ;
+// ici, chaque face est un fichier de données à part entière (voir
+// tiles/data/) — le "retournement" se traduit donc par un tirage
+// aléatoire entre ces fichiers au moment d'instancier la tuile
+// (pickRandomFace/groupTilesByNumber), jamais par une rotation gérée
+// par ce moteur. Choix de conception définitif, pas une limitation
+// temporaire : plus simple à raisonner, et strictement équivalent du
+// point de vue des règles (une face = un terrain figé, comme la vraie
+// tuile imprimée).
 //
 // Place automatiquement un jeton hazard sur chaque case marquée
 // hazardSpace=true des 3 tuiles de départ (mise en place physique du
@@ -567,9 +575,8 @@ function eliminateCarsOnChoppers(allCars, allChoppers) {
 // respectant la parité de la rangée de départ (voir getFrontArc).
 // Réutilisé par tout code qui marche une trajectoire hypothétique
 // (recherche IA) sans passer par moveCar — la table DIRECTIONS seule
-// ne suffit PAS ici : elle ignore la parité et ne doit servir que
-// pour rear/rear-left/rear-right (pas encore couverts par une règle
-// confirmée, voir DIRECTIONS plus bas).
+// ne suffit PAS ici : elle ignore la parité. Symétrique de
+// getBackwardDelta ci-dessous, pour rear/rear-left/rear-right.
 function getForwardDelta(dirName, fromCol, fromRow) {
   const arc = getFrontArc({ col: fromCol, row: fromRow });
   const target = arc.find((a) => a.name === dirName);
@@ -1193,12 +1200,14 @@ function rollShootingDie(injectedValue = null) {
 }
 
 // Dé Road à 6 faces : 1-1-1-2-2-3 (confirmé par Mayrik). Tiré une
-// seule fois par round, par le 1er joueur (p.9). NOTE : ce dé n'est
-// pour l'instant utilisé QUE pour la rotation de round (qui le tire,
-// quand) — le BONUS de déplacement qu'il donne aux voitures restées
-// sur route n'est pas encore implémenté dans moveCar (voir p.9 :
-// "if their car started on and moved on only road spaces, that car
-// may immediately gain moves equal to the road die").
+// seule fois par round, par le 1er joueur (p.9) — voir
+// ensureRoadDieRolled. Le BONUS de déplacement qu'il donne aux
+// voitures restées sur route (p.9 : "if their car started on and
+// moved on only road spaces, that car may immediately gain moves
+// equal to the road die") est implémenté dans
+// playTurnAssignMoveWithProgressionGen/playTurnAssignEnterWithProgressionGen
+// (options.roadDieValue + options.roadBonusPath, jamais ici — ce dé
+// n'est que le TIRAGE, pas son application).
 function rollRoadDie(injectedValue = null) {
   if (injectedValue) return injectedValue;
   return DICE_FACES.ROAD[Math.floor(Math.random() * DICE_FACES.ROAD.length)];
@@ -3126,6 +3135,7 @@ function rollMovementDie(injectedValue = null) {
 if (typeof module !== "undefined" && module.exports) {
 module.exports = {
 
+  driveSync,
   TERRAIN,
   MOVE_COST,
   CAR_SIZE,
@@ -5421,19 +5431,19 @@ if (typeof module !== "undefined" && module.exports) {
  * inopérables), Airstrike (n'importe quel dé, case vide au choix) —
  * une seule Command par round, jamais sur un tour de Coast.
  *
- * Réutilise SANS LES DUPLIQUER : computeReachableDestinations /
- * computeReachableEntryDestinations / chooseShootTarget
- * (ai-decision.js — pure géométrie/règles de terrain, aucune
- * politique) et checkDecisionLegality / executeDecision
- * (turn-executor.js — mêmes règles mécaniques que celles qui
- * valident déjà les décisions de l'IA en self-play).
+ * Le mouvement se joue case par case (voir Section 2ter) — jamais une
+ * destination choisie d'un coup — donc ce module ne dépend QUE
+ * d'engine.js, jamais d'ai-decision.js (retiré ici lors d'une revue de
+ * code : l'ancienne Section 2, qui choisissait une destination
+ * complète via computeReachableDestinations/computeReachableEntryDestinations,
+ * n'était plus appelée par aucun code réel depuis ce passage au
+ * mouvement pas à pas).
  */
 
 
 
 
 // (destructuring engine.js retiré pour le bundle navigateur — noms déjà globaux)
-// (destructuring ai-decision.js retiré pour le bundle navigateur — noms déjà globaux)
 
 // ===================================================================
 // SECTION 1 — CONTEXTE DE TOUR : que peut faire ce joueur maintenant ?
@@ -5490,72 +5500,15 @@ function getTurnContext(progressionState, board, allCars, allChoppers, dicePool,
 }
 
 // ===================================================================
-// SECTION 2 — TRAJECTOIRES ATTEIGNABLES POUR UN CHOIX (voiture + dé)
-// ===================================================================
-/**
- * Renvoie toutes les cases atteignables (avec leurs métadonnées :
- * terminalReason, dangerousCellsCrossed, slamTarget, path...) pour la
- * voiture et le dé choisis par le joueur — jamais UNE seule "meilleure"
- * destination comme le ferait findBestTrajectory côté IA. Au
- * joueur de choisir librement parmi les options réellement légales.
- * `driftAvailable` doit être `true` seulement si le joueur a choisi de
- * jouer la Command Drift ce tour (voir Section 3).
- */
-function getReachableOptions(board, car, dieValue, allCars, allChoppers, driftAvailable = false) {
-  if (car.col === null) {
-    return computeReachableEntryDestinations(board, dieValue, allCars, allChoppers, driftAvailable);
-  }
-  return computeReachableDestinations(board, car, dieValue, allCars, allChoppers, driftAvailable);
-}
-
-// ===================================================================
-// SECTION 2bis — BONUS ROAD (optionnel, montant fixe imposé — p.7)
-// ===================================================================
-// CORRECTIF (Mayrik, en testant le prototype) : ce bonus n'était
-// simplement jamais proposé au joueur humain — la couche humaine
-// n'avait aucune fonction pour ça. Il s'agit d'une mécanique à part
-// du mouvement principal (voir engine.js, playTurnAssignMoveWithProgression :
-// une seconde application de moveCarWithProgression, APRÈS le
-// mouvement de base, avec le dé Road comme distance) — jamais une
-// simple addition à la distance de départ (contrairement au Nitro).
-/**
- * "This bonus is optional, but if you use it, you must use the full
- * amount." (p.7) — éligible seulement si le trajet choisi par le
- * joueur est resté ENTIÈREMENT sur route, sans case dangereuse
- * traversée, et qu'un dé Road a été tiré ce round.
- */
-function isRoadBonusEligible(destination, roadDieValue) {
-  return roadDieValue > 0 && destination.terminalReason === "normal" && destination.allRoad === true && destination.dangerousCellsCrossed === 0;
-}
-
-/**
- * Renvoie les destinations atteignables pour l'extension de bonus
- * Road (distance = roadDieValue PILE, jamais moins — "you must use
- * the full amount") depuis la destination de base déjà choisie.
- * "This extra movement does not need to be on the road" (p.7) — donc
- * aucun filtre de terrain ici, juste écarter les fins dangereuses,
- * comme pour le mouvement normal. Renvoie [] si non éligible (rien à
- * proposer) — à l'appelant de vérifier isRoadBonusEligible avant
- * d'offrir le choix "oui/non" au joueur.
- */
-function getRoadBonusOptions(board, car, destination, roadDieValue, allCars, allChoppers, driftAvailable = false) {
-  if (!isRoadBonusEligible(destination, roadDieValue)) return [];
-  const extCar = { ...car, col: destination.col, row: destination.row };
-  return computeReachableDestinations(board, extCar, roadDieValue, allCars, allChoppers, driftAvailable)
-    .filter((e) => (e.terminalReason === "normal" || e.terminalReason === "exits-front") && e.dangerousCellsCrossed === 0);
-}
-
-// ===================================================================
-// SECTION 2ter — MOUVEMENT CASE PAR CASE (retour d'usage de Mayrik,
-// Point 3 : remplace complètement getReachableOptions/Section 2 pour
-// le mouvement d'un joueur humain — la destination n'est plus choisie
-// d'un coup, le joueur avance une case à la fois dans l'arc avant
-// COURANT de sa voiture, les effets (hazard, slam, sortie de tuile)
-// s'appliquant réellement avant qu'on lui propose la case suivante).
-// Le même principe s'applique désormais au Bonus Road (Section 2bis) :
-// à l'appelant de reboucler sur cette fonction avec `remaining` =
-// roadDieValue au départ de l'extension, exactement comme pour le
-// mouvement principal.
+// SECTION 2 — MOUVEMENT CASE PAR CASE (retour d'usage de Mayrik,
+// Point 3) : la destination n'est jamais choisie d'un coup, le joueur
+// avance une case à la fois dans l'arc avant COURANT de sa voiture,
+// les effets (hazard, slam, sortie de tuile) s'appliquant réellement
+// avant qu'on lui propose la case suivante. Le même principe
+// s'applique au Bonus Road (p.7, montant fixe imposé) : à l'appelant
+// de reboucler sur cette fonction avec `remaining` = roadDieValue au
+// départ de l'extension, exactement comme pour le mouvement
+// principal.
 // ===================================================================
 /**
  * Liste les cases de l'arc avant COURANT que le joueur peut
@@ -5652,7 +5605,7 @@ function getEntryRowOptions(board, dieValue, allCars) {
 }
 
 // ===================================================================
-// SECTION 2quater — CIBLE DE TIR LIBRE (remplace le choix automatique
+// SECTION 2bis — CIBLE DE TIR LIBRE (remplace le choix automatique
 // ai.chooseShootTarget pour un joueur humain — Point 3, retour de
 // Mayrik : le joueur doit pouvoir choisir sa cible lui-même, et
 // choisir de NE PAS tirer).
@@ -5678,7 +5631,7 @@ function getShootTargetOptions(shooter, allCars) {
 }
 
 // ===================================================================
-// SECTION 2quinquies — POINTS DE MOUVEMENT PERDUS (retour de Mayrik,
+// SECTION 2ter — POINTS DE MOUVEMENT PERDUS (retour de Mayrik,
 // Point 3 : "reste des mouvements perdus à cause de [raison]" avec un
 // bouton Continuer, plutôt qu'un enchaînement automatique).
 // ===================================================================
@@ -5793,58 +5746,16 @@ function listValidAirstrikePlacements(board, allCars, allChoppers, chopper) {
   return placements;
 }
 
-// ===================================================================
-// SECTION 5 — CONSTRUCTION DE LA DÉCISION FINALE
-// ===================================================================
-/**
- * Assemble la décision du joueur dans EXACTEMENT la même forme que
- * celle produite par ai.decideAssignAndCommand — c'est ce qui permet
- * à turn-executor.js de l'exécuter sans aucune distinction entre une
- * décision humaine et une décision IA.
- *   - car, dieValue : la voiture et le dé de mouvement choisis.
- *   - command : null, ou { type, dieValue, target? } — pour
- *     "airstrike", target ET placement doivent être fournis (voir
- *     Section 4 pour les placements valides ; target est la voiture
- *     adverse visée, choisie librement par le joueur parmi les
- *     opérables, ou null si aucune n'est atteignable/souhaitée).
- *   - destination : UNE des options renvoyées par getReachableOptions
- *     (Section 2), choisie par le joueur — TOUJOURS la destination de
- *     base, jamais le point d'arrivée après bonus Road (voir
- *     roadBonusPath ci-dessous : le moteur rejoue cette extension
- *     comme un second mouvement séparé, après le premier).
- *   - isCoast : true si ce tour est un Coast (voir Section 1).
- *   - roadBonusPath : le `.path` d'UNE des options renvoyées par
- *     getRoadBonusOptions (Section 2bis), si le joueur a choisi
- *     d'utiliser le bonus Road ce tour — sinon null/omis.
- */
-function buildHumanDecision({ car, dieValue, command, destination, isCoast = false, roadBonusPath = null }) {
-  const isEntry = car.col === null && !isCoast;
-  return {
-    car,
-    dieValue,
-    command: command || null,
-    destination,
-    isEntry,
-    isCoast,
-    slam: destination.terminalReason === "slam",
-    roadBonusPath: roadBonusPath || null
-  };
-}
-
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     getTurnContext,
-    getReachableOptions,
-    isRoadBonusEligible,
-    getRoadBonusOptions,
     getMovementStepOptions,
     getEntryRowOptions,
     computePointsLost,
     getShootTargetOptions,
     getAvailableCommands,
     isValidAirstrikePlacement,
-    listValidAirstrikePlacements,
-    buildHumanDecision
+    listValidAirstrikePlacements
   };
 }
 
@@ -5867,11 +5778,13 @@ if (typeof module !== "undefined" && module.exports) {
  *     décision par rapport aux RÈGLES MÉCANIQUES DU JEU UNIQUEMENT
  *     (dé bien dans le pool, pas réutilisation du même dé physique,
  *     plage de valeur de Command) — jamais une préférence stratégique.
- *     Utilisée par tools/run-shadow-legality.js (pour DÉTECTER une
- *     décision IA illégale, sans bloquer son exécution — l'outil veut
- *     justement voir ces cas s'ils existent) ET par human-decision.js
- *     (pour REJETER une décision avant de l'exécuter — un humain ne
- *     doit jamais pouvoir soumettre un choix mécaniquement invalide).
+ *     Utilisée par tools/run-shadow-legality.js, pour DÉTECTER une
+ *     décision IA illégale sans bloquer son exécution (l'outil veut
+ *     justement voir ces cas s'ils existent). Le joueur humain, lui,
+ *     n'appelle jamais cette fonction : tools/ui-script.js ne
+ *     construit sa décision qu'à partir d'options déjà filtrées
+ *     légales (human-decision.js) — illégal par construction,
+ *     jamais besoin d'un contrôle a posteriori.
  *   - executeDecision(...) : exécute réellement une décision déjà
  *     prise (dés tirés du pool, Command résolue, mouvement/Coast/
  *     entrée joué, tour avancé) — ne prend AUCUNE décision elle-même,
@@ -5922,87 +5835,18 @@ function checkDecisionLegality(decision, poolBefore, playerName) {
  * client humain doit vérifier AVANT et ne jamais appeler ceci sur une
  * décision invalide).
  * Retourne { ok, log, decision, ...résultat de playTurn*WithProgression }.
+ *
+ * Simple pilote SYNCHRONE d'executeDecisionGen (voir driveSync,
+ * engine.js — même convention que TOUTES les paires Gen/non-Gen du
+ * moteur, ex. moveCar/moveCarGen) : sans `isHumanOwner` fourni,
+ * aucune pause n'est jamais déclenchée (resolveSlamGen retombe sur
+ * son défaut `() => false`), donc gen.next() unique suffit toujours.
+ * Ancienne duplication complète de la logique d'executeDecisionGen
+ * retirée ici (retour de Mayrik, revue de code) — comportement
+ * strictement identique, verrouillé par la suite de tests existante.
  */
 function executeDecision(progressionState, roundState, allCars, allChoppers, playerNames, currentPlayer, decision) {
-  const log = [];
-  const { car } = decision;
-  const isCoastTurn = decision.isCoast;
-  const command = decision.command;
-
-  drawSpecificDieFromPool(roundState.dicePool, currentPlayer, decision.dieValue);
-  log.push(`ASSIGN : dé ${decision.dieValue} → ${car.id}${isCoastTurn ? " (Coast)" : ""}`);
-
-  // Étape 2 (rewrite-plan.md) : le tir est calculé ICI, une seule
-  // fois, génériquement, après que la décision (donc la destination
-  // finale) est connue — quelle que soit la branche qui a produit
-  // cette décision (mouvement normal, Coast, Finish Line Rush,
-  // décision humaine...).
-  decision.shotTarget = computeShotTargetForDecision(decision, allCars);
-
-  // La cible RÉELLEMENT utilisée pour le tir est recalculée par le
-  // moteur APRÈS résolution complète du mouvement (un Slam peut faire
-  // atterrir la voiture ailleurs qu'où prévu, via des dés tirés
-  // PENDANT la résolution) — voir engine.js, resolveShootStep.
-  const shootTargetFn = (currentCar, cars) => chooseShootTarget(currentCar.col, currentCar.row, currentCar.owner, cars);
-
-  let effectiveDieValue = decision.dieValue;
-  const slamOptions = { decideReroll: decideSlamRerollDefault };
-
-  if (command && !isCoastTurn) {
-    drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);
-    roundState.commandUsedThisRound[currentPlayer] = true;
-    log.push(`COMMAND : ${command.type} (dé ${command.dieValue})`);
-
-    if (command.type === "nitro") {
-      const r = resolveNitroCommand(command.dieValue);
-      if (r.ok) effectiveDieValue += r.bonus;
-    } else if (command.type === "repair") {
-      resolveRepairCommand(command.dieValue, command.target, command.tokenValue);
-    } else if (command.type === "drift") {
-      const r = resolveDriftCommand(command.dieValue);
-      if (r.ok) slamOptions.driftAvailable = true;
-    } else if (command.type === "airstrike") {
-      let chopper = allChoppers.find((ch) => ch.owner === currentPlayer);
-      if (!chopper) { chopper = createChopper(currentPlayer); allChoppers.push(chopper); }
-      if (command.placement) {
-        resolveAirstrikeCommand(
-          buildBoardFromProgressionState(progressionState), allCars, allChoppers, chopper, command.placement.col, command.placement.row,
-          { roundNumber: roundState.roundNumber, shootTarget: command.target, progressionState, allChoppers }
-        );
-      }
-    }
-  }
-
-  if (decision.isEntry) {
-    const result = playTurnAssignEnterWithProgression(
-      progressionState, car, effectiveDieValue, decision.destination.entryRow, decision.destination.path || [], allCars, allChoppers, playerNames,
-      { roundNumber: roundState.roundNumber, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
-    );
-    log.push(...(result.log || []));
-    if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log, decision };
-  }
-
-  if (isCoastTurn) {
-    const result = playTurnCoastWithProgression(progressionState, car, decision.destination.path || [], allCars, allChoppers, playerNames, { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn, ...slamOptions });
-    log.push(...(result.log || []));
-    if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-    return { ...result, log, decision };
-  }
-
-  if (car.status !== CAR_STATUS.OPERABLE) {
-    log.push(`${car.id} devenue inopérable pendant la Command → fin du tour.`);
-    log.push(...advanceTurn(roundState, allCars).log);
-    return { ok: true, log, car, decision };
-  }
-
-  const result = playTurnAssignMoveWithProgression(
-    progressionState, car, effectiveDieValue, decision.destination.path || [], allCars, allChoppers, playerNames,
-    { roundNumber: roundState.roundNumber, shootTarget: decision.shotTarget, shootTargetFn, roadDieValue: roundState.roadDie, roadBonusPath: decision.roadBonusPath || null, ...slamOptions }
-  );
-  log.push(...(result.log || []));
-  if (result.ok) log.push(...advanceTurn(roundState, allCars).log);
-  return { ...result, log, decision };
+  return driveSync(executeDecisionGen(progressionState, roundState, allCars, allChoppers, playerNames, currentPlayer, decision));
 }
 
 /**
@@ -6112,11 +5956,11 @@ function* executeDecisionGen(progressionState, roundState, allCars, allChoppers,
 /**
  * ASSIGN + COMMAND — identique à la première moitié d'executeDecision,
  * mais sans rien exécuter du mouvement (qui devient interactif,
- * case par case, voir executeMoveStep/executeEntryStep plus bas).
+ * case par case, voir executeMoveStepGen/executeEntryStepGen plus bas).
  * `intent` = { car, dieValue, command, isCoast }. Retourne
  * { log, effectiveDieValue, slamOptions } — effectiveDieValue inclut
  * déjà le bonus Nitro éventuel ; slamOptions.driftAvailable est prêt à
- * être transmis à chaque appel d'executeMoveStep/executeEntryStep.
+ * être transmis à chaque appel d'executeMoveStepGen/executeEntryStepGen.
  */
 function executeAssignAndCommand(roundState, allCars, allChoppers, progressionState, currentPlayer, intent) {
   const log = [];
@@ -6176,7 +6020,7 @@ function executeAssignAndCommand(roundState, allCars, allChoppers, progressionSt
  * executeAssignAndCommand ci-dessus) : résout le tir du chopper déjà
  * placé, séparément, pour que l'appelant puisse rendre l'écran entre
  * les deux étapes. `target` peut être null (joueur ayant décliné le
- * tir), auquel cas rien n'est résolu — même convention qu'executeShoot.
+ * tir), auquel cas rien n'est résolu — même convention qu'executeShootGen.
  */
 function executeAirstrikeShoot(progressionState, allCars, allChoppers, chopper, target, roundNumber) {
   const log = [];
@@ -6195,25 +6039,14 @@ function executeAirstrikeShoot(progressionState, allCars, allChoppers, chopper, 
  * la rangée d'entrée (voir human.getEntryRowOptions). Consomme le coût
  * de terrain de cette case, applique ses effets (hazard, slam éventuel
  * dès l'entrée), et rend le mouvement restant à l'appelant — la suite
- * du trajet (s'il en reste) redevient un pas normal via executeMoveStep.
- * Jamais de progression de tuile ni de tir possibles dès l'entrée
- * (impossible par construction / interdit au round 1, voir engine.js).
- */
-function executeEntryStep(progressionState, allCars, car, dieValue, entryRow, slamOptions = {}) {
-  const log = [];
-  log.push(`ASSIGN (entrée en jeu) : dé ${dieValue} assigné à ${car.id}`);
-  const board = buildBoardFromProgressionState(progressionState);
-  const result = moveCarEnteringBoard(board, car, dieValue, entryRow, [], allCars, slamOptions);
-  log.push(...result.log);
-  return { ...result, log };
-}
-
-/**
- * Variante GÉNÉRATRICE d'executeEntryStep — même usage que
- * executeDecisionGen (voir plus haut) : à utiliser quand l'appelant
- * veut pouvoir mettre le pas en pause pour un Slam (direct, Wreck, ou
- * en cascade via un dégât) impliquant une voiture dont
- * `options.isHumanOwner` renvoie vrai — typiquement, pendant le PROPRE
+ * du trajet (s'il en reste) redevient un pas normal via
+ * executeMoveStepGen. Jamais de progression de tuile ni de tir
+ * possibles dès l'entrée (impossible par construction / interdit au
+ * round 1, voir engine.js).
+ *
+ * `options.isHumanOwner` permet de mettre le pas en pause pour un Slam
+ * (direct, Wreck, ou en cascade via un dégât) impliquant une voiture
+ * dont cette fonction renvoie vrai — typiquement, pendant le PROPRE
  * tour du joueur, chaque fois que la voiture plus grande est la
  * sienne (`(owner) => owner === HUMAN`), remplaçant ainsi le hack de
  * prévisualisation (previewSlam/matchesPreviewedSlam côté
@@ -6232,7 +6065,7 @@ function* executeEntryStepGen(progressionState, allCars, car, dieValue, entryRow
 /**
  * Un seul pas de mouvement normal (voiture déjà sur le plateau) :
  * `direction` doit venir de human.getMovementStepOptions (donc déjà
- * filtrée légale). Réutilise moveCarWithProgression avec un chemin
+ * filtrée légale). Réutilise moveCarWithProgressionGen avec un chemin
  * d'UNE seule direction — la fonction elle-même gère intégralement les
  * effets de cette case (hazard, slam, sortie de tuile avec décalage
  * automatique, victoire éventuelle) avant de rendre la main : rien de
@@ -6244,12 +6077,6 @@ function* executeEntryStepGen(progressionState, allCars, car, dieValue, entryRow
  * détecte un arrêt forcé en comparant le `remaining` réellement obtenu
  * à ce que le coût de terrain normal aurait dû laisser.
  */
-function executeMoveStep(progressionState, allCars, allChoppers, playerNames, car, remaining, direction, slamOptions = {}) {
-  const result = moveCarWithProgression(progressionState, car, remaining, [direction], allCars, allChoppers, playerNames, slamOptions);
-  return result;
-}
-
-/** Variante GÉNÉRATRICE d'executeMoveStep — voir executeEntryStepGen. */
 function* executeMoveStepGen(progressionState, allCars, allChoppers, playerNames, car, remaining, direction, slamOptions = {}) {
   const result = yield* moveCarWithProgressionGen(progressionState, car, remaining, [direction], allCars, allChoppers, playerNames, slamOptions);
   return result;
@@ -6258,36 +6085,10 @@ function* executeMoveStepGen(progressionState, allCars, allChoppers, playerNames
 /**
  * Tir de fin de mouvement, avec cible LIBREMENT choisie par le joueur
  * (voir human.getShootTargetOptions) — `target` peut être null si le
- * joueur choisit de ne pas tirer, auquel cas rien n'est résolu.
- */
-function executeShoot(progressionState, allCars, allChoppers, car, target, roundNumber, options = {}) {
-  const log = [];
-  if (!target) {
-    log.push(`${car.id} choisit de ne pas tirer.`);
-    return { log, shootResult: null };
-  }
-  if (roundNumber === 1) {
-    log.push(`Tir impossible : les armes ne sont pas encore actives au 1er round (p.10)`);
-    return { log, shootResult: null };
-  }
-  if (car.status !== CAR_STATUS.OPERABLE) {
-    log.push(`${car.id} n'est plus opérable → tir impossible`);
-    return { log, shootResult: null };
-  }
-  const board = buildBoardFromProgressionState(progressionState);
-  const shootResult = resolveShoot(board, allCars, car, target, { roundNumber, progressionState, allChoppers, ...options });
-  log.push(...shootResult.log);
-  return { log, shootResult };
-}
-
-/**
- * Variante GÉNÉRATRICE d'executeShoot — voir executeEntryStepGen. Un
- * tir déclenchant un dégât Dazed en cascade peut, comme pendant le
- * tour de l'IA, percuter une voiture humaine plus grande — jusqu'ici
- * jamais géré du tout pour le PROPRE tir du joueur (aucune
- * `decideReroll`/`isHumanOwner` n'était transmise), corrigé au passage
- * en même temps que le nettoyage du hack Wreck (même catégorie de
- * gap que le correctif Coast, section 3bis du journal).
+ * joueur choisit de ne pas tirer, auquel cas rien n'est résolu. Un tir
+ * déclenchant un dégât Dazed en cascade peut percuter une voiture
+ * humaine plus grande — géré via `options.isHumanOwner`, comme pour
+ * le tour de l'IA.
  */
 function* executeShootGen(progressionState, allCars, allChoppers, car, target, roundNumber, options = {}) {
   const log = [];
