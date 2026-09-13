@@ -109,10 +109,6 @@
      présente sur ordinateur (bords de l'écran hors zone dashboards). */
   #dashboards-margin { width: 100%; height: 14px; background: #1e1e24; }
   #dashboards-viewport { width: 100%; overflow: hidden; position: relative; touch-action: none; background: #26262e; }
-  #dashboards-reset-btn { position: absolute; top: 8px; right: 8px; z-index: 10;
-    background: rgba(30,30,36,0.85); border: 1px solid #555; color: #eee; border-radius: 6px;
-    padding: 6px 10px; font-size: 12px; cursor: pointer; touch-action: auto; }
-  #dashboards-reset-btn:hover { background: rgba(60,60,70,0.9); }
   #dashboards-viewport svg { display: block; width: 100%; height: auto; }
 
   /* --------------------------------------------------------------
@@ -203,13 +199,13 @@
   <div id="info-band"></div>
 
   <!-- Zone 3 : dashboards des joueurs — librement zoomables/déplaçables
-       (Panzoom), contenus à cette seule zone. Marges de secours
-       au-dessus/dessous (touch-action normal) + bouton de
-       réinitialisation, pour toujours pouvoir revenir à un affichage
-       plein écran sur téléphone (retour de Mayrik). -->
+       (Panzoom), contenus à cette seule zone. Marge de secours
+       au-dessus/dessous (touch-action normal), pour toujours pouvoir
+       redéfiler la page sur téléphone (retour de Mayrik). Le
+       double-tap/double-clic (voir ui-script.js) bascule vers
+       l'affichage plein écran — plus besoin de bouton dédié. -->
   <div id="dashboards-margin"></div>
   <div id="dashboards-viewport">
-    <button id="dashboards-reset-btn" type="button" title="Réinitialiser le zoom">⤢ Réinitialiser</button>
     <svg id="dashboards" viewBox="0 0 900 300"></svg>
   </div>
   <div id="dashboards-margin"></div>
@@ -9182,11 +9178,6 @@ function initDashboardsPanzoom() {
     dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: "outside", canvas: true });
     const viewport = document.getElementById("dashboards-viewport");
     viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
-    // Bouton de secours (retour de Mayrik) : toujours un moyen sûr de
-    // revenir à l'affichage complet sur téléphone, sans dépendre d'un
-    // geste tactile précis dans une zone qui capture le tactile.
-    const resetBtn = document.getElementById("dashboards-reset-btn");
-    if (resetBtn) resetBtn.addEventListener("click", () => dashboardsPanzoom.reset());
 
     // -----------------------------------------------------------
     // Inertie après un panoramique relâché (retour de Mayrik : même
@@ -9195,14 +9186,23 @@ function initDashboardsPanzoom() {
     // méthode de référence "JavaScript Kinetic Scrolling" d'Ariya
     // Hidayat (github.com/ariya/kinetic, source à laquelle remontent
     // la plupart des bibliothèques de kinetic scrolling depuis 2013) :
-    // décroissance exponentielle de la vitesse, timeConstant=325ms —
-    // valeur qui reproduit VOLONTAIREMENT la même décélération que le
-    // scroll natif iOS (UIScrollView, decelerationRate "normal").
-    // panzoompan fournit x/y à chaque frame de panoramique (voir
-    // PanzoomEventDetail) ; on garde une petite fenêtre glissante de
-    // 200ms pour calculer la vitesse au relâché (panzoomend), plus
-    // robuste qu'un simple delta entre les 2 derniers échantillons.
-    const KINETIC_TIME_CONSTANT = 325;
+    // décroissance exponentielle de la vitesse. timeConstant=450ms
+    // (légèrement au-dessus des 325ms d'origine, qui reproduisaient la
+    // décélération native iOS — un peu court pour un grand geste sur
+    // une zone zoomée x4, retour de Mayrik : il fallait ~4 gestes pour
+    // traverser la zone). MOMENTUM_DISTANCE_MULTIPLIER amplifie en
+    // plus la distance parcourue SANS ralentir la décélération elle-
+    // même (qui ne dépend que de timeConstant, pas de l'amplitude) —
+    // exactement le paramètre qu'Ariya Hidayat décrit lui-même comme
+    // volontairement ajustable pour la "sensation" (son propre facteur
+    // 0.8, commenté "tweakable... a higher factor will give the
+    // illusion of a smooth and frictionless list"). panzoompan fournit
+    // x/y à chaque frame de panoramique (voir PanzoomEventDetail) ; on
+    // garde une petite fenêtre glissante de 200ms pour calculer la
+    // vitesse au relâché (panzoomend), plus robuste qu'un simple delta
+    // entre les 2 derniers échantillons.
+    const KINETIC_TIME_CONSTANT = 450;
+    const MOMENTUM_DISTANCE_MULTIPLIER = 3.5;
     let panSamples = [];
     let momentumFrame = null;
     function stopMomentum() {
@@ -9225,7 +9225,8 @@ function initDashboardsPanzoom() {
       const speed = Math.hypot(vx, vy);
       if (speed < 0.05) return; // relâché trop lentement -> pas de coast, juste s'arrêter
       const startX = last.x, startY = last.y;
-      const ampX = vx * KINETIC_TIME_CONSTANT, ampY = vy * KINETIC_TIME_CONSTANT;
+      const ampX = vx * KINETIC_TIME_CONSTANT * MOMENTUM_DISTANCE_MULTIPLIER;
+      const ampY = vy * KINETIC_TIME_CONSTANT * MOMENTUM_DISTANCE_MULTIPLIER;
       const startTime = performance.now();
       function step() {
         const elapsed = performance.now() - startTime;

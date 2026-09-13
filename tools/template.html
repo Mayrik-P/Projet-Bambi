@@ -109,10 +109,6 @@
      présente sur ordinateur (bords de l'écran hors zone dashboards). */
   #dashboards-margin { width: 100%; height: 14px; background: #1e1e24; }
   #dashboards-viewport { width: 100%; overflow: hidden; position: relative; touch-action: none; background: #26262e; }
-  #dashboards-reset-btn { position: absolute; top: 8px; right: 8px; z-index: 10;
-    background: rgba(30,30,36,0.85); border: 1px solid #555; color: #eee; border-radius: 6px;
-    padding: 6px 10px; font-size: 12px; cursor: pointer; touch-action: auto; }
-  #dashboards-reset-btn:hover { background: rgba(60,60,70,0.9); }
   #dashboards-viewport svg { display: block; width: 100%; height: auto; }
 
   /* --------------------------------------------------------------
@@ -203,13 +199,13 @@
   <div id="info-band"></div>
 
   <!-- Zone 3 : dashboards des joueurs — librement zoomables/déplaçables
-       (Panzoom), contenus à cette seule zone. Marges de secours
-       au-dessus/dessous (touch-action normal) + bouton de
-       réinitialisation, pour toujours pouvoir revenir à un affichage
-       plein écran sur téléphone (retour de Mayrik). -->
+       (Panzoom), contenus à cette seule zone. Marge de secours
+       au-dessus/dessous (touch-action normal), pour toujours pouvoir
+       redéfiler la page sur téléphone (retour de Mayrik). Le
+       double-tap/double-clic (voir ui-script.js) bascule vers
+       l'affichage plein écran — plus besoin de bouton dédié. -->
   <div id="dashboards-margin"></div>
   <div id="dashboards-viewport">
-    <button id="dashboards-reset-btn" type="button" title="Réinitialiser le zoom">⤢ Réinitialiser</button>
     <svg id="dashboards" viewBox="0 0 900 300"></svg>
   </div>
   <div id="dashboards-margin"></div>
