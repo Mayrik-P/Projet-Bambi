@@ -184,4 +184,93 @@ console.log("Un glissé (panoramique) n'est jamais compté comme un tap, même r
 viewport9.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
 console.log("dblclick (souris, ordinateur) réinitialise aussi le zoom (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
 
+// Bascule (retour de Mayrik) : à l'échelle 1 (plein écran), un
+// double-tap doit ZOOMER (x4), pas re-réinitialiser sur place.
+tapAt(win, viewport9, 200, 150);
+tapAt(win, viewport9, 205, 152);
+console.log("Depuis l'échelle 1, un double-tap zoome bien à x4 (bascule, pas un simple reset) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
+tapAt(win, viewport9, 200, 150);
+tapAt(win, viewport9, 205, 152);
+console.log("Un 2e double-tap (maintenant zoomé) redescend bien à l'échelle 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
+
+section("Test 10 — Retour de Mayrik (usage réel, conflit double-tap navigateur) : touch-action:manipulation plutôt que user-scalable=no (inefficace sur iOS)");
+
+dom = makeDom();
+win = dom.window;
+const bodyCss10 = dom.window.getComputedStyle(dom.window.document.body);
+console.log("body a bien touch-action:manipulation (désactive le double-tap-zoom du navigateur, iOS ET Android) (attendu true) :", bodyCss10.touchAction === "manipulation");
+
+const viewportMeta10 = dom.window.document.querySelector('meta[name="viewport"]');
+console.log("La balise viewport ne contient plus user-scalable=no (méthode abandonnée, ignorée par Safari iOS depuis iOS 10) (attendu true) :",
+  !!viewportMeta10 && !viewportMeta10.getAttribute("content").includes("user-scalable"));
+
+const dashViewportCss10 = dom.window.getComputedStyle(dom.window.document.getElementById("dashboards-viewport"));
+console.log("#dashboards-viewport garde bien son touch-action:none propre (Panzoom garde le contrôle total localement) (attendu true) :", dashViewportCss10.touchAction === "none");
+
 console.log("\n=== Fin des tests dédiés (mise en page 3 zones + zoom) ===");
+
+section("Test 11 — Inertie après un panoramique relâché (retour de Mayrik, formule Ariya Hidayat / kinetic scrolling)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+const svg11 = dom.window.document.getElementById("dashboards");
+const dashViewport11 = dom.window.document.getElementById("dashboards-viewport");
+// jsdom n'a pas de vrai moteur de mise en page : getBoundingClientRect
+// renvoie 0 partout par défaut, ce qui fait que le containment de
+// Panzoom clampe tout panoramique à (0,0), même un appel direct. On
+// simule un contenu bien plus grand que le conteneur (cas réel une
+// fois zoomé), condition nécessaire pour que .pan() ait une vraie
+// marge de manœuvre à tester.
+svg11.getBoundingClientRect = () => ({ x: -100, y: -50, left: -100, top: -50, right: 900, bottom: 350, width: 1000, height: 400 });
+dashViewport11.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 300, width: 800, height: 300 });
+win.eval("dashboardsPanzoom.zoom(2, { animate: false })"); // rien à panoramiquer à l'échelle 1 (minScale)
+win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
+
+// Simule un panoramique rapide : 4 échantillons rapprochés dans le
+// temps, se déplaçant tous dans la même direction (vitesse nette
+// élevée au relâché).
+function firePanzoomPan(win, el, x, y) {
+  el.dispatchEvent(new win.CustomEvent("panzoompan", { detail: { x, y, scale: 2, isSVG: true }, bubbles: true }));
+}
+svg11.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true }));
+firePanzoomPan(win, svg11, 0, 0);
+firePanzoomPan(win, svg11, 40, 0);
+firePanzoomPan(win, svg11, 90, 0);
+firePanzoomPan(win, svg11, 150, 0); // ~1.5px/ms de vitesse nette en x
+
+const panBeforeEnd = win.eval("dashboardsPanzoom.getPan().x");
+svg11.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: true }));
+setTimeout(() => {
+  const panAfterCoast = win.eval("dashboardsPanzoom.getPan().x");
+  console.log("Le panoramique continue bien tout seul après le relâché (inertie) (attendu true) :", panAfterCoast > panBeforeEnd);
+
+  // Un panoramique lent (quasi immobile) ne doit déclencher AUCUNE inertie.
+  win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
+  svg11.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true }));
+  firePanzoomPan(win, svg11, 0, 0);
+  firePanzoomPan(win, svg11, 1, 0);
+  const panBeforeEnd2 = win.eval("dashboardsPanzoom.getPan().x");
+  svg11.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: true }));
+  setTimeout(() => {
+    const panAfterEnd2 = win.eval("dashboardsPanzoom.getPan().x");
+    console.log("Un relâché quasi immobile ne déclenche PAS d'inertie (attendu true) :", panAfterEnd2 === panBeforeEnd2);
+
+    // Démarrer un NOUVEAU panoramique doit couper une inertie en cours.
+    win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
+    svg11.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true }));
+    firePanzoomPan(win, svg11, 0, 0);
+    firePanzoomPan(win, svg11, 150, 0);
+    svg11.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: true }));
+    setTimeout(() => {
+      svg11.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true })); // coupe le coast en cours
+      const panAtInterrupt = win.eval("dashboardsPanzoom.getPan().x");
+      setTimeout(() => {
+        const panAfterInterrupt = win.eval("dashboardsPanzoom.getPan().x");
+        console.log("Démarrer un nouveau panoramique coupe bien l'inertie en cours (attendu true) :", panAfterInterrupt === panAtInterrupt);
+        console.log("\n=== Fin du Test 11 ===");
+      }, 50);
+    }, 30);
+  }, 50);
+}, 50);
