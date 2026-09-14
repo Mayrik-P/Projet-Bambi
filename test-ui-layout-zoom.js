@@ -71,10 +71,47 @@ console.log("Largeur du SVG posée en % (attendu ~" + (expectedRatio2 * 100).toF
 console.log("Le ratio correspond bien à BOARD_VIEW.w / (1 tuile) (attendu true) :", Math.abs(actualWidthPercent2 - expectedRatio2 * 100) < 0.5);
 console.log("setupBoardScroll() est bien idempotent (rappel sans danger) (attendu true) :", (win.setupBoardScroll(), true));
 
+section("Test 2bis — BUG CORRIGÉ (retour de Mayrik, écran large/peu haut — ordinateur ou téléphone en mode paysage) : le plateau ne se retrouve plus tronqué, bascule vers un calage par la hauteur");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+const boardViewport2b = dom.window.document.getElementById("board-viewport");
+const boardSvg2b = dom.window.document.getElementById("board");
+stubBox(boardViewport2b, { clientWidth: 900 });
+const boardRatio2b = win.eval("boardWidthRatio");
+const boardVbW2b = win.eval("BOARD_VIEW.w"), boardVbH2b = win.eval("BOARD_VIEW.h");
+const widthDrivenH2b = 900 * boardRatio2b * (boardVbH2b / boardVbW2b);
+// Écran volontairement peu haut : le calage par la largeur dépasse
+// largement 40% de innerHeight (vérifié par construction du calcul
+// ci-dessus, avant même d'appeler applyBoardSizing).
+Object.defineProperty(win, "innerHeight", { value: 400, configurable: true });
+win.eval("applyBoardSizing()");
+const expectedMaxH2b = 400 * 0.4;
+console.log("Cette configuration dépasse bien le plafond, condition du test respectée (attendu true) :", widthDrivenH2b > expectedMaxH2b);
+console.log("Le conteneur ne dépasse jamais le plafond (40% de la hauteur d'écran) (attendu true) :",
+  Math.abs(parseFloat(boardViewport2b.style.height) - expectedMaxH2b) < 1);
+console.log("...et la largeur du SVG passe bien en 'auto' avec une hauteur explicite (plateau plus étroit, centré) (attendu true) :",
+  boardSvg2b.style.width === "auto" && Math.abs(parseFloat(boardSvg2b.style.height) - expectedMaxH2b) < 1);
+console.log("...centré horizontalement (marges automatiques) (attendu true) :",
+  boardSvg2b.style.marginLeft === "auto" && boardSvg2b.style.marginRight === "auto");
+
+// Redevenu un écran normal (assez haut) : doit repasser en calage par
+// la largeur (pas de blocage permanent dans le mode "hauteur").
+Object.defineProperty(win, "innerHeight", { value: 2000, configurable: true });
+win.eval("applyBoardSizing()");
+console.log("Redevenu un écran assez haut, le calage revient bien à 100% piloté par la largeur (attendu true) :",
+  boardSvg2b.style.width === (boardRatio2b * 100).toFixed(2) + "%" && boardSvg2b.style.marginLeft === "");
+
 section("Test 3 — Zone 1 : le curseur de position se synchronise dans les deux sens avec le défilement");
 
-const viewport3 = doc.getElementById("board-viewport");
-const slider3 = doc.getElementById("board-position-slider");
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+const viewport3 = dom.window.document.getElementById("board-viewport");
+const slider3 = dom.window.document.getElementById("board-position-slider");
 stubBox(viewport3, { scrollWidth: 1000, clientWidth: 400 }); // 600px de défilement possible
 viewport3.scrollLeft = 300; // la moitié du défilement possible
 win.syncBoardSlider();
@@ -108,12 +145,40 @@ win.newGame();
 win.render();
 const dashViewport5 = dom.window.document.getElementById("dashboards-viewport");
 stubBox(dashViewport5, { clientWidth: 800 });
+// innerHeight volontairement large (retour de Mayrik : bascule
+// largeur/hauteur ajoutée depuis, voir Test 5bis) — ce test-ci vérifie
+// le cas normal (écran assez haut, calage par la largeur), pas le cas
+// de secours.
+Object.defineProperty(win, "innerHeight", { value: 2000, configurable: true });
 win.updateDashboardsViewportHeight();
 const dashSvg5 = dom.window.document.getElementById("dashboards");
 const vbHeight5 = dashSvg5.viewBox.baseVal.height, vbWidth5 = dashSvg5.viewBox.baseVal.width;
 const expectedHeight5 = 800 * (vbHeight5 / vbWidth5);
 console.log("Hauteur du conteneur = largeur * (ratio du viewBox) (attendu true) :",
   Math.abs(parseFloat(dashViewport5.style.height) - expectedHeight5) < 1);
+
+section("Test 5bis — BUG CORRIGÉ (retour de Mayrik, écran large/peu haut) : bascule vers un calage par la hauteur quand le calage par la largeur dépasserait l'espace disponible");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+const dashViewport5b = dom.window.document.getElementById("dashboards-viewport");
+const dashSvg5b = dom.window.document.getElementById("dashboards");
+stubBox(dashViewport5b, { clientWidth: 800 });
+// Écran volontairement peu haut : le calage par la largeur (voir Test
+// 5, ~423px ici) dépasserait largement 40% de innerHeight.
+Object.defineProperty(win, "innerHeight", { value: 500, configurable: true });
+win.updateDashboardsViewportHeight();
+const vbHeight5b = dashSvg5b.viewBox.baseVal.height, vbWidth5b = dashSvg5b.viewBox.baseVal.width;
+const expectedMaxH5b = 500 * 0.4;
+console.log("Le conteneur ne dépasse jamais le plafond (40% de la hauteur d'écran) (attendu true) :",
+  Math.abs(parseFloat(dashViewport5b.style.height) - expectedMaxH5b) < 1);
+const expectedWidth5b = expectedMaxH5b * (vbWidth5b / vbHeight5b);
+console.log("...et la largeur du SVG est recalculée en conséquence (plateau dashboards plus étroit, centré) (attendu true) :",
+  Math.abs(parseFloat(dashSvg5b.style.width) - expectedWidth5b) < 1);
+console.log("...centré horizontalement (marges automatiques) (attendu true) :",
+  dashSvg5b.style.marginLeft === "auto" && dashSvg5b.style.marginRight === "auto");
 
 section("Test 6 — Zone 3 : Panzoom s'initialise correctement (avec le polyfill requestAnimationFrame)");
 
