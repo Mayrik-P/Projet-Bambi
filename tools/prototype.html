@@ -9205,41 +9205,92 @@ function initDashboardsPanzoom() {
     // retombe sur le défaut HTML (50% 50%, centré) — d'où le
     // recentrage observé. Forcer origin:'0 0' explicitement contourne
     // cette détection et corrige la cause réelle.
-    dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: "outside", canvas: true, origin: "0 0" });
+    // contain:false (BUG CORRIGÉ, retour de Mayrik — on peut déborder
+    // vers le haut/la gauche hors du contenu une fois zoomé) : le
+    // README officiel de Panzoom l'annonce noir sur blanc — "Change
+    // this [origin] at your own risk... it will BREAK FOCAL POINT
+    // ZOOMING, which assumes the defaults are set to do the more
+    // complicated calculations." Le containment "outside" repose sur
+    // les MÊMES calculs (constrainXY utilise un terme symétrique
+    // diffHorizontal/2 qui suppose une mise à l'échelle CENTRÉE,
+    // peu importe le vrai transform-origin) — en forçant origin:'0 0'
+    // pour corriger l'ancrage (voir plus haut), le containment intégré
+    // devient incohérent avec la vraie géométrie et laisse échapper le
+    // panoramique bien au-delà du contenu réel. Contourné en
+    // désactivant le containment natif et en implémentant le mien
+    // (clampDashboardsPan, plus bas) — beaucoup plus simple à calculer
+    // correctement pour un ancrage haut-gauche que la formule générale
+    // de Panzoom.
+    dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: false, canvas: true, origin: "0 0" });
     const viewport = document.getElementById("dashboards-viewport");
     viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
+
+    // Containment maison (remplace celui, natif mais incompatible avec
+    // origin:'0 0', de Panzoom — voir le commentaire ci-dessus). Le
+    // calcul est simple pour un ancrage haut-gauche : le contenu, à
+    // l'échelle 1, couvre EXACTEMENT le conteneur (voir
+    // updateDashboardsViewportHeight) — à l'échelle S, sa largeur/
+    // hauteur valent W*S/H*S. Pour que le contenu couvre TOUJOURS le
+    // conteneur sans jamais laisser paraître d'espace vide :
+    //   pan.x doit rester dans [W*(1-S), 0]
+    //   pan.y doit rester dans [H*(1-S), 0]
+    // (borne haute 0 : le bord gauche/haut du contenu ne peut jamais
+    // dépasser à DROITE/EN BAS de celui du conteneur ; borne basse :
+    // son bord droit/bas ne peut jamais remonter avant celui du
+    // conteneur).
+    //
+    // BUG CORRIGÉ (retour de Mayrik : l'inertie pouvait déborder
+    // largement au-delà du contenu) : la première version rappelait ce
+    // calcul de façon RÉACTIVE, sur l'événement panzoompan. Mais le
+    // code source de Panzoom (setTransformWithEvent) montre que cet
+    // événement — comme la mise à jour visuelle elle-même — est
+    // DIFFÉRÉ d'une frame via requestAnimationFrame, alors que
+    // getPan() renvoie la nouvelle valeur IMMÉDIATEMENT, avant ce
+    // délai. Résultat vérifié dans un vrai Chromium : l'inertie
+    // (qui rappelle .pan() à CHAQUE frame, sans attendre la correction
+    // de la frame précédente) accumulait des appels non corrigés plus
+    // vite que la réaction à l'événement ne pouvait les rattraper.
+    // Corrigé en exposant clampPanValue (fonction pure, sans effet de
+    // bord) : l'inertie l'appelle directement, de façon SYNCHRONE,
+    // avant même d'appeler pan() — jamais besoin d'attendre un
+    // événement. L'écouteur panzoompan reste néanmoins en filet de
+    // sécurité pour le glissement natif de Panzoom (glissé à la
+    // souris/au doigt, géré en interne par la bibliothèque, jamais
+    // appelé depuis notre propre code) — un décalage d'une frame y est
+    // sans conséquence perceptible.
+    function clampPanValue(x, y, scale) {
+      const W = viewport.clientWidth, H = viewport.clientHeight;
+      const minX = W * (1 - scale), minY = H * (1 - scale);
+      return { x: Math.min(0, Math.max(minX, x)), y: Math.min(0, Math.max(minY, y)) };
+    }
+    let clampingInProgress = false;
+    function clampDashboardsPan() {
+      if (clampingInProgress) return;
+      const scale = dashboardsPanzoom.getScale();
+      const pan = dashboardsPanzoom.getPan();
+      const clamped = clampPanValue(pan.x, pan.y, scale);
+      if (clamped.x !== pan.x || clamped.y !== pan.y) {
+        clampingInProgress = true;
+        dashboardsPanzoom.pan(clamped.x, clamped.y, { animate: false });
+        clampingInProgress = false;
+      }
+    }
+    svg.addEventListener("panzoompan", clampDashboardsPan);
+    svg.addEventListener("panzoomzoom", clampDashboardsPan);
 
     // -----------------------------------------------------------
     // 3 préréglages de zoom (retour de Mayrik) : x1/x2/x4, ramène à
     // chaque fois l'affichage à l'angle haut gauche en même temps.
-    // BUG CORRIGÉ (retour de Mayrik, usage réel — vue calée sur le
-    // CENTRE, pas l'angle haut gauche) : la vraie cause n'était ni
-    // focal ni un problème de timing (tenté puis vérifié faux), mais
-    // le containment "outside" lui-même — sa formule interne calcule
-    // ses bornes avec un terme symétrique (diffHorizontal/2, voir
-    // panzoom.js) qui suppose implicitement une mise à l'échelle
-    // centrée, INDÉPENDAMMENT de origin:'0 0' — un vrai zoom
-    // (scale()+pan(0,0)) qui devrait pourtant fournir un résultat
-    // fiable dans les coordonnées de containment ("outside") se
-    // retrouve donc reclampé vers une position centrée, malgré un
-    // transform-origin correctement posé. Vérifié empiriquement dans
-    // un vrai Chromium (Playwright) : pan(0,0) avec containment actif
-    // se fait reclamper à une valeur non nulle ; avec contain:false
-    // sur CET appel précis (bascule les points de départ ET
-    // d'arrivée), le recalage tombe pile sur l'angle haut gauche à
-    // n'importe quelle échelle. Contourner le containment est sans
-    // risque ici : (0,0) est une position connue et sûre (le contenu
-    // couvre toujours la zone visible, jamais d'espace vide), le
-    // containment ne protège que contre un DÉPLACEMENT libre de
-    // l'utilisateur, pas contre une valeur programmatique déjà connue
-    // bonne. contain:false évite aussi le besoin d'un setTimeout
-    // (plus de dépendance aux dimensions, donc plus de problème de
-    // fraîcheur après le zoom).
+    // Simple maintenant que le containment natif de Panzoom est
+    // désactivé (voir plus haut, clampDashboardsPan) : (0,0) est
+    // TOUJOURS la position haut-gauche valide à n'importe quelle
+    // échelle (aucun reclampage intempestif possible), plus besoin de
+    // contourner quoi que ce soit ni de différer quoi que ce soit.
     document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
       btn.addEventListener("click", () => {
         stopMomentum();
         dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false });
-        dashboardsPanzoom.pan(0, 0, { animate: false, contain: false });
+        dashboardsPanzoom.pan(0, 0, { animate: false });
       });
     });
 
@@ -9295,9 +9346,23 @@ function initDashboardsPanzoom() {
       function step() {
         const elapsed = performance.now() - startTime;
         const decay = Math.exp(-elapsed / KINETIC_TIME_CONSTANT); // calculé UNE fois, réutilisé pour la position ET la vitesse restante (mathématiquement liées : factor = 1 - decay)
-        dashboardsPanzoom.pan(startX + ampX * (1 - decay), startY + ampY * (1 - decay), { animate: false });
+        const targetX = startX + ampX * (1 - decay), targetY = startY + ampY * (1 - decay);
+        // Recadrage calculé de façon SYNCHRONE, AVANT d'appeler pan()
+        // (retour de Mayrik : l'inertie débordait largement au-delà du
+        // contenu). Ne PAS se fier à panzoompan/getPan() après coup
+        // pour détecter un dépassement : le code source de Panzoom
+        // (setTransformWithEvent) montre que la mise à jour visuelle
+        // ET l'événement sont différés d'une frame via
+        // requestAnimationFrame, alors que getPan() renvoie la valeur
+        // demandée immédiatement, AVANT ce délai — une vérification
+        // après coup, dans la même frame, ne peut donc jamais détecter
+        // le recadrage. clampPanValue() est une fonction pure, sans ce
+        // problème : le résultat est fiable immédiatement.
+        const clamped = clampPanValue(targetX, targetY, dashboardsPanzoom.getScale());
+        dashboardsPanzoom.pan(clamped.x, clamped.y, { animate: false });
+        const hitBoundary = clamped.x !== targetX || clamped.y !== targetY;
         const remainingSpeed = speed * decay;
-        momentumFrame = remainingSpeed > 0.02 ? requestAnimationFrame(step) : null;
+        momentumFrame = (remainingSpeed > 0.02 && !hitBoundary) ? requestAnimationFrame(step) : null;
       }
       momentumFrame = requestAnimationFrame(step);
     });
