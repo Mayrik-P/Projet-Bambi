@@ -329,7 +329,7 @@ const fsBtn12 = dom.window.document.getElementById("fullscreen-btn");
 console.log("Le bouton existe dans le DOM (attendu true) :", !!fsBtn12);
 console.log("Masqué proprement quand document.fullscreenEnabled est absent (comme sur iOS) (attendu true) :", fsBtn12.style.display === "none");
 
-section("Test 13 — 3 boutons de préréglage de zoom (x1/x2/x4) : focal:{0,0} contre le centrage par défaut, recalage à (0,0) différé via setTimeout (retour de Mayrik)");
+section("Test 13 — 3 boutons de préréglage de zoom (x1/x2/x4) : origin:'0 0' + contain:false sur le recalage, vérifiés en vrai navigateur (Playwright/Chromium) (retour de Mayrik)");
 
 dom = makeDom();
 win = dom.window;
@@ -339,54 +339,65 @@ const presetBtns13 = [...dom.window.document.querySelectorAll("#dashboards-zoom-
 console.log("Les 3 boutons x1/x2/x4 sont bien présents, dans cet ordre (attendu true) :",
   presetBtns13.map((b) => b.dataset.zoomPreset).join(",") === "1,2,4");
 
-// Espionne pan() ET zoom() plutôt que de recalculer la géométrie
-// réelle de Panzoom : un stub statique de getBoundingClientRect
-// (nécessaire dans jsdom, voir Test 11) ne peut pas refléter
-// fidèlement des dimensions qui changent RÉELLEMENT avec l'échelle —
-// fragile dès qu'un test traverse plusieurs échelles successives,
-// comme ici. Ce qui compte pour CE test : que zoom() reçoive bien
-// focal:{x:0,y:0} (BUG CORRIGÉ, retour de Mayrik : sans focal, zoom()
-// vise par défaut le CENTRE de l'élément, jamais son transform-origin
-// — comportement documenté de Panzoom, voir le commentaire du code)
-// et que pan(0,0) soit bien appelé APRÈS un délai (jamais dans le
-// même tick synchrone) — la géométrie de containment elle-même est la
-// responsabilité, déjà testée, de Panzoom.
+// BUG CORRIGÉ (retour de Mayrik, usage réel — vue centrée au lieu de
+// calée en haut à gauche). Deux tentatives précédentes se sont
+// révélées fausses en le vérifiant dans un VRAI Chromium (Playwright,
+// jsdom ne pouvant pas révéler ce genre de bug géométrique — pas de
+// vraie mise en page) :
+//   1. "focal:{x:0,y:0}" sur zoom() : semblait plausible sur le
+//      papier, mais focal.x=0 se simplifie mathématiquement en
+//      "ne change pas le panoramique actuel" — jamais "ramène à
+//      l'angle".
+//   2. zoom() + pan(0,0) différé par setTimeout : le VRAI souci
+//      n'était pas un problème de timing.
+// La vraie cause, trouvée en lisant le VRAI code source de Panzoom
+// (panzoom.js, fonction isSVGElement) : sa détection SVG exclut
+// EXPLICITEMENT la balise <svg> RACINE elle-même
+// (`nodeName !== 'svg'` — pensée pour panzoomer un <g> À L'INTÉRIEUR
+// d'un SVG, pas le <svg> lui-même). Posé ici directement sur
+// <svg id="dashboards">, Panzoom retombe donc sur le défaut HTML
+// (transform-origin 50% 50%, centré) au lieu de 0% 0%. Un 2e souci
+// s'ajoute : même origin corrigé, le containment "outside" calcule
+// ses bornes avec un terme symétrique (diffHorizontal/2) qui suppose
+// implicitement une mise à l'échelle centrée, quel que soit le VRAI
+// transform-origin — reclampant (0,0) vers une valeur non nulle.
+// Vérifié empiriquement dans un vrai Chromium : origin:'0 0' (posé à
+// la construction, voir dashboardsPanzoom plus haut) + contain:false
+// sur CET appel précis de pan() suffit, à toutes les échelles.
+console.log("Panzoom est bien construit avec origin:'0 0' (contourne l'exclusion de la balise <svg> racine) (attendu true) :",
+  dom.window.document.getElementById("dashboards").style.transformOrigin === "0 0");
+
 const panCalls13 = [];
 const zoomCalls13 = [];
 const originalPan13 = win.eval("dashboardsPanzoom.pan.bind(dashboardsPanzoom)");
 const originalZoom13 = win.eval("dashboardsPanzoom.zoom.bind(dashboardsPanzoom)");
 win.eval("(function(spy){ dashboardsPanzoom.pan = spy; })")((x, y, opts) => {
-  panCalls13.push({ x, y, t: Date.now() });
+  panCalls13.push({ x, y, contain: opts && opts.contain });
   return originalPan13(x, y, opts);
 });
 win.eval("(function(spy){ dashboardsPanzoom.zoom = spy; })")((scale, opts) => {
-  zoomCalls13.push({ scale, focal: opts && opts.focal });
+  zoomCalls13.push({ scale });
   return originalZoom13(scale, opts);
 });
 
 const btnX2_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "2");
 btnX2_13.dispatchEvent(new win.Event("click", { bubbles: true }));
-console.log("Cliquer sur x2 règle bien l'échelle IMMÉDIATEMENT (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
-console.log("...avec focal:{x:0,y:0} explicitement transmis (vise l'angle haut gauche, pas le centre par défaut) (attendu true) :",
-  zoomCalls13.length === 1 && JSON.stringify(zoomCalls13[0].focal) === '{"x":0,"y":0}');
-console.log("...mais pan(0,0) n'est PAS encore appelé dans le même tick synchrone (attendu true) :", panCalls13.length === 0);
+console.log("Cliquer sur x2 règle bien l'échelle à 2 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
+console.log("...zoom() est bien appelé (attendu true) :", zoomCalls13.length === 1 && zoomCalls13[0].scale === 2);
+console.log("...puis pan(0,0, {contain:false}) tout de suite, SANS délai (plus besoin de setTimeout — contain:false évite le souci de dimensions) (attendu true) :",
+  panCalls13.length === 1 && panCalls13[0].x === 0 && panCalls13[0].y === 0 && panCalls13[0].contain === false);
 
-setTimeout(() => {
-  console.log("...puis pan(0,0) est bien appelé une fois le setTimeout écoulé (attendu true) :",
-    panCalls13.length === 1 && panCalls13[0].x === 0 && panCalls13[0].y === 0);
+const btnX4_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "4");
+btnX4_13.dispatchEvent(new win.Event("click", { bubbles: true }));
+console.log("Cliquer sur x4 règle bien l'échelle à 4 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
 
-  const btnX4_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "4");
-  btnX4_13.dispatchEvent(new win.Event("click", { bubbles: true }));
-  console.log("Cliquer sur x4 règle bien l'échelle à 4 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
+const btnX1_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "1");
+btnX1_13.dispatchEvent(new win.Event("click", { bubbles: true }));
+console.log("Cliquer sur x1 règle bien l'échelle à 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
 
-  const btnX1_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "1");
-  btnX1_13.dispatchEvent(new win.Event("click", { bubbles: true }));
-  console.log("Cliquer sur x1 règle bien l'échelle à 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
-
-  const dashViewport13 = dom.window.document.getElementById("dashboards-viewport");
-  tapAt(win, dashViewport13, 200, 150);
-  tapAt(win, dashViewport13, 205, 152);
-  console.log("Le double-tap x1/x4 continue bien de fonctionner en parallèle (retour de Mayrik : gardé) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
-}, 20);
+const dashViewport13 = dom.window.document.getElementById("dashboards-viewport");
+tapAt(win, dashViewport13, 200, 150);
+tapAt(win, dashViewport13, 205, 152);
+console.log("Le double-tap x1/x4 continue bien de fonctionner en parallèle (retour de Mayrik : gardé) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
 
 } // fin de runTests12And13()
