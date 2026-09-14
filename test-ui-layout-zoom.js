@@ -268,4 +268,74 @@ console.log("Le double-tap tactile bascule bien vers l'échelle 1 (attendu true)
 viewport12c.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
 console.log("...et le dblclick synthétique qui suit ne re-bascule PAS (reste à l'échelle 1) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
 
-console.log("\n=== Fin des tests dédiés (mise en page 3 zones + zoom) ===");
+section("Test 13 — Plus de distance parcourue par le glissement, via inertie (retour de Mayrik : reprise de l'approche qui fonctionnait déjà, avec le containment NATIF de Panzoom cette fois — plus de calcul de limite fait maison)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+const svg13 = dom.window.document.getElementById("dashboards");
+// jsdom n'a pas de vraie mise en page : getBoundingClientRect renvoie
+// 0 partout par défaut, ce qui ferait clamper tout panoramique à
+// (0,0) par le containment NATIF de Panzoom (contain:"outside"), même
+// un appel direct. On simule un contenu bien plus grand que le
+// conteneur (cas réel une fois zoomé), condition nécessaire pour
+// qu'un panoramique ait une vraie marge de manœuvre à tester.
+svg13.getBoundingClientRect = () => ({ x: -600, y: -300, left: -600, top: -300, right: 1000, bottom: 700, width: 1600, height: 1000 });
+dom.window.document.getElementById("dashboards-viewport").getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 400, bottom: 400, width: 400, height: 400 });
+win.eval("dashboardsPanzoom.zoom(4, { animate: false })");
+win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
+
+function firePanzoomPan13(win, el, x, y) {
+  el.dispatchEvent(new win.CustomEvent("panzoompan", { detail: { x, y, scale: 4, isSVG: true }, bubbles: true }));
+}
+svg13.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true }));
+firePanzoomPan13(win, svg13, 0, 0);
+firePanzoomPan13(win, svg13, -40, 0);
+firePanzoomPan13(win, svg13, -90, 0);
+firePanzoomPan13(win, svg13, -150, 0); // vitesse nette suffisante pour un coast net
+
+const panBeforeEnd13 = win.eval("dashboardsPanzoom.getPan().x");
+svg13.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: true }));
+setTimeout(() => {
+  const panAfterCoast13 = win.eval("dashboardsPanzoom.getPan().x");
+  console.log("Le panoramique continue bien tout seul après le relâché (inertie) (attendu true) :", panAfterCoast13 < panBeforeEnd13);
+
+  // Un panoramique lent (quasi immobile) ne doit déclencher AUCUNE
+  // inertie. Un vrai délai (setTimeout), pas juste 2 dispatches
+  // synchrones consécutifs : sans lui, l'écart de temps entre les 2
+  // échantillons est quasi nul et imprévisible (sous la milliseconde),
+  // ce qui peut faire ressortir une vitesse calculée ÉNORME (delta
+  // minuscule divisé par un temps quasi nul) au lieu de petite —
+  // instable d'une exécution à l'autre, pas un vrai bug produit.
+  win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
+  svg13.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true }));
+  firePanzoomPan13(win, svg13, 0, 0);
+  setTimeout(() => {
+  firePanzoomPan13(win, svg13, -1, 0);
+  const panBeforeEnd132 = win.eval("dashboardsPanzoom.getPan().x");
+  svg13.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: true }));
+  setTimeout(() => {
+    const panAfterEnd132 = win.eval("dashboardsPanzoom.getPan().x");
+    console.log("Un relâché quasi immobile ne déclenche PAS d'inertie (attendu true) :", panAfterEnd132 === panBeforeEnd132);
+
+    // Démarrer un NOUVEAU panoramique doit couper une inertie en cours.
+    win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
+    svg13.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true }));
+    firePanzoomPan13(win, svg13, 0, 0);
+    firePanzoomPan13(win, svg13, -150, 0);
+    svg13.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: true }));
+    setTimeout(() => {
+      svg13.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true })); // coupe le coast en cours
+      const panAtInterrupt13 = win.eval("dashboardsPanzoom.getPan().x");
+      setTimeout(() => {
+        const panAfterInterrupt13 = win.eval("dashboardsPanzoom.getPan().x");
+        console.log("Démarrer un nouveau panoramique coupe bien l'inertie en cours (attendu true) :", panAfterInterrupt13 === panAtInterrupt13);
+        // Le double-tap doit aussi couper une inertie en cours (retour
+        // de stopMomentum() dans toggleZoomAt, réajouté avec l'inertie).
+        console.log("\n=== Fin des tests dédiés (mise en page 3 zones + zoom) ===");
+      }, 50);
+    }, 30);
+  }, 50);
+  }, 50);
+}, 50);
