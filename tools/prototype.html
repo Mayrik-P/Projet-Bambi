@@ -9200,22 +9200,26 @@ function initDashboardsPanzoom() {
     // -----------------------------------------------------------
     // 3 préréglages de zoom (retour de Mayrik) : x1/x2/x4, ramène à
     // chaque fois l'affichage à l'angle haut gauche en même temps.
-    // BUG CORRIGÉ (retour de Mayrik, usage réel) : zoom() puis pan(0,0)
-    // enchaînés ne recalait pas fiablement sur un vrai navigateur —
-    // invisible dans nos tests jsdom (pas de vraie mise en page). Cas
-    // officiellement documenté par Panzoom lui-même (FAQ du dépôt,
-    // github.com/timmywil/panzoom) : avec `contain` actif, Panzoom a
-    // besoin des dimensions de l'élément pour poser pan(), mais ces
-    // dimensions ne sont à jour qu'une fois le nouveau zoom PEINT par
-    // le navigateur — enchaîner zoom() puis pan() dans la même frame
-    // synchrone utilise donc encore les anciennes dimensions.
-    // Solution recommandée par l'auteur lui-même, reprise ici telle
-    // quelle : différer pan() d'un setTimeout, le temps que le
-    // navigateur ait peint le nouveau zoom.
+    // BUG CORRIGÉ (retour de Mayrik, usage réel — vue calée sur le
+    // CENTRE de la zone, pas l'angle haut gauche) : zoom(scale) SANS
+    // point focal explicite vise par défaut le CENTRE de l'élément,
+    // jamais son transform-origin — comportement historiquement connu
+    // de cette famille de bibliothèques (voir
+    // github.com/timmywil/panzoom/issues/51, "zooming using buttons
+    // seems to set the focal point of the zoom to be the center of
+    // the element"). Corrigé en fournissant explicitement
+    // focal:{x:0,y:0} (option native documentée : "Zoom to the given
+    // point on the panzoom element") — ce point est exprimé dans le
+    // repère propre à l'élément, où (0,0) est son coin haut gauche.
+    // Le pan(0,0) différé (voir plus bas) reste en plus, en filet de
+    // sécurité pour l'autre souci documenté par Panzoom lui-même
+    // (FAQ du dépôt) : avec `contain` actif, les dimensions utilisées
+    // pour poser la position ne sont à jour qu'une fois le nouveau
+    // zoom PEINT par le navigateur — d'où le report via setTimeout.
     document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
       btn.addEventListener("click", () => {
         stopMomentum();
-        dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false });
+        dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false, focal: { x: 0, y: 0 } });
         setTimeout(() => dashboardsPanzoom.pan(0, 0, { animate: false }));
       });
     });
