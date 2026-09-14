@@ -686,6 +686,21 @@ function diceboardSlots(playerName) {
 // pas avoir à retoucher cette fonction le jour où on passera à un
 // affichage un-joueur-à-la-fois (carousel/slider), décision actée
 // avec Mayrik.
+// Ordre des lignes du bloc dashboards, joueur actif en tête, suivi du
+// reste dans l'ordre RÉEL du tour (rotation de playerOrder à partir du
+// joueur actif) — retour de Mayrik : HUMAN ne doit jamais rester
+// coincé en 2e position pendant tous les tours de chaque IA, mais
+// descendre progressivement selon sa vraie place dans la rotation.
+// Factorisé (ex-code dupliqué dans renderDashboards et réutilisé par
+// l'animation de lancer de dés en début de round, qui a besoin de la
+// même origine de ligne par joueur).
+function currentDashboardRowOrder() {
+  const cp = getCurrentPlayer(G.roundState);
+  const po = G.roundState.playerOrder;
+  const cpIdx = cp ? po.indexOf(cp) : -1;
+  return cpIdx >= 0 ? [...po.slice(cpIdx), ...po.slice(0, cpIdx)] : PLAYER_NAMES;
+}
+
 function renderDashboards() {
   const svg = document.getElementById("dashboards");
   if (!svg) return; // anciens tests jsdom sans ce conteneur : ne casse rien
@@ -722,9 +737,7 @@ function renderDashboards() {
   // sinon HUMAN restait coincé en 2e position pendant TOUS les tours
   // de chaque IA, au lieu de descendre progressivement selon sa vraie
   // place dans la rotation.
-  const po = G.roundState.playerOrder;
-  const cpIdx = cp ? po.indexOf(cp) : -1;
-  const order = cpIdx >= 0 ? [...po.slice(cpIdx), ...po.slice(0, cpIdx)] : PLAYER_NAMES;
+  const order = currentDashboardRowOrder();
 
   let maxRight = 0;
   let pendingAiButton = null;
@@ -818,7 +831,13 @@ function renderDashboards() {
       const slotKey = "slot" + i;
       const { x: dx, y: dy } = slotDieOrigin(dice, DICEBOARD_SLOT_FRACTION[slotKey]);
       const isClickable = playerName === HUMAN && (dieStep || commandDieStep);
-      svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
+      // data-diceboard-die : accroche utilisée UNIQUEMENT par l'animation
+      // de lancer en début de round (playRoundDiceRollAnimation) pour
+      // retrouver la position écran réelle de CE dé précis (via
+      // getBoundingClientRect, qui tient compte du pan/zoom Panzoom
+      // automatiquement) — sans attribut, pas de comportement changé.
+      const extra = (isClickable ? 'class="clickable" ' : "") + `data-diceboard-die="${playerName}:${i}"`;
+      svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, extra, SLOT_ROTATION[slotKey]));
       if (isClickable) {
         const handler = dieStep ? (() => { pickDie(value); render(); }) : (() => { pickCommandDieChoice(value); render(); });
         svg.lastElementChild.addEventListener("click", handler);
@@ -2861,6 +2880,212 @@ function updateDashboardsViewportHeight() {
   viewport.style.height = naturalHeight.toFixed(1) + "px";
 }
 
+// ===================================================================
+// ANIMATION DE LANCER DE DÉS — début de round (dés de MOUVEMENT du
+// diceboard uniquement pour l'instant). Technique validée avec Mayrik
+// sur un prototype autonome avant intégration ici : position X en
+// avance monotone (jamais de retour en arrière), hauteur pilotée par
+// la fonction de rebond de Robert Penner (easeOutBounce — cf.
+// https://easings.net/#easeOutBounce et le tutoriel javascript.info
+// "Animate the bouncing ball", qui applique exactement cette même
+// fonction à la position verticale d'une chute). Entrée par
+// l'extérieur gauche de l'écran, cyclage rapide des faces pendant le
+// vol, écrasement (squash) automatique à chaque contact avec le sol,
+// ombre qui s'efface en fondu une fois le dé posé.
+//
+// PIÈGE ÉVITÉ (important) : le SVG #dashboards est piloté par Panzoom
+// (voir pièges techniques du projet — ne jamais toucher aux
+// dimensions/viewBox du SVG en dehors de son API). Dessiner les dés
+// animés À L'INTÉRIEUR de ce SVG, hors de son viewBox actuel, les
+// aurait rendus invisibles (le SVG les découpe lui-même avant même que
+// Panzoom applique son propre pan/zoom). Solution : une surcouche HTML
+// `position:fixed` totalement INDÉPENDANTE de Panzoom, positionnée en
+// coordonnées ÉCRAN RÉELLES via getBoundingClientRect() du vrai dé
+// final déjà dessiné par le render() normal (donc toujours juste,
+// quel que soit le pan/zoom en cours) — jamais de recalcul manuel des
+// coordonnées SVG/Panzoom.
+//
+// Choix d'intégration (pour ne RIEN casser d'existant) : cette
+// animation est une SURCOUCHE PUREMENT COSMÉTIQUE, ajoutée PAR-DESSUS
+// un render() déjà terminé et déjà correct (le vrai dé est simplement
+// masqué le temps du vol, puis révélé) — jamais un remplacement du
+// rendu réel, qui reste 100% synchrone comme avant. Elle ne se
+// déclenche que si window.requestAnimationFrame existe réellement :
+// tous nos tests jsdom en sont dépourvus (vérifié : seul
+// test-ui-layout-zoom.js le polyfille, pour Panzoom, et ne traverse
+// aucun changement de round), donc AUCUN test existant n'est affecté.
+function easeOutBounceDie(t) {
+  const n1 = 7.5625, d1 = 2.75;
+  if (t < 1 / d1) return n1 * t * t;
+  if (t < 2 / d1) { t -= 1.5 / d1; return n1 * t * t + 0.75; }
+  if (t < 2.5 / d1) { t -= 2.25 / d1; return n1 * t * t + 0.9375; }
+  t -= 2.625 / d1;
+  return n1 * t * t + 0.984375;
+}
+function easeOutCubicDie(t) { return 1 - Math.pow(1 - t, 3); }
+
+// Round déjà animé (ou en cours d'animation) — évite de relancer le
+// lancer à chaque render() appelé pendant le même round (un clic du
+// joueur redessine tout, mais ne doit rejouer l'animation qu'au
+// changement RÉEL de round). 0 = aucun round encore animé.
+let lastRolledRoundNumber = 0;
+
+// Contenu HTML (face + pips) d'un dé de mouvement pour une valeur
+// donnée, à une taille donnée — même logique de calage que
+// dieMarkup()/diePipLayout() (grille 3x3, un pip = 1/3 de la face),
+// simplement transposée en <img> HTML plutôt qu'en <image> SVG.
+function movingDieOverlayHTML(value, color, size) {
+  const pipCell = size / 3;
+  const facePath = `../images/dice/die-move-${color}.webp`;
+  const pipPath = `../images/dice/die-move-pip.webp`;
+  const pips = diePipLayout(value).map(([col, row]) => {
+    const px = col * pipCell, py = row * pipCell;
+    return `<img src="${pipPath}" style="position:absolute; left:${px}px; top:${py}px; width:${pipCell}px; height:${pipCell}px;">`;
+  }).join("");
+  return `<img src="${facePath}" style="position:absolute; left:0; top:0; width:${size}px; height:${size}px;">${pips}`;
+}
+
+function diceRollOverlayRoot() {
+  let overlay = document.getElementById("dice-roll-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "dice-roll-overlay";
+    Object.assign(overlay.style, {
+      position: "fixed", inset: "0", pointerEvents: "none", zIndex: "9999", overflow: "visible"
+    });
+    document.body.appendChild(overlay);
+  }
+  return overlay;
+}
+
+// Anime UN dé, de l'extérieur gauche de l'écran jusqu'au rectangle
+// écran réel du vrai dé déjà rendu (targetEl) — masqué le temps du
+// vol, révélé une fois l'animation terminée (déjà à la bonne valeur/
+// position, aucun changement visuel au moment de la révélation).
+function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs) {
+  return new Promise((resolve) => {
+    const rect = targetEl.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) { resolve(); return; } // élément non visible (safety net)
+
+    const size = rect.width;
+    const toX = rect.left + size / 2, toY = rect.top + size / 2;
+    const fromX = -size * 2; // hors-champ, à l'extérieur gauche de l'écran
+    const fromY = toY - size * 1.2;
+    const amplitude = Math.max(size, toY - fromY);
+
+    targetEl.style.opacity = "0"; // masqué le temps du vol, révélé à l'identique à la fin
+
+    const overlayRoot = diceRollOverlayRoot();
+
+    const die = document.createElement("div");
+    die.style.position = "fixed";
+    die.style.width = size + "px";
+    die.style.height = size + "px";
+    die.style.willChange = "transform";
+    die.innerHTML = movingDieOverlayHTML(finalValue, color, size);
+
+    const shadow = document.createElement("div");
+    shadow.style.position = "fixed";
+    shadow.style.width = size + "px";
+    shadow.style.height = size * 0.28 + "px";
+    shadow.style.borderRadius = "50%";
+    shadow.style.background = "rgba(0,0,0,0.55)";
+    shadow.style.filter = "blur(2px)";
+
+    overlayRoot.appendChild(shadow);
+    overlayRoot.appendChild(die);
+
+    setTimeout(() => {
+      let cycling = true;
+      const cycle = setInterval(() => {
+        if (cycling) die.innerHTML = movingDieOverlayHTML(1 + Math.floor(Math.random() * 6), color, size);
+      }, 60);
+
+      const startTime = performance.now();
+
+      function frame(now) {
+        const t = Math.min(1, (now - startTime) / totalMs);
+
+        const x = fromX + (toX - fromX) * easeOutCubicDie(t);
+        const heightAboveGround = amplitude * (1 - easeOutBounceDie(t));
+        const y = toY - heightAboveGround;
+
+        const rot = easeOutCubicDie(t) * 420;
+        const contactPulse = Math.max(0, 1 - heightAboveGround / (amplitude * 0.12));
+        const scaleX = 1 + contactPulse * 0.3;
+        const scaleY = 1 - contactPulse * 0.3;
+
+        die.style.transform =
+          `translate(${x - size / 2}px, ${y - size / 2}px) rotate(${rot}deg) scale(${scaleX}, ${scaleY})`;
+
+        const shadowScale = Math.max(0.3, 1 - heightAboveGround / amplitude);
+        shadow.style.transform = `translate(${x - size / 2}px, ${toY + size * 0.36}px) scale(${shadowScale})`;
+        shadow.style.opacity = (0.2 + 0.35 * shadowScale).toFixed(2);
+
+        if (cycling && t > 0.8) {
+          cycling = false;
+          clearInterval(cycle);
+          die.innerHTML = movingDieOverlayHTML(finalValue, color, size);
+        }
+
+        if (t < 1) {
+          requestAnimationFrame(frame);
+        } else {
+          die.style.transform = `translate(${toX - size / 2}px, ${toY - size / 2}px)`;
+          shadow.style.transition = "opacity 400ms ease";
+          shadow.style.opacity = "0";
+          setTimeout(() => {
+            shadow.remove();
+            die.remove();
+            targetEl.style.opacity = ""; // révèle le vrai dé, déjà à la bonne place/valeur
+            resolve();
+          }, 420);
+        }
+      }
+      requestAnimationFrame(frame);
+    }, delay);
+  });
+}
+
+// Déclenche le lancer animé des 4 dés de mouvement de CHAQUE joueur,
+// par-dessus le render() déjà effectué. N'affecte jamais le déroulé
+// réel du jeu : les vraies valeurs (déjà tirées par le moteur dans
+// G.roundState.dicePool) sont connues à l'avance, cette fonction ne
+// fait que les mettre en scène visuellement.
+function playRoundDiceRollAnimation() {
+  const svg = document.getElementById("dashboards");
+  if (!svg) return;
+
+  const order = currentDashboardRowOrder();
+  const allDicePromises = [];
+
+  order.forEach((playerName, rowIndex) => {
+    const values = diceboardSlots(playerName); // 4 valeurs déjà tirées par le moteur pour ce round
+    const color = PLAYER_CAR_COLOR[playerName];
+
+    values.forEach((value, i) => {
+      if (value === null) return;
+      const targetEl = svg.querySelector(`[data-diceboard-die="${playerName}:${i}"]`);
+      if (!targetEl) return; // safety net (ex. test/rendu partiel)
+      allDicePromises.push(animateOneMovingDie(targetEl, value, color, rowIndex * 90 + i * 70, 1300));
+    });
+  });
+
+  Promise.all(allDicePromises);
+}
+
+// Gate de sécurité : ne déclenche l'animation que dans un vrai
+// navigateur (requestAnimationFrame réellement disponible) et
+// seulement au changement RÉEL de round — jamais à chaque simple
+// render() dans le même round. Voir le commentaire détaillé plus haut
+// sur pourquoi ceci ne peut casser aucun test existant.
+function maybeTriggerRoundDiceRollAnimation() {
+  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return;
+  if (G.roundState.roundNumber === lastRolledRoundNumber) return;
+  lastRolledRoundNumber = G.roundState.roundNumber;
+  playRoundDiceRollAnimation();
+}
+
 function render() {
   saveGameState(); // point de contrôle sûr : voir le commentaire détaillé près de SAVE_KEY
 
@@ -2891,6 +3116,8 @@ function render() {
 
   const logEl = document.getElementById("log");
   logEl.innerHTML = fullLog.slice().reverse().map((e) => e.sep ? `<div class="turn-sep">${e.sep}</div>` : `<div class="line">${e.line}</div>`).join("");
+
+  maybeTriggerRoundDiceRollAnimation();
 }
 
 // ===================================================================
