@@ -9193,13 +9193,6 @@ function initDashboardsPanzoom() {
   if (typeof Panzoom === "undefined") return; // filet de sécurité : jamais bloquant si la lib ne charge pas
   try {
     const svg = document.getElementById("dashboards");
-    // Configuration NATIVE de Panzoom, sans rien de personnalisé
-    // (retour de Mayrik) : après plusieurs tentatives pour caler
-    // précisément le zoom sur l'angle haut gauche (origin personnalisé
-    // + containment maison + inertie), le résultat en usage réel était
-    // décevant — marges visibles, glissement qui déborde puis se
-    // recentre brutalement avec l'inertie. Mis de côté pour
-    // l'instant : ce n'est pas bloquant, seulement un confort d'usage.
     // Retour à une base simple et éprouvée — l'API native de Panzoom,
     // telle quelle, y compris son containment intégré ("outside") et
     // son ancrage par défaut (centré pour cet élément — accepté tel
@@ -9208,11 +9201,90 @@ function initDashboardsPanzoom() {
     const viewport = document.getElementById("dashboards-viewport");
     viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
 
+    // -----------------------------------------------------------
+    // Plus de distance parcourue par le glissement (retour de Mayrik :
+    // "je n'ai pas de chiffre exact, mais... x4"). Deux tentatives de
+    // multiplier le geste EN DIRECT (live) se sont révélées bancales :
+    //   1. Écouter panzoompan et corriger après coup : Panzoom suit le
+    //      pointeur de façon ABSOLUE depuis le début du geste, donc
+    //      chaque nouvel échantillon natif écrasait notre correction
+    //      précédente (zigzag).
+    //   2. noBind + relayer un événement "amplifié" à handleMove
+    //      (pourtant la méthode officiellement documentée pour étendre
+    //      Panzoom) : cassait sur "Illegal invocation" — un objet
+    //      construit par Object.create(événementRéel,...) n'est pas
+    //      accepté par les méthodes natives internes qui exigent le
+    //      VRAI objet Event, pas un simple héritier par prototype.
+    // Retour de Mayrik (bon rappel) : l'inertie mise en place la
+    // veille donnait déjà, elle, "plus d'ampleur au mouvement, avec un
+    // peu d'inertie" — et fonctionnait bien EN ELLE-MÊME. Le souci de
+    // l'époque venait d'ailleurs (un containment maison incohérent
+    // avec un transform-origin personnalisé, tous deux abandonnés
+    // depuis). Reprise ici telle quelle, mais plus simplement : le
+    // containment NATIF de Panzoom ("outside" ci-dessus, origine par
+    // défaut, sans rien de personnalisé) suffit maintenant à clamper
+    // correctement chaque pas de l'inertie, sans plus avoir besoin
+    // d'aucun calcul de limite fait maison.
+    //
+    // Méthode de référence "JavaScript Kinetic Scrolling" d'Ariya
+    // Hidayat (github.com/ariya/kinetic, source à laquelle remontent
+    // la plupart des bibliothèques de kinetic scrolling depuis 2013) :
+    // décroissance exponentielle de la vitesse après le relâché.
+    // panzoompan fournit x/y à chaque frame de panoramique ; on garde
+    // une petite fenêtre glissante de 200ms pour calculer la vitesse
+    // au relâché (panzoomend), plus robuste qu'un simple delta entre
+    // les 2 derniers échantillons. MOMENTUM_DISTANCE_MULTIPLIER
+    // amplifie la distance parcourue SANS ralentir la décélération
+    // elle-même (qui ne dépend que de timeConstant, pas de
+    // l'amplitude) — exactement le paramètre qu'Ariya Hidayat décrit
+    // lui-même comme volontairement ajustable pour la "sensation".
+    const KINETIC_TIME_CONSTANT = 325;
+    const MOMENTUM_DISTANCE_MULTIPLIER = 4;
+    let panSamples = [];
+    let momentumFrame = null;
+    function stopMomentum() {
+      if (momentumFrame) { cancelAnimationFrame(momentumFrame); momentumFrame = null; }
+    }
+    svg.addEventListener("panzoomstart", stopMomentum); // un nouveau geste coupe toujours le coast en cours
+    svg.addEventListener("panzoompan", (e) => {
+      const now = performance.now();
+      panSamples.push({ x: e.detail.x, y: e.detail.y, t: now });
+      panSamples = panSamples.filter((s) => now - s.t < 200);
+    });
+    svg.addEventListener("panzoomend", () => {
+      const samples = panSamples;
+      panSamples = [];
+      if (samples.length < 2) return;
+      const first = samples[0], last = samples[samples.length - 1];
+      const dt = last.t - first.t;
+      if (dt <= 0) return;
+      const vx = (last.x - first.x) / dt, vy = (last.y - first.y) / dt; // px/ms
+      const speed = Math.hypot(vx, vy);
+      if (speed < 0.05) return; // relâché trop lentement -> pas de coast, juste s'arrêter
+      const startX = last.x, startY = last.y;
+      const ampX = vx * KINETIC_TIME_CONSTANT * MOMENTUM_DISTANCE_MULTIPLIER;
+      const ampY = vy * KINETIC_TIME_CONSTANT * MOMENTUM_DISTANCE_MULTIPLIER;
+      const startTime = performance.now();
+      function step() {
+        const elapsed = performance.now() - startTime;
+        const decay = Math.exp(-elapsed / KINETIC_TIME_CONSTANT); // calculé UNE fois, réutilisé pour la position ET la vitesse restante (mathématiquement liées : factor = 1 - decay)
+        // Containment NATIF de Panzoom (pas de calcul maison) : appelé
+        // normalement, comme n'importe quel autre pan() programmatique
+        // — sa propre logique "outside" s'applique, cohérente cette
+        // fois puisque l'origine n'est plus modifiée.
+        dashboardsPanzoom.pan(startX + ampX * (1 - decay), startY + ampY * (1 - decay), { animate: false });
+        const remainingSpeed = speed * decay;
+        momentumFrame = remainingSpeed > 0.02 ? requestAnimationFrame(step) : null;
+      }
+      momentumFrame = requestAnimationFrame(step);
+    });
+
     // 3 préréglages de zoom (x1/x2/x4) : simple appel à l'API native,
     // sans tentative de calage particulière — le bouton x1 sert aussi
     // de retour à l'affichage complet, plus besoin d'un geste dédié.
     document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
       btn.addEventListener("click", () => {
+        stopMomentum();
         dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false });
       });
     });
@@ -9246,6 +9318,7 @@ function initDashboardsPanzoom() {
     // preventDefault, cross-browser oblige).
     let ignoreNextDblclickUntil = 0;
     function toggleZoomAt(point) {
+      stopMomentum();
       const scale = dashboardsPanzoom.getScale();
       if (scale > 1.01) dashboardsPanzoom.reset();
       else dashboardsPanzoom.zoomToPoint(4, point);
