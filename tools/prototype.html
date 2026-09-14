@@ -80,7 +80,7 @@
      change un jour. Le curseur en dessous n'est qu'un INDICATEUR/
      raccourci de position par rapport au plateau assemblé complet
      (pas un zoom) — synchronisé dans les deux sens avec scrollLeft. */
-  #board-viewport { width: 100%; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; background: #26262e;
+  #board-viewport { width: 100%; flex-shrink: 0; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; background: #26262e;
     scrollbar-width: none; -ms-overflow-style: none; }
   #board-viewport::-webkit-scrollbar { display: none; }
   #board-viewport svg { display: block; height: auto; }
@@ -138,7 +138,7 @@
      capturait un geste tactile) ont été retirées : #wrap remplit
      maintenant exactement 100dvh sans déborder — il n'y a plus de
      défilement de page du tout à rattraper. */
-  #dashboards-viewport { width: 100%; overflow: hidden; position: relative; touch-action: none; background: #26262e; }
+  #dashboards-viewport { width: 100%; flex-shrink: 0; overflow: hidden; position: relative; touch-action: none; background: #26262e; }
   #dashboards-viewport svg { display: block; width: 100%; height: auto; }
   /* 3 préréglages de zoom (retour de Mayrik) : carrés accolés en haut
      droit de la zone dashboards. touch-action:auto : ce sont des
@@ -9169,21 +9169,74 @@ function renderPanel() {
 }
 
 // ===================================================================
-// ZONE 1 — Plateau de jeu : zoom FIXE (1 tuile = largeur écran),
-// défilement horizontal natif du conteneur (voir le commentaire CSS
-// détaillé dans template.html). setupBoardScroll() pose la largeur
-// réelle du SVG une fois pour toutes (BOARD_VIEW est une constante,
-// jamais recalculée en cours de partie) — idempotent, sans risque à
-// rappeler à chaque render().
+// ZONE 1 — Plateau de jeu : zoom FIXE (1 tuile = largeur écran) en
+// usage normal (téléphone en portrait), défilement horizontal natif
+// du conteneur (voir le commentaire CSS détaillé dans template.html).
+//
+// BUG CORRIGÉ (retour de Mayrik : sur ordinateur ou téléphone en mode
+// paysage, le plateau est tronqué en hauteur) — cause identifiée et
+// vérifiée dans un vrai Chromium (Playwright) : sur un écran large,
+// caler UNIQUEMENT par la largeur (1 tuile = largeur du conteneur)
+// peut demander une hauteur (via le ratio fixe du SVG) qui dépasse la
+// hauteur verticale réellement disponible. Le conteneur se fait alors
+// réduire par le calcul flexbox normal (#board-viewport n'a pas de
+// hauteur explicite, seule sa hauteur "intrinsèque", dérivée du
+// contenu, sert de base) — mais le SVG À L'INTÉRIEUR, lui, ignore
+// cette réduction (sa largeur reste fixée en %, sa hauteur suit tout
+// seul), et l'excédent se retrouve purement rogné par
+// overflow-y:hidden. Vérifié précisément : sur un écran 1200×700, le
+// SVG voulait 756px de haut pour seulement 376px alloués — la moitié
+// de l'affichage disparaissait.
+// Corrigé en calculant les DEUX hauteurs possibles (celle que
+// donnerait le calage par la largeur, et le plafond raisonnable
+// disponible) et en basculant sur un calage par la HAUTEUR quand la
+// première dépasse la seconde — le plateau assemblé devient alors
+// plus étroit que 100% du conteneur (centré), plutôt que de perdre du
+// contenu. Rappelé au redimensionnement (résolution/rotation) en plus
+// du calcul initial, contrairement à l'ancienne version qui ne
+// tournait qu'une seule fois (BOARD_VIEW est une constante, mais
+// l'espace disponible à l'écran, lui, change).
 // ===================================================================
-let boardScrollReady = false;
+let boardWidthRatio = null; // ~3 tuiles sur toute la largeur assemblée — propriété fixe du plateau, calculée une seule fois
 function setupBoardScroll() {
-  if (boardScrollReady) return;
+  if (boardWidthRatio === null) {
+    const oneTileWidth = TILE_NATIVE_COLS * IMG_CELL_W;
+    boardWidthRatio = BOARD_VIEW.w / oneTileWidth;
+  }
+  applyBoardSizing();
+}
+function applyBoardSizing() {
+  if (boardWidthRatio === null) return;
+  const viewport = document.getElementById("board-viewport");
   const svg = document.getElementById("board");
-  const oneTileWidth = TILE_NATIVE_COLS * IMG_CELL_W;
-  const ratio = BOARD_VIEW.w / oneTileWidth; // ~3 tuiles sur toute la largeur assemblée
-  svg.style.width = (ratio * 100).toFixed(2) + "%";
-  boardScrollReady = true;
+  // Plafond raisonnable : 40% de la hauteur d'écran (pas 50%) — les
+  // dashboards peuvent avoir besoin du même genre de plafond au même
+  // moment (voir updateDashboardsViewportHeight), 2×50% ne laisserait
+  // plus de place pour le curseur et la bande d'info ; 2×40% en
+  // laisse toujours 20% + les marges de sécurité système.
+  const maxBoardHeight = window.innerHeight * 0.4;
+  const widthDrivenHeight = viewport.clientWidth * boardWidthRatio * (BOARD_VIEW.h / BOARD_VIEW.w);
+  // #board-viewport lui-même reçoit aussi une hauteur EXPLICITE (pas
+  // seulement le SVG à l'intérieur) : sans elle, le conteneur n'a
+  // qu'une hauteur "intrinsèque" (dérivée de son contenu), que
+  // flexbox continue de comprimer par défaut au-delà de ce qu'on
+  // vient de calculer pour le SVG — vérifié : un léger écart
+  // subsistait (SVG à 350px, conteneur retombé à 320px) tant que
+  // seul le SVG recevait une taille explicite. Même technique déjà
+  // utilisée pour la zone dashboards (voir updateDashboardsViewportHeight).
+  if (widthDrivenHeight > maxBoardHeight && maxBoardHeight > 0) {
+    svg.style.width = "auto";
+    svg.style.height = maxBoardHeight.toFixed(2) + "px";
+    svg.style.marginLeft = "auto";
+    svg.style.marginRight = "auto";
+    viewport.style.height = maxBoardHeight.toFixed(2) + "px";
+  } else {
+    svg.style.width = (boardWidthRatio * 100).toFixed(2) + "%";
+    svg.style.height = "auto";
+    svg.style.marginLeft = "";
+    svg.style.marginRight = "";
+    viewport.style.height = widthDrivenHeight.toFixed(2) + "px";
+  }
 }
 
 // Curseur de position (PAS un zoom, retour de Mayrik) : simple
@@ -9403,13 +9456,37 @@ function initDashboardsPanzoom() {
 // correct même si un zoom Panzoom est déjà appliqué au moment de
 // l'appel (measurer directement donnerait la taille TRANSFORMÉE, pas
 // la taille de base).
+// BUG CORRIGÉ (retour de Mayrik, même cause que le plateau — voir
+// applyBoardSizing ci-dessus) : cette zone est structurellement
+// exposée au même risque (hauteur dérivée de la largeur, sans plafond
+// vertical) même si elle n'a pas été prise en défaut dans les mêmes
+// proportions lors des essais — sa hauteur, posée explicitement en JS,
+// absorbe moins la réduction flexbox par défaut que le plateau (dont
+// la hauteur intrinsèque, plus grande, pèse plus lourd dans la
+// répartition), mais reste vulnérable sur un écran assez large et
+// assez peu haut. Même double stratégie : calage par la largeur en
+// usage normal, bascule sur un calage par la hauteur (plateau
+// dashboards alors plus étroit que 100% du conteneur, centré) si la
+// première dépasse un plafond raisonnable.
 function updateDashboardsViewportHeight() {
   const svg = document.getElementById("dashboards");
   const viewport = document.getElementById("dashboards-viewport");
   const vb = svg.viewBox.baseVal;
   if (!vb || vb.width === 0) return;
-  const naturalHeight = viewport.clientWidth * (vb.height / vb.width);
-  viewport.style.height = naturalHeight.toFixed(1) + "px";
+  const widthDrivenHeight = viewport.clientWidth * (vb.height / vb.width);
+  const maxDashHeight = window.innerHeight * 0.4;
+  if (widthDrivenHeight > maxDashHeight && maxDashHeight > 0) {
+    const heightDrivenWidth = maxDashHeight * (vb.width / vb.height);
+    viewport.style.height = maxDashHeight.toFixed(1) + "px";
+    svg.style.width = heightDrivenWidth.toFixed(1) + "px";
+    svg.style.marginLeft = "auto";
+    svg.style.marginRight = "auto";
+  } else {
+    viewport.style.height = widthDrivenHeight.toFixed(1) + "px";
+    svg.style.width = "100%";
+    svg.style.marginLeft = "";
+    svg.style.marginRight = "";
+  }
 }
 
 function render() {
@@ -9480,7 +9557,7 @@ if (fullscreenBtn) {
 }
 document.getElementById("board-viewport").addEventListener("scroll", syncBoardSlider);
 document.getElementById("board-position-slider").addEventListener("input", onBoardSliderInput);
-window.addEventListener("resize", () => { syncBoardSlider(); if (G) updateDashboardsViewportHeight(); });
+window.addEventListener("resize", () => { applyBoardSizing(); syncBoardSlider(); if (G) updateDashboardsViewportHeight(); });
 
 // Écran d'accueil (retour de Mayrik) : visible par défaut (voir
 // template.html), masqué dès qu'une partie démarre — que ce soit par

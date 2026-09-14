@@ -80,7 +80,7 @@
      change un jour. Le curseur en dessous n'est qu'un INDICATEUR/
      raccourci de position par rapport au plateau assemblé complet
      (pas un zoom) — synchronisé dans les deux sens avec scrollLeft. */
-  #board-viewport { width: 100%; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; background: #26262e;
+  #board-viewport { width: 100%; flex-shrink: 0; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; background: #26262e;
     scrollbar-width: none; -ms-overflow-style: none; }
   #board-viewport::-webkit-scrollbar { display: none; }
   #board-viewport svg { display: block; height: auto; }
@@ -138,7 +138,7 @@
      capturait un geste tactile) ont été retirées : #wrap remplit
      maintenant exactement 100dvh sans déborder — il n'y a plus de
      défilement de page du tout à rattraper. */
-  #dashboards-viewport { width: 100%; overflow: hidden; position: relative; touch-action: none; background: #26262e; }
+  #dashboards-viewport { width: 100%; flex-shrink: 0; overflow: hidden; position: relative; touch-action: none; background: #26262e; }
   #dashboards-viewport svg { display: block; width: 100%; height: auto; }
   /* 3 préréglages de zoom (retour de Mayrik) : carrés accolés en haut
      droit de la zone dashboards. touch-action:auto : ce sont des
