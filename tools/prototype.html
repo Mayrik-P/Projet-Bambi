@@ -9193,189 +9193,42 @@ function initDashboardsPanzoom() {
   if (typeof Panzoom === "undefined") return; // filet de sécurité : jamais bloquant si la lib ne charge pas
   try {
     const svg = document.getElementById("dashboards");
-    // origin:'0 0' explicite (BUG CORRIGÉ, retour de Mayrik — vue
-    // centrée au lieu de calée en haut à gauche, vérifié dans un vrai
-    // Chromium via Playwright) : Panzoom pose normalement
-    // transform-origin à '0 0' pour un SVG, MAIS sa détection interne
-    // (isSVGElement) exclut explicitement la balise <svg> RACINE
-    // elle-même (`nodeName !== 'svg'`, voir panzoom.js — pensée pour
-    // panzoomer un élément À L'INTÉRIEUR d'un SVG, comme un <g>, pas
-    // le <svg> lui-même). Panzoom étant posé ici directement sur
-    // <svg id="dashboards">, cette détection échoue silencieusement et
-    // retombe sur le défaut HTML (50% 50%, centré) — d'où le
-    // recentrage observé. Forcer origin:'0 0' explicitement contourne
-    // cette détection et corrige la cause réelle.
-    // contain:false (BUG CORRIGÉ, retour de Mayrik — on peut déborder
-    // vers le haut/la gauche hors du contenu une fois zoomé) : le
-    // README officiel de Panzoom l'annonce noir sur blanc — "Change
-    // this [origin] at your own risk... it will BREAK FOCAL POINT
-    // ZOOMING, which assumes the defaults are set to do the more
-    // complicated calculations." Le containment "outside" repose sur
-    // les MÊMES calculs (constrainXY utilise un terme symétrique
-    // diffHorizontal/2 qui suppose une mise à l'échelle CENTRÉE,
-    // peu importe le vrai transform-origin) — en forçant origin:'0 0'
-    // pour corriger l'ancrage (voir plus haut), le containment intégré
-    // devient incohérent avec la vraie géométrie et laisse échapper le
-    // panoramique bien au-delà du contenu réel. Contourné en
-    // désactivant le containment natif et en implémentant le mien
-    // (clampDashboardsPan, plus bas) — beaucoup plus simple à calculer
-    // correctement pour un ancrage haut-gauche que la formule générale
-    // de Panzoom.
-    dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: false, canvas: true, origin: "0 0" });
+    // Configuration NATIVE de Panzoom, sans rien de personnalisé
+    // (retour de Mayrik) : après plusieurs tentatives pour caler
+    // précisément le zoom sur l'angle haut gauche (origin personnalisé
+    // + containment maison + inertie), le résultat en usage réel était
+    // décevant — marges visibles, glissement qui déborde puis se
+    // recentre brutalement avec l'inertie. Mis de côté pour
+    // l'instant : ce n'est pas bloquant, seulement un confort d'usage.
+    // Retour à une base simple et éprouvée — l'API native de Panzoom,
+    // telle quelle, y compris son containment intégré ("outside") et
+    // son ancrage par défaut (centré pour cet élément — accepté tel
+    // quel, "si le zoom s'effectue au milieu, tant pis").
+    dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: "outside", canvas: true });
     const viewport = document.getElementById("dashboards-viewport");
     viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
 
-    // Containment maison (remplace celui, natif mais incompatible avec
-    // origin:'0 0', de Panzoom — voir le commentaire ci-dessus). Le
-    // calcul est simple pour un ancrage haut-gauche : le contenu, à
-    // l'échelle 1, couvre EXACTEMENT le conteneur (voir
-    // updateDashboardsViewportHeight) — à l'échelle S, sa largeur/
-    // hauteur valent W*S/H*S. Pour que le contenu couvre TOUJOURS le
-    // conteneur sans jamais laisser paraître d'espace vide :
-    //   pan.x doit rester dans [W*(1-S), 0]
-    //   pan.y doit rester dans [H*(1-S), 0]
-    // (borne haute 0 : le bord gauche/haut du contenu ne peut jamais
-    // dépasser à DROITE/EN BAS de celui du conteneur ; borne basse :
-    // son bord droit/bas ne peut jamais remonter avant celui du
-    // conteneur).
-    //
-    // BUG CORRIGÉ (retour de Mayrik : l'inertie pouvait déborder
-    // largement au-delà du contenu) : la première version rappelait ce
-    // calcul de façon RÉACTIVE, sur l'événement panzoompan. Mais le
-    // code source de Panzoom (setTransformWithEvent) montre que cet
-    // événement — comme la mise à jour visuelle elle-même — est
-    // DIFFÉRÉ d'une frame via requestAnimationFrame, alors que
-    // getPan() renvoie la nouvelle valeur IMMÉDIATEMENT, avant ce
-    // délai. Résultat vérifié dans un vrai Chromium : l'inertie
-    // (qui rappelle .pan() à CHAQUE frame, sans attendre la correction
-    // de la frame précédente) accumulait des appels non corrigés plus
-    // vite que la réaction à l'événement ne pouvait les rattraper.
-    // Corrigé en exposant clampPanValue (fonction pure, sans effet de
-    // bord) : l'inertie l'appelle directement, de façon SYNCHRONE,
-    // avant même d'appeler pan() — jamais besoin d'attendre un
-    // événement. L'écouteur panzoompan reste néanmoins en filet de
-    // sécurité pour le glissement natif de Panzoom (glissé à la
-    // souris/au doigt, géré en interne par la bibliothèque, jamais
-    // appelé depuis notre propre code) — un décalage d'une frame y est
-    // sans conséquence perceptible.
-    function clampPanValue(x, y, scale) {
-      const W = viewport.clientWidth, H = viewport.clientHeight;
-      const minX = W * (1 - scale), minY = H * (1 - scale);
-      return { x: Math.min(0, Math.max(minX, x)), y: Math.min(0, Math.max(minY, y)) };
-    }
-    let clampingInProgress = false;
-    function clampDashboardsPan() {
-      if (clampingInProgress) return;
-      const scale = dashboardsPanzoom.getScale();
-      const pan = dashboardsPanzoom.getPan();
-      const clamped = clampPanValue(pan.x, pan.y, scale);
-      if (clamped.x !== pan.x || clamped.y !== pan.y) {
-        clampingInProgress = true;
-        dashboardsPanzoom.pan(clamped.x, clamped.y, { animate: false });
-        clampingInProgress = false;
-      }
-    }
-    svg.addEventListener("panzoompan", clampDashboardsPan);
-    svg.addEventListener("panzoomzoom", clampDashboardsPan);
-
-    // -----------------------------------------------------------
-    // 3 préréglages de zoom (retour de Mayrik) : x1/x2/x4, ramène à
-    // chaque fois l'affichage à l'angle haut gauche en même temps.
-    // Simple maintenant que le containment natif de Panzoom est
-    // désactivé (voir plus haut, clampDashboardsPan) : (0,0) est
-    // TOUJOURS la position haut-gauche valide à n'importe quelle
-    // échelle (aucun reclampage intempestif possible), plus besoin de
-    // contourner quoi que ce soit ni de différer quoi que ce soit.
+    // 3 préréglages de zoom (x1/x2/x4) : simple appel à l'API native,
+    // sans tentative de calage particulière — le bouton x1 sert aussi
+    // de retour à l'affichage complet, plus besoin d'un geste dédié.
     document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
       btn.addEventListener("click", () => {
-        stopMomentum();
         dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false });
-        dashboardsPanzoom.pan(0, 0, { animate: false });
       });
     });
 
     // -----------------------------------------------------------
-    // Inertie après un panoramique relâché (retour de Mayrik : même
-    // sensation que le défilement natif du plateau, zone 1). Panzoom
-    // ne fournit aucune physique d'inertie — implémentée ici selon la
-    // méthode de référence "JavaScript Kinetic Scrolling" d'Ariya
-    // Hidayat (github.com/ariya/kinetic, source à laquelle remontent
-    // la plupart des bibliothèques de kinetic scrolling depuis 2013) :
-    // décroissance exponentielle de la vitesse. timeConstant=450ms
-    // (légèrement au-dessus des 325ms d'origine, qui reproduisaient la
-    // décélération native iOS — un peu court pour un grand geste sur
-    // une zone zoomée x4, retour de Mayrik : il fallait ~4 gestes pour
-    // traverser la zone). MOMENTUM_DISTANCE_MULTIPLIER amplifie en
-    // plus la distance parcourue SANS ralentir la décélération elle-
-    // même (qui ne dépend que de timeConstant, pas de l'amplitude) —
-    // exactement le paramètre qu'Ariya Hidayat décrit lui-même comme
-    // volontairement ajustable pour la "sensation" (son propre facteur
-    // 0.8, commenté "tweakable... a higher factor will give the
-    // illusion of a smooth and frictionless list"). panzoompan fournit
-    // x/y à chaque frame de panoramique (voir PanzoomEventDetail) ; on
-    // garde une petite fenêtre glissante de 200ms pour calculer la
-    // vitesse au relâché (panzoomend), plus robuste qu'un simple delta
-    // entre les 2 derniers échantillons.
-    const KINETIC_TIME_CONSTANT = 450;
-    const MOMENTUM_DISTANCE_MULTIPLIER = 2.625; // 3.5 réduit d'1/4 (retour de Mayrik : un peu trop rapide en usage réel)
-    let panSamples = [];
-    let momentumFrame = null;
-    function stopMomentum() {
-      if (momentumFrame) { cancelAnimationFrame(momentumFrame); momentumFrame = null; }
-    }
-    svg.addEventListener("panzoomstart", stopMomentum); // un nouveau geste coupe toujours le coast en cours
-    svg.addEventListener("panzoompan", (e) => {
-      const now = performance.now();
-      panSamples.push({ x: e.detail.x, y: e.detail.y, t: now });
-      panSamples = panSamples.filter((s) => now - s.t < 200);
-    });
-    svg.addEventListener("panzoomend", () => {
-      const samples = panSamples;
-      panSamples = [];
-      if (samples.length < 2) return;
-      const first = samples[0], last = samples[samples.length - 1];
-      const dt = last.t - first.t;
-      if (dt <= 0) return;
-      const vx = (last.x - first.x) / dt, vy = (last.y - first.y) / dt; // px/ms
-      const speed = Math.hypot(vx, vy);
-      if (speed < 0.05) return; // relâché trop lentement -> pas de coast, juste s'arrêter
-      const startX = last.x, startY = last.y;
-      const ampX = vx * KINETIC_TIME_CONSTANT * MOMENTUM_DISTANCE_MULTIPLIER;
-      const ampY = vy * KINETIC_TIME_CONSTANT * MOMENTUM_DISTANCE_MULTIPLIER;
-      const startTime = performance.now();
-      function step() {
-        const elapsed = performance.now() - startTime;
-        const decay = Math.exp(-elapsed / KINETIC_TIME_CONSTANT); // calculé UNE fois, réutilisé pour la position ET la vitesse restante (mathématiquement liées : factor = 1 - decay)
-        const targetX = startX + ampX * (1 - decay), targetY = startY + ampY * (1 - decay);
-        // Recadrage calculé de façon SYNCHRONE, AVANT d'appeler pan()
-        // (retour de Mayrik : l'inertie débordait largement au-delà du
-        // contenu). Ne PAS se fier à panzoompan/getPan() après coup
-        // pour détecter un dépassement : le code source de Panzoom
-        // (setTransformWithEvent) montre que la mise à jour visuelle
-        // ET l'événement sont différés d'une frame via
-        // requestAnimationFrame, alors que getPan() renvoie la valeur
-        // demandée immédiatement, AVANT ce délai — une vérification
-        // après coup, dans la même frame, ne peut donc jamais détecter
-        // le recadrage. clampPanValue() est une fonction pure, sans ce
-        // problème : le résultat est fiable immédiatement.
-        const clamped = clampPanValue(targetX, targetY, dashboardsPanzoom.getScale());
-        dashboardsPanzoom.pan(clamped.x, clamped.y, { animate: false });
-        const hitBoundary = clamped.x !== targetX || clamped.y !== targetY;
-        const remainingSpeed = speed * decay;
-        momentumFrame = (remainingSpeed > 0.02 && !hitBoundary) ? requestAnimationFrame(step) : null;
-      }
-      momentumFrame = requestAnimationFrame(step);
-    });
-
-    // -----------------------------------------------------------
-    // Double-tap / double-clic (retour de Mayrik) : bascule comme
-    // dans Google Photos/Maps — zoomé (>1) -> retour plein écran ;
-    // plein écran (=1) -> zoom x4 CENTRÉ SUR LE POINT TAPÉ
-    // (zoomToPoint, pas un zoom générique au centre). Panzoom ne gère
-    // rien de tel nativement. Un vrai TAP (déplacement < 10px entre
-    // touchstart et touchend, jamais un glissé de panoramique) suivi
-    // d'un second dans les 350ms et à moins de 30px du premier ->
-    // bascule. `dblclick` natif couvre la souris séparément.
+    // Double-tap / double-clic (retour de Mayrik : gardé — "fonctionne
+    // vraiment bien et est naturel pour un utilisateur de téléphone",
+    // contrairement au calage précis/inertie mis de côté juste avant).
+    // Bascule x1 -> x4 (zoomToPoint, CENTRÉ SUR LE POINT TAPÉ — API
+    // native de Panzoom, aucun calcul de position personnalisé) ; >x1
+    // -> reset() (retour natif à l'affichage complet, ancrage par
+    // défaut de Panzoom, accepté tel quel). Un vrai TAP (déplacement
+    // < 10px entre touchstart et touchend, jamais un glissé de
+    // panoramique) suivi d'un second dans les 350ms et à moins de 30px
+    // du premier -> bascule. `dblclick` natif couvre la souris
+    // séparément.
     //
     // BUG CORRIGÉ (retour de Mayrik, usage réel) : sur tactile, un
     // touchend déclenche ENSUITE un click puis un dblclick SYNTHÉTIQUES
@@ -9393,7 +9246,6 @@ function initDashboardsPanzoom() {
     // preventDefault, cross-browser oblige).
     let ignoreNextDblclickUntil = 0;
     function toggleZoomAt(point) {
-      stopMomentum();
       const scale = dashboardsPanzoom.getScale();
       if (scale > 1.01) dashboardsPanzoom.reset();
       else dashboardsPanzoom.zoomToPoint(4, point);
