@@ -9193,7 +9193,19 @@ function initDashboardsPanzoom() {
   if (typeof Panzoom === "undefined") return; // filet de sécurité : jamais bloquant si la lib ne charge pas
   try {
     const svg = document.getElementById("dashboards");
-    dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: "outside", canvas: true });
+    // origin:'0 0' explicite (BUG CORRIGÉ, retour de Mayrik — vue
+    // centrée au lieu de calée en haut à gauche, vérifié dans un vrai
+    // Chromium via Playwright) : Panzoom pose normalement
+    // transform-origin à '0 0' pour un SVG, MAIS sa détection interne
+    // (isSVGElement) exclut explicitement la balise <svg> RACINE
+    // elle-même (`nodeName !== 'svg'`, voir panzoom.js — pensée pour
+    // panzoomer un élément À L'INTÉRIEUR d'un SVG, comme un <g>, pas
+    // le <svg> lui-même). Panzoom étant posé ici directement sur
+    // <svg id="dashboards">, cette détection échoue silencieusement et
+    // retombe sur le défaut HTML (50% 50%, centré) — d'où le
+    // recentrage observé. Forcer origin:'0 0' explicitement contourne
+    // cette détection et corrige la cause réelle.
+    dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: "outside", canvas: true, origin: "0 0" });
     const viewport = document.getElementById("dashboards-viewport");
     viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
 
@@ -9201,26 +9213,33 @@ function initDashboardsPanzoom() {
     // 3 préréglages de zoom (retour de Mayrik) : x1/x2/x4, ramène à
     // chaque fois l'affichage à l'angle haut gauche en même temps.
     // BUG CORRIGÉ (retour de Mayrik, usage réel — vue calée sur le
-    // CENTRE de la zone, pas l'angle haut gauche) : zoom(scale) SANS
-    // point focal explicite vise par défaut le CENTRE de l'élément,
-    // jamais son transform-origin — comportement historiquement connu
-    // de cette famille de bibliothèques (voir
-    // github.com/timmywil/panzoom/issues/51, "zooming using buttons
-    // seems to set the focal point of the zoom to be the center of
-    // the element"). Corrigé en fournissant explicitement
-    // focal:{x:0,y:0} (option native documentée : "Zoom to the given
-    // point on the panzoom element") — ce point est exprimé dans le
-    // repère propre à l'élément, où (0,0) est son coin haut gauche.
-    // Le pan(0,0) différé (voir plus bas) reste en plus, en filet de
-    // sécurité pour l'autre souci documenté par Panzoom lui-même
-    // (FAQ du dépôt) : avec `contain` actif, les dimensions utilisées
-    // pour poser la position ne sont à jour qu'une fois le nouveau
-    // zoom PEINT par le navigateur — d'où le report via setTimeout.
+    // CENTRE, pas l'angle haut gauche) : la vraie cause n'était ni
+    // focal ni un problème de timing (tenté puis vérifié faux), mais
+    // le containment "outside" lui-même — sa formule interne calcule
+    // ses bornes avec un terme symétrique (diffHorizontal/2, voir
+    // panzoom.js) qui suppose implicitement une mise à l'échelle
+    // centrée, INDÉPENDAMMENT de origin:'0 0' — un vrai zoom
+    // (scale()+pan(0,0)) qui devrait pourtant fournir un résultat
+    // fiable dans les coordonnées de containment ("outside") se
+    // retrouve donc reclampé vers une position centrée, malgré un
+    // transform-origin correctement posé. Vérifié empiriquement dans
+    // un vrai Chromium (Playwright) : pan(0,0) avec containment actif
+    // se fait reclamper à une valeur non nulle ; avec contain:false
+    // sur CET appel précis (bascule les points de départ ET
+    // d'arrivée), le recalage tombe pile sur l'angle haut gauche à
+    // n'importe quelle échelle. Contourner le containment est sans
+    // risque ici : (0,0) est une position connue et sûre (le contenu
+    // couvre toujours la zone visible, jamais d'espace vide), le
+    // containment ne protège que contre un DÉPLACEMENT libre de
+    // l'utilisateur, pas contre une valeur programmatique déjà connue
+    // bonne. contain:false évite aussi le besoin d'un setTimeout
+    // (plus de dépendance aux dimensions, donc plus de problème de
+    // fraîcheur après le zoom).
     document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
       btn.addEventListener("click", () => {
         stopMomentum();
-        dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false, focal: { x: 0, y: 0 } });
-        setTimeout(() => dashboardsPanzoom.pan(0, 0, { animate: false }));
+        dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false });
+        dashboardsPanzoom.pan(0, 0, { animate: false, contain: false });
       });
     });
 
