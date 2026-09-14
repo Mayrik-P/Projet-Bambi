@@ -114,12 +114,12 @@
      droit de la zone dashboards. touch-action:auto : ce sont des
      boutons normaux, jamais capturés par Panzoom (touch-action:none
      du conteneur parent). */
-  #dashboards-zoom-presets { position: absolute; top: 8px; right: 8px; z-index: 10; display: flex; touch-action: auto; }
+  #dashboards-zoom-presets { position: absolute; top: 0; right: 0; z-index: 10; display: flex; touch-action: auto; }
   #dashboards-zoom-presets button { width: 32px; height: 32px; background: rgba(30,30,36,0.85);
     border: 1px solid #555; color: #eee; font-size: 12px; font-weight: bold; cursor: pointer; padding: 0; }
   #dashboards-zoom-presets button + button { border-left: none; }
-  #dashboards-zoom-presets button:first-child { border-radius: 6px 0 0 6px; }
-  #dashboards-zoom-presets button:last-child { border-radius: 0 6px 6px 0; }
+  #dashboards-zoom-presets button:first-child { border-radius: 0 0 0 6px; }
+  #dashboards-zoom-presets button:last-child { border-radius: 0 0 6px 0; }
   #dashboards-zoom-presets button:hover { background: rgba(60,60,70,0.9); }
 
   /* --------------------------------------------------------------

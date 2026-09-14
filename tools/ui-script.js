@@ -2593,17 +2593,23 @@ function initDashboardsPanzoom() {
     // -----------------------------------------------------------
     // 3 préréglages de zoom (retour de Mayrik) : x1/x2/x4, ramène à
     // chaque fois l'affichage à l'angle haut gauche en même temps.
-    // pan(0,0) correspond TOUJOURS à ce coin, quelle que soit
-    // l'échelle : Panzoom utilise par défaut transform-origin:"0 0"
-    // pour un élément SVG (confirmé dans son propre code source,
-    // panzoom.js — différent du cas HTML général, "50% 50%"), donc le
-    // point (0,0) du contenu reste fixe pendant un zoom, jamais besoin
-    // de recalculer une position selon l'échelle courante.
+    // BUG CORRIGÉ (retour de Mayrik, usage réel) : zoom() puis pan(0,0)
+    // enchaînés ne recalait pas fiablement sur un vrai navigateur —
+    // invisible dans nos tests jsdom (pas de vraie mise en page). Cas
+    // officiellement documenté par Panzoom lui-même (FAQ du dépôt,
+    // github.com/timmywil/panzoom) : avec `contain` actif, Panzoom a
+    // besoin des dimensions de l'élément pour poser pan(), mais ces
+    // dimensions ne sont à jour qu'une fois le nouveau zoom PEINT par
+    // le navigateur — enchaîner zoom() puis pan() dans la même frame
+    // synchrone utilise donc encore les anciennes dimensions.
+    // Solution recommandée par l'auteur lui-même, reprise ici telle
+    // quelle : différer pan() d'un setTimeout, le temps que le
+    // navigateur ait peint le nouveau zoom.
     document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
       btn.addEventListener("click", () => {
         stopMomentum();
         dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false });
-        dashboardsPanzoom.pan(0, 0, { animate: false });
+        setTimeout(() => dashboardsPanzoom.pan(0, 0, { animate: false }));
       });
     });
 

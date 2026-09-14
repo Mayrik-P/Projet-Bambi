@@ -114,12 +114,12 @@
      droit de la zone dashboards. touch-action:auto : ce sont des
      boutons normaux, jamais capturés par Panzoom (touch-action:none
      du conteneur parent). */
-  #dashboards-zoom-presets { position: absolute; top: 8px; right: 8px; z-index: 10; display: flex; touch-action: auto; }
+  #dashboards-zoom-presets { position: absolute; top: 0; right: 0; z-index: 10; display: flex; touch-action: auto; }
   #dashboards-zoom-presets button { width: 32px; height: 32px; background: rgba(30,30,36,0.85);
     border: 1px solid #555; color: #eee; font-size: 12px; font-weight: bold; cursor: pointer; padding: 0; }
   #dashboards-zoom-presets button + button { border-left: none; }
-  #dashboards-zoom-presets button:first-child { border-radius: 6px 0 0 6px; }
-  #dashboards-zoom-presets button:last-child { border-radius: 0 6px 6px 0; }
+  #dashboards-zoom-presets button:first-child { border-radius: 0 0 0 6px; }
+  #dashboards-zoom-presets button:last-child { border-radius: 0 0 6px 0; }
   #dashboards-zoom-presets button:hover { background: rgba(60,60,70,0.9); }
 
   /* --------------------------------------------------------------
@@ -9200,17 +9200,23 @@ function initDashboardsPanzoom() {
     // -----------------------------------------------------------
     // 3 préréglages de zoom (retour de Mayrik) : x1/x2/x4, ramène à
     // chaque fois l'affichage à l'angle haut gauche en même temps.
-    // pan(0,0) correspond TOUJOURS à ce coin, quelle que soit
-    // l'échelle : Panzoom utilise par défaut transform-origin:"0 0"
-    // pour un élément SVG (confirmé dans son propre code source,
-    // panzoom.js — différent du cas HTML général, "50% 50%"), donc le
-    // point (0,0) du contenu reste fixe pendant un zoom, jamais besoin
-    // de recalculer une position selon l'échelle courante.
+    // BUG CORRIGÉ (retour de Mayrik, usage réel) : zoom() puis pan(0,0)
+    // enchaînés ne recalait pas fiablement sur un vrai navigateur —
+    // invisible dans nos tests jsdom (pas de vraie mise en page). Cas
+    // officiellement documenté par Panzoom lui-même (FAQ du dépôt,
+    // github.com/timmywil/panzoom) : avec `contain` actif, Panzoom a
+    // besoin des dimensions de l'élément pour poser pan(), mais ces
+    // dimensions ne sont à jour qu'une fois le nouveau zoom PEINT par
+    // le navigateur — enchaîner zoom() puis pan() dans la même frame
+    // synchrone utilise donc encore les anciennes dimensions.
+    // Solution recommandée par l'auteur lui-même, reprise ici telle
+    // quelle : différer pan() d'un setTimeout, le temps que le
+    // navigateur ait peint le nouveau zoom.
     document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
       btn.addEventListener("click", () => {
         stopMomentum();
         dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false });
-        dashboardsPanzoom.pan(0, 0, { animate: false });
+        setTimeout(() => dashboardsPanzoom.pan(0, 0, { animate: false }));
       });
     });
 
