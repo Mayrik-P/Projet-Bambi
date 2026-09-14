@@ -34,6 +34,18 @@ function makeDom() {
 // valent toujours 0 par défaut — on les stub explicitement là où le
 // test en a besoin, plutôt que de dépendre d'un rendu réel.
 function stubBox(el, props) { Object.entries(props).forEach(([k, v]) => Object.defineProperty(el, k, { value: v, configurable: true })); }
+// Simule un vrai TAP (touchstart puis touchend au même endroit) ou un
+// GLISSÉ (touchstart puis touchend ailleurs) — utilisé pour tester le
+// double-tap sans dépendre d'un vrai geste tactile.
+function tapAt(win, el, x, y) {
+  const touch = { identifier: 1, clientX: x, clientY: y };
+  el.dispatchEvent(new win.TouchEvent("touchstart", { touches: [touch], changedTouches: [touch], bubbles: true }));
+  el.dispatchEvent(new win.TouchEvent("touchend", { touches: [], changedTouches: [touch], bubbles: true }));
+}
+function dragFromTo(win, el, x1, y1, x2, y2) {
+  el.dispatchEvent(new win.TouchEvent("touchstart", { touches: [{ identifier: 1, clientX: x1, clientY: y1 }], changedTouches: [{ identifier: 1, clientX: x1, clientY: y1 }], bubbles: true }));
+  el.dispatchEvent(new win.TouchEvent("touchend", { touches: [], changedTouches: [{ identifier: 1, clientX: x2, clientY: y2 }], bubbles: true }));
+}
 
 section("Test 1 — Structure des 3 zones présente dans le DOM, avec le bon CSS de base");
 
@@ -134,270 +146,126 @@ console.log("Les 2 marges de secours (au-dessus/dessous des dashboards) sont pr�
 const marginCss8 = dom.window.getComputedStyle(margins8[0]);
 console.log("...et restent en touch-action normal (jamais capturées par Panzoom) (attendu true) :", marginCss8.touchAction !== "none");
 
-console.log("Le bouton de réinitialisation a bien été retiré (retour de Mayrik : le double-tap suffit) (attendu true) :", !dom.window.document.getElementById("dashboards-reset-btn"));
+console.log("Le bouton de réinitialisation a bien été retiré (le bouton x1 sert aussi de retour à l'affichage complet) (attendu true) :", !dom.window.document.getElementById("dashboards-reset-btn"));
 
-section("Test 9 — Double-tap / double-clic bascule x1 ↔ x4 (retour de Mayrik)");
+section("Test 9 — Retour de Mayrik (usage réel) : touch-action:manipulation plutôt que user-scalable=no (inefficace sur iOS)");
 
-function tapAt(win, el, x, y) {
-  const touch = { identifier: 1, clientX: x, clientY: y };
-  el.dispatchEvent(new win.TouchEvent("touchstart", { touches: [touch], changedTouches: [touch], bubbles: true }));
-  el.dispatchEvent(new win.TouchEvent("touchend", { touches: [], changedTouches: [touch], bubbles: true }));
-}
-function dragFromTo(win, el, x1, y1, x2, y2) {
-  el.dispatchEvent(new win.TouchEvent("touchstart", { touches: [{ identifier: 1, clientX: x1, clientY: y1 }], changedTouches: [{ identifier: 1, clientX: x1, clientY: y1 }], bubbles: true }));
-  el.dispatchEvent(new win.TouchEvent("touchend", { touches: [], changedTouches: [{ identifier: 1, clientX: x2, clientY: y2 }], bubbles: true }));
-}
+dom = makeDom();
+win = dom.window;
+const bodyCss9 = dom.window.getComputedStyle(dom.window.document.body);
+console.log("body a bien touch-action:manipulation (désactive le double-tap-zoom du navigateur, iOS ET Android) (attendu true) :", bodyCss9.touchAction === "manipulation");
+
+const viewportMeta9 = dom.window.document.querySelector('meta[name="viewport"]');
+console.log("La balise viewport ne contient plus user-scalable=no (méthode abandonnée, ignorée par Safari iOS depuis iOS 10) (attendu true) :",
+  !!viewportMeta9 && !viewportMeta9.getAttribute("content").includes("user-scalable"));
+
+const dashViewportCss9 = dom.window.getComputedStyle(dom.window.document.getElementById("dashboards-viewport"));
+console.log("#dashboards-viewport garde bien son touch-action:none propre (Panzoom garde le contrôle total localement pour son pincement/glissé natifs) (attendu true) :", dashViewportCss9.touchAction === "none");
+
+console.log("\n=== Fin des tests dédiés (mise en page 3 zones + zoom) ===");
+
+section("Test 10 — Bouton plein écran : présent, masqué proprement si l'API Fullscreen n'est pas disponible (ex. iOS Safari/Chrome)");
+
+dom = makeDom();
+win = dom.window;
+const fsBtn10 = dom.window.document.getElementById("fullscreen-btn");
+console.log("Le bouton existe dans le DOM (attendu true) :", !!fsBtn10);
+console.log("Masqué proprement quand document.fullscreenEnabled est absent (comme sur iOS) (attendu true) :", fsBtn10.style.display === "none");
+
+section("Test 11 — Retour de Mayrik : gestion avancée du calage/inertie mise de côté, retour à l'API native de Panzoom, simple et éprouvée — 3 préréglages de zoom (x1/x2/x4)");
 
 dom = makeDom();
 win = dom.window;
 win.newGame();
 win.render();
-const viewport9 = dom.window.document.getElementById("dashboards-viewport");
+const presetBtns11 = [...dom.window.document.querySelectorAll("#dashboards-zoom-presets button")];
+console.log("Les 3 boutons x1/x2/x4 sont bien présents, dans cet ordre (attendu true) :",
+  presetBtns11.map((b) => b.dataset.zoomPreset).join(",") === "1,2,4");
 
-// dblclick testé EN PREMIER, avant tout tap tactile (qui poserait le
-// drapeau de garde anti-double-déclenchement — voir Test 9bis plus
-// bas — et fausserait ce test-ci s'il suivait immédiatement).
+// Retour de Mayrik, après plusieurs tentatives infructueuses en usage
+// réel (origin personnalisé + containment maison + inertie — marges
+// visibles, glissement qui déborde puis se recentre brutalement) :
+// mis de côté pour l'instant, pas bloquant pour le développement,
+// seulement un confort d'usage. Retour à l'API native de Panzoom,
+// telle quelle — chaque bouton appelle juste .zoom(), sans tentative
+// de calage particulière ; l'ancrage (centré pour cet élément) est
+// accepté tel quel ("si le zoom s'effectue au milieu, tant pis").
+console.log("Panzoom est construit avec le containment natif 'outside' (pas de containment personnalisé) (attendu true) :",
+  win.eval("dashboardsPanzoom.getOptions().contain") === "outside");
+console.log("...et sans origin personnalisé (comportement natif de Panzoom, centré pour cet élément — accepté tel quel) (attendu true) :",
+  win.eval("dashboardsPanzoom.getOptions().origin") === undefined);
+
+const btnX2_11 = presetBtns11.find((b) => b.dataset.zoomPreset === "2");
+btnX2_11.dispatchEvent(new win.Event("click", { bubbles: true }));
+console.log("Cliquer sur x2 règle bien l'échelle à 2 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
+
+const btnX4_11 = presetBtns11.find((b) => b.dataset.zoomPreset === "4");
+btnX4_11.dispatchEvent(new win.Event("click", { bubbles: true }));
+console.log("Cliquer sur x4 règle bien l'échelle à 4 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
+
+const btnX1_11 = presetBtns11.find((b) => b.dataset.zoomPreset === "1");
+btnX1_11.dispatchEvent(new win.Event("click", { bubbles: true }));
+console.log("Cliquer sur x1 règle bien l'échelle à 1 (sert aussi de retour à l'affichage complet) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
+
+section("Test 12 — Double-tap / double-clic bascule x1 ↔ x4 (retour de Mayrik : gardé, fonctionne bien et naturel sur téléphone — contrairement au calage précis/inertie mis de côté)");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+const viewport12 = dom.window.document.getElementById("dashboards-viewport");
+
 console.log("Échelle de départ = 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
-viewport9.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
+viewport12.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
 console.log("dblclick (souris, ordinateur) bascule bien vers x4 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
-viewport9.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
+viewport12.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
 console.log("...et un 2e dblclick redescend bien à l'échelle 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
 
 win.eval("dashboardsPanzoom.zoom(2, { animate: false })");
 console.log("Zoom bien actif avant le test (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
 
-tapAt(win, viewport9, 100, 100);
-console.log("Un seul tap ne réinitialise PAS le zoom (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
+tapAt(win, viewport12, 100, 100);
+console.log("Un seul tap ne bascule PAS le zoom (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
 
-tapAt(win, viewport9, 105, 102); // 2e tap, proche et rapide
-console.log("Un 2e tap rapproché dans le temps ET l'espace réinitialise bien le zoom (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
-
-win.eval("dashboardsPanzoom.zoom(2, { animate: false })");
-tapAt(win, viewport9, 100, 100);
-tapAt(win, viewport9, 400, 400); // 2e tap trop loin du premier
-console.log("Deux taps trop ÉLOIGNÉS l'un de l'autre ne réinitialisent PAS (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
+tapAt(win, viewport12, 105, 102); // 2e tap, proche et rapide
+console.log("Un 2e tap rapproché dans le temps ET l'espace bascule bien vers x1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
 
 win.eval("dashboardsPanzoom.zoom(2, { animate: false })");
-dragFromTo(win, viewport9, 100, 100, 250, 100); // glissé, pas un tap
-dragFromTo(win, viewport9, 260, 100, 105, 102); // 2e glissé revenant près du point de départ initial
+tapAt(win, viewport12, 100, 100);
+tapAt(win, viewport12, 400, 400); // 2e tap trop loin du premier
+console.log("Deux taps trop ÉLOIGNÉS l'un de l'autre ne basculent PAS (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
+
+dragFromTo(win, viewport12, 100, 100, 250, 100); // glissé, pas un tap
+dragFromTo(win, viewport12, 260, 100, 105, 102); // 2e glissé revenant près du point de départ initial
 console.log("Un glissé (panoramique) n'est jamais compté comme un tap, même répété (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
 
-// Bascule (retour de Mayrik) : à l'échelle 1 (plein écran), un
-// double-tap doit ZOOMER (x4), pas re-réinitialiser sur place.
-// Repart d'une fenêtre fraîche : le test précédent a laissé le
-// drapeau de garde anti-double-déclenchement actif (voir Test 9bis),
-// qui ignorerait à tort un dblclick mais n'affecte pas les taps
-// tactiles eux-mêmes (le drapeau n'est vérifié QUE côté dblclick) —
-// fenêtre fraîche uniquement par clarté, pas par nécessité stricte ici.
+// Depuis l'échelle 1, un double-tap doit ZOOMER (x4), pas re-basculer sur place.
 dom = makeDom();
 win = dom.window;
 win.newGame();
 win.render();
-const viewport9c = dom.window.document.getElementById("dashboards-viewport");
-tapAt(win, viewport9c, 200, 150);
-tapAt(win, viewport9c, 205, 152);
-console.log("Depuis l'échelle 1, un double-tap zoome bien à x4 (bascule, pas un simple reset) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
-tapAt(win, viewport9c, 200, 150);
-tapAt(win, viewport9c, 205, 152);
+const viewport12b = dom.window.document.getElementById("dashboards-viewport");
+tapAt(win, viewport12b, 200, 150);
+tapAt(win, viewport12b, 205, 152);
+console.log("Depuis l'échelle 1, un double-tap zoome bien à x4 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
+tapAt(win, viewport12b, 200, 150);
+tapAt(win, viewport12b, 205, 152);
 console.log("Un 2e double-tap (maintenant zoomé) redescend bien à l'échelle 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
 
-section("Test 9bis — BUG CORRIGÉ : un double-tap tactile ne déclenche pas AUSSI le dblclick synthétique du navigateur (double bascule qui s'annule)");
+section("Test 12bis — BUG CORRIGÉ (gardé) : un double-tap tactile ne déclenche pas AUSSI le dblclick synthétique du navigateur (double bascule qui s'annule)");
 
 dom = makeDom();
 win = dom.window;
 win.newGame();
 win.render();
-const viewport9b = dom.window.document.getElementById("dashboards-viewport");
+const viewport12c = dom.window.document.getElementById("dashboards-viewport");
 win.eval("dashboardsPanzoom.zoom(2, { animate: false })");
-tapAt(win, viewport9b, 100, 100);
-tapAt(win, viewport9b, 105, 102); // double-tap tactile -> devrait dézoomer UNE fois
-console.log("Le double-tap tactile dézoome bien à l'échelle 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
+tapAt(win, viewport12c, 100, 100);
+tapAt(win, viewport12c, 105, 102); // double-tap tactile -> devrait basculer à x1 UNE fois
+console.log("Le double-tap tactile bascule bien vers l'échelle 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
 // Le navigateur synthétise ENSUITE un dblclick pour la même paire de
 // taps (comportement standard documenté) — ne doit PAS re-basculer.
-viewport9b.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
+viewport12c.dispatchEvent(new win.Event("dblclick", { bubbles: true }));
 console.log("...et le dblclick synthétique qui suit ne re-bascule PAS (reste à l'échelle 1) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
 
-section("Test 10 — Retour de Mayrik (usage réel, conflit double-tap navigateur) : touch-action:manipulation plutôt que user-scalable=no (inefficace sur iOS)");
-
-dom = makeDom();
-win = dom.window;
-const bodyCss10 = dom.window.getComputedStyle(dom.window.document.body);
-console.log("body a bien touch-action:manipulation (désactive le double-tap-zoom du navigateur, iOS ET Android) (attendu true) :", bodyCss10.touchAction === "manipulation");
-
-const viewportMeta10 = dom.window.document.querySelector('meta[name="viewport"]');
-console.log("La balise viewport ne contient plus user-scalable=no (méthode abandonnée, ignorée par Safari iOS depuis iOS 10) (attendu true) :",
-  !!viewportMeta10 && !viewportMeta10.getAttribute("content").includes("user-scalable"));
-
-const dashViewportCss10 = dom.window.getComputedStyle(dom.window.document.getElementById("dashboards-viewport"));
-console.log("#dashboards-viewport garde bien son touch-action:none propre (Panzoom garde le contrôle total localement) (attendu true) :", dashViewportCss10.touchAction === "none");
-
 console.log("\n=== Fin des tests dédiés (mise en page 3 zones + zoom) ===");
-
-section("Test 11 — Inertie après un panoramique relâché (retour de Mayrik, formule Ariya Hidayat / kinetic scrolling)");
-
-dom = makeDom();
-win = dom.window;
-win.newGame();
-win.render();
-const svg11 = dom.window.document.getElementById("dashboards");
-const dashViewport11 = dom.window.document.getElementById("dashboards-viewport");
-// jsdom n'a pas de vrai moteur de mise en page : getBoundingClientRect
-// renvoie 0 partout par défaut, ce qui fait que le containment de
-// Panzoom clampe tout panoramique à (0,0), même un appel direct. On
-// simule un contenu bien plus grand que le conteneur (cas réel une
-// fois zoomé), condition nécessaire pour que .pan() ait une vraie
-// marge de manœuvre à tester.
-svg11.getBoundingClientRect = () => ({ x: -100, y: -50, left: -100, top: -50, right: 900, bottom: 350, width: 1000, height: 400 });
-dashViewport11.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 300, width: 800, height: 300 });
-win.eval("dashboardsPanzoom.zoom(2, { animate: false })"); // rien à panoramiquer à l'échelle 1 (minScale)
-win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
-
-// Simule un panoramique rapide : 4 échantillons rapprochés dans le
-// temps, se déplaçant tous dans la même direction (vitesse nette
-// élevée au relâché).
-function firePanzoomPan(win, el, x, y) {
-  el.dispatchEvent(new win.CustomEvent("panzoompan", { detail: { x, y, scale: 2, isSVG: true }, bubbles: true }));
-}
-svg11.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true }));
-firePanzoomPan(win, svg11, 0, 0);
-firePanzoomPan(win, svg11, 40, 0);
-firePanzoomPan(win, svg11, 90, 0);
-firePanzoomPan(win, svg11, 150, 0); // ~1.5px/ms de vitesse nette en x
-
-const panBeforeEnd = win.eval("dashboardsPanzoom.getPan().x");
-svg11.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: true }));
-setTimeout(() => {
-  const panAfterCoast = win.eval("dashboardsPanzoom.getPan().x");
-  console.log("Le panoramique continue bien tout seul après le relâché (inertie) (attendu true) :", panAfterCoast > panBeforeEnd);
-  // Retour de Mayrik : un grand geste doit maintenant suffire à
-  // atteindre l'autre bout de la zone (plus besoin de ~4 gestes) —
-  // vérifie que le coast atteint bien la limite de containment
-  // (125px dans ce scénario simulé), pas juste "un peu plus loin".
-  console.log("...et va bien jusqu'au bout de la zone en UN SEUL geste (limite de containment atteinte) (attendu true) :", panAfterCoast >= 124);
-
-  // Un panoramique lent (quasi immobile) ne doit déclencher AUCUNE inertie.
-  win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
-  svg11.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true }));
-  firePanzoomPan(win, svg11, 0, 0);
-  firePanzoomPan(win, svg11, 1, 0);
-  const panBeforeEnd2 = win.eval("dashboardsPanzoom.getPan().x");
-  svg11.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: true }));
-  setTimeout(() => {
-    const panAfterEnd2 = win.eval("dashboardsPanzoom.getPan().x");
-    console.log("Un relâché quasi immobile ne déclenche PAS d'inertie (attendu true) :", panAfterEnd2 === panBeforeEnd2);
-
-    // Démarrer un NOUVEAU panoramique doit couper une inertie en cours.
-    win.eval("dashboardsPanzoom.pan(0, 0, { animate: false })");
-    svg11.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true }));
-    firePanzoomPan(win, svg11, 0, 0);
-    firePanzoomPan(win, svg11, 150, 0);
-    svg11.dispatchEvent(new win.CustomEvent("panzoomend", { detail: {}, bubbles: true }));
-    setTimeout(() => {
-      svg11.dispatchEvent(new win.CustomEvent("panzoomstart", { detail: {}, bubbles: true })); // coupe le coast en cours
-      const panAtInterrupt = win.eval("dashboardsPanzoom.getPan().x");
-      setTimeout(() => {
-        const panAfterInterrupt = win.eval("dashboardsPanzoom.getPan().x");
-        console.log("Démarrer un nouveau panoramique coupe bien l'inertie en cours (attendu true) :", panAfterInterrupt === panAtInterrupt);
-        console.log("\n=== Fin du Test 11 ===");
-        runTests12And13(); // séquencement explicite (voir plus bas) : jamais un délai deviné
-      }, 50);
-    }, 30);
-  }, 50);
-}, 50);
-
-// -----------------------------------------------------------------
-// Test 12 et 13 démarrent APRÈS la fin RÉELLE (jamais devinée) de la
-// chaîne asynchrone du Test 11, via runTests12And13() appelée
-// explicitement depuis son tout dernier callback (retour de revue de
-// code : un bloc fermant mal placé les rendait AVANT ça accidentellement
-// dépendants de la fin du Test 11, mais un délai fixe deviné à la
-// place se serait révélé fragile — dépendant de la charge système du
-// moment). Nécessaire ici : ces tests utilisent l'horloge murale
-// réelle (performance.now(), setTimeout réels) — deux chaînes de
-// minuteurs VRAIMENT concurrentes dans le même processus Node peuvent
-// se retarder l'une l'autre assez pour fausser les calculs d'inertie
-// du Test 11 (vérifié : le Test 11 seul passe 4/4, mais échouait une
-// fois lancé en parallèle du Test 13).
-// -----------------------------------------------------------------
-function runTests12And13() {
-
-section("Test 12 — Bouton plein écran : présent, masqué proprement si l'API Fullscreen n'est pas disponible (ex. iOS Safari/Chrome)");
-
-dom = makeDom();
-win = dom.window;
-const fsBtn12 = dom.window.document.getElementById("fullscreen-btn");
-console.log("Le bouton existe dans le DOM (attendu true) :", !!fsBtn12);
-console.log("Masqué proprement quand document.fullscreenEnabled est absent (comme sur iOS) (attendu true) :", fsBtn12.style.display === "none");
-
-section("Test 13 — 3 boutons de préréglage de zoom (x1/x2/x4) : origin:'0 0' + contain:false sur le recalage, vérifiés en vrai navigateur (Playwright/Chromium) (retour de Mayrik)");
-
-dom = makeDom();
-win = dom.window;
-win.newGame();
-win.render();
-const presetBtns13 = [...dom.window.document.querySelectorAll("#dashboards-zoom-presets button")];
-console.log("Les 3 boutons x1/x2/x4 sont bien présents, dans cet ordre (attendu true) :",
-  presetBtns13.map((b) => b.dataset.zoomPreset).join(",") === "1,2,4");
-
-// BUG CORRIGÉ (retour de Mayrik, usage réel — vue centrée au lieu de
-// calée en haut à gauche). Deux tentatives précédentes se sont
-// révélées fausses en le vérifiant dans un VRAI Chromium (Playwright,
-// jsdom ne pouvant pas révéler ce genre de bug géométrique — pas de
-// vraie mise en page) :
-//   1. "focal:{x:0,y:0}" sur zoom() : semblait plausible sur le
-//      papier, mais focal.x=0 se simplifie mathématiquement en
-//      "ne change pas le panoramique actuel" — jamais "ramène à
-//      l'angle".
-//   2. zoom() + pan(0,0) différé par setTimeout : le VRAI souci
-//      n'était pas un problème de timing.
-// La vraie cause, trouvée en lisant le VRAI code source de Panzoom
-// (panzoom.js, fonction isSVGElement) : sa détection SVG exclut
-// EXPLICITEMENT la balise <svg> RACINE elle-même
-// (`nodeName !== 'svg'` — pensée pour panzoomer un <g> À L'INTÉRIEUR
-// d'un SVG, pas le <svg> lui-même). Posé ici directement sur
-// <svg id="dashboards">, Panzoom retombe donc sur le défaut HTML
-// (transform-origin 50% 50%, centré) au lieu de 0% 0%. Un 2e souci
-// s'ajoute : même origin corrigé, le containment "outside" calcule
-// ses bornes avec un terme symétrique (diffHorizontal/2) qui suppose
-// implicitement une mise à l'échelle centrée, quel que soit le VRAI
-// transform-origin — reclampant (0,0) vers une valeur non nulle.
-// Vérifié empiriquement dans un vrai Chromium : origin:'0 0' (posé à
-// la construction, voir dashboardsPanzoom plus haut) + contain:false
-// sur CET appel précis de pan() suffit, à toutes les échelles.
-console.log("Panzoom est bien construit avec origin:'0 0' (contourne l'exclusion de la balise <svg> racine) (attendu true) :",
-  dom.window.document.getElementById("dashboards").style.transformOrigin === "0 0");
-
-const panCalls13 = [];
-const zoomCalls13 = [];
-const originalPan13 = win.eval("dashboardsPanzoom.pan.bind(dashboardsPanzoom)");
-const originalZoom13 = win.eval("dashboardsPanzoom.zoom.bind(dashboardsPanzoom)");
-win.eval("(function(spy){ dashboardsPanzoom.pan = spy; })")((x, y, opts) => {
-  panCalls13.push({ x, y, contain: opts && opts.contain });
-  return originalPan13(x, y, opts);
-});
-win.eval("(function(spy){ dashboardsPanzoom.zoom = spy; })")((scale, opts) => {
-  zoomCalls13.push({ scale });
-  return originalZoom13(scale, opts);
-});
-
-const btnX2_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "2");
-btnX2_13.dispatchEvent(new win.Event("click", { bubbles: true }));
-console.log("Cliquer sur x2 règle bien l'échelle à 2 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
-console.log("...zoom() est bien appelé (attendu true) :", zoomCalls13.length === 1 && zoomCalls13[0].scale === 2);
-console.log("...puis pan(0,0, {contain:false}) tout de suite, SANS délai (plus besoin de setTimeout — contain:false évite le souci de dimensions) (attendu true) :",
-  panCalls13.length === 1 && panCalls13[0].x === 0 && panCalls13[0].y === 0 && panCalls13[0].contain === false);
-
-const btnX4_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "4");
-btnX4_13.dispatchEvent(new win.Event("click", { bubbles: true }));
-console.log("Cliquer sur x4 règle bien l'échelle à 4 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
-
-const btnX1_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "1");
-btnX1_13.dispatchEvent(new win.Event("click", { bubbles: true }));
-console.log("Cliquer sur x1 règle bien l'échelle à 1 (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 1);
-
-const dashViewport13 = dom.window.document.getElementById("dashboards-viewport");
-tapAt(win, dashViewport13, 200, 150);
-tapAt(win, dashViewport13, 205, 152);
-console.log("Le double-tap x1/x4 continue bien de fonctionner en parallèle (retour de Mayrik : gardé) (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 4);
-
-} // fin de runTests12And13()
