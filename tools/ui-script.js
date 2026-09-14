@@ -975,7 +975,16 @@ function renderDashboards() {
     maxRight = Math.max(maxRight, rowOriginX + ROW_BBOX.maxX);
   });
 
-  const totalH = order.length * (ROW_BBOX.h + PLAYER_ROW_GAP) + PLAYER_ROW_GAP;
+  // BUG CORRIGÉ (retour de Mayrik : marge indésirable sous le dernier
+  // command board) : l'écart (PLAYER_ROW_GAP) ne doit s'appliquer
+  // qu'ENTRE deux rangées (N rangées -> N-1 écarts), jamais après la
+  // dernière. L'ancienne formule (+ PLAYER_ROW_GAP après la
+  // multiplication) ajoutait par erreur un écart plein en trop —
+  // vérifié par le calcul : la rangée 0 démarre exactement à Y=0 (voir
+  // rowOriginY = rowIndex*(h+gap) - ROW_BBOX.minY, qui annule tout
+  // écart de tête), donc la hauteur correcte est purement
+  // N*(h+gap) - gap (équivalent à N*h + (N-1)*gap), jamais +gap.
+  const totalH = order.length * (ROW_BBOX.h + PLAYER_ROW_GAP) - PLAYER_ROW_GAP;
   svg.setAttribute("viewBox", `0 0 ${maxRight} ${totalH}`);
 
   // Bouton IA dessiné en tout dernier (retour de Mayrik : doit rester

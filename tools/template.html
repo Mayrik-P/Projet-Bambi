@@ -14,21 +14,47 @@
      zoom comme le ferait user-scalable=no (accessibilité préservée).
      #dashboards-viewport garde son touch-action:none propre (Panzoom
      y prend le contrôle total), qui l'emporte localement sur ce
-     réglage global. -->
-<meta name="viewport" content="width=device-width, initial-scale=1">
+     réglage global.
+
+     viewport-fit=cover (retour de Mayrik : bande noire inutilisée en
+     haut de l'écran, même en plein écran) : sans lui, le navigateur
+     confine par défaut la page à la "zone sûre" sous la barre système
+     (comportement viewport-fit=auto implicite) — documenté par Chrome
+     lui-même (developer.chrome.com/docs/css-ui/edge-to-edge). cover
+     autorise le contenu à s'étendre jusqu'au bord réel de l'écran ;
+     env(safe-area-inset-*) (voir plus bas dans le CSS) garde ensuite
+     le contenu important hors de la zone d'encoche/barre système,
+     pendant que le FOND, lui, s'étend bien jusqu'au bord. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Thunder Road Vendetta — Prototype jouable (humain vs IA)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Oswald:wght@500;700&display=swap" rel="stylesheet">
 <style>
-  body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 0; touch-action: manipulation; }
-  #wrap { max-width: 1000px; margin: 0 auto; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: -apple-system, sans-serif; background: #1e1e24; color: #eee; padding: 0; touch-action: manipulation; min-height: 100dvh; }
+  /* Colonne flexible remplissant tout l'écran disponible (retour de
+     Mayrik : caler chaque zone sans espace mort ni recouvrement) —
+     100dvh (dynamic viewport height) plutôt que 100vh : sur mobile,
+     100vh est peu fiable (la barre d'adresse du navigateur qui
+     apparaît/disparaît fausse le calcul), dvh est l'unité moderne
+     conçue justement pour ce cas, bien supportée aujourd'hui.
+     padding-top/bottom: env(safe-area-inset-*) — garde le CONTENU hors
+     de la zone d'encoche/barre système (voir la balise viewport plus
+     haut, viewport-fit=cover) tout en laissant le FOND de body, lui,
+     s'étendre jusqu'au bord réel de l'écran. box-sizing:border-box :
+     ce padding est inclus dans les 100dvh, jamais ajouté par-dessus. */
+  #wrap { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; height: 100dvh;
+    box-sizing: border-box; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
   .die { display: inline-block; background: #3a3a46; border-radius: 4px; padding: 2px 7px; margin-right: 3px; font-weight: bold; }
   .clickable { cursor: pointer; }
   .clickable:hover { filter: brightness(1.3); }
   /* Retirés de l'affichage (retour de Mayrik) — gardés dans le DOM
      (juste masqués) car ui-script.js continue d'y écrire du contenu ;
-     les enlever du DOM casserait ces appels. */
+     les enlever du DOM casserait ces appels. #log manquait à l'appel
+     (oubli d'origine) : resté en display:flex, ses marges/padding
+     (48px à vide) créaient l'espace mort en bas d'écran signalé par
+     Mayrik, une fois la colonne flexible mise en place. */
   h1, .sub, .badges, #panel, .damageList, .legend { display: none; }
   #choices { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   button.choice { background: #3a3a46; border: 1px solid #555; color: #eee; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
@@ -37,7 +63,7 @@
   button.primary { background: #ffb347; border: none; color: #1e1e24; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; margin: 0; }
   button.primary:disabled { opacity: 0.3; cursor: default; }
   button.secondary { background: #555; border: none; color: #eee; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 13px; margin-top: 10px; margin-left: 8px; }
-  #log { margin: 12px; padding: 12px; background: #2c2c36; border-radius: 8px; font-size: 13px; line-height: 1.6; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column-reverse; }
+  #log { display: none; margin: 12px; padding: 12px; background: #2c2c36; border-radius: 8px; font-size: 13px; line-height: 1.6; max-height: 260px; overflow-y: auto; flex-direction: column-reverse; }
   #log div.line { margin-bottom: 2px; }
   #log div.turn-sep { color: #ffb347; font-weight: bold; margin: 6px 0 2px 0; }
   #winnerBanner { display: none; }
@@ -58,12 +84,16 @@
     scrollbar-width: none; -ms-overflow-style: none; }
   #board-viewport::-webkit-scrollbar { display: none; }
   #board-viewport svg { display: block; height: auto; }
-  #board-position-slider { width: 100%; display: block; margin: 6px 0 10px; accent-color: #ffb347; height: 18px; cursor: pointer; }
+  #board-position-slider { width: 100%; display: block; margin: 0; accent-color: #ffb347; height: 18px; cursor: pointer; }
 
   /* --------------------------------------------------------------
-     Zone 2 — bande d'info (retour de Mayrik) : hauteur fixe, pleine
-     largeur, pas de zoom — juste une adaptation naturelle aux
-     différentes largeurs d'écran. Structure posée maintenant ; le
+     Zone 2 — bande d'info (retour de Mayrik) : occupe maintenant TOUT
+     l'espace restant entre le curseur du plateau et la zone dashboards
+     (flex:1 dans la colonne flexible de #wrap), plus une hauteur fixe
+     — c'est justement ce qui absorbe l'espace libre pour qu'il n'y ait
+     plus jamais de zone vide où l'arrière-plan de l'écran serait
+     visible. Toujours pas de zoom — juste une adaptation naturelle aux
+     différentes hauteurs d'écran. Structure posée maintenant ; le
      contenu (informations/explications de jeu) viendra étoffer ceci
      dans un chantier séparé. Style "afficheur de flipper" en attendant
      mieux : police monospace, espacement des lettres, léger halo —
@@ -81,7 +111,7 @@
     padding: 6px 10px; font-size: 13px; cursor: pointer; }
   #fullscreen-btn:hover { background: rgba(60,60,70,0.9); }
 
-  #info-band { width: 100%; box-sizing: border-box; min-height: 44px; background: #0d0d10;
+  #info-band { flex: 1 1 auto; min-height: 44px; width: 100%; box-sizing: border-box; background: #0d0d10;
     border-top: 2px solid #3a3a46; border-bottom: 2px solid #3a3a46;
     display: flex; align-items: center; justify-content: center; padding: 6px 14px;
     font-family: "Courier New", monospace; font-weight: bold; font-size: 15px;
@@ -99,15 +129,15 @@
      navigateur ne s'en mêle. La hauteur du conteneur est posée
      dynamiquement en JS pour toujours cadrer exactement l'ensemble des
      dashboards à l'échelle 1 (comme aujourd'hui) — le zoom du joueur
-     s'applique PAR-DESSUS cette base. */
-  /* Marge de secours (retour de Mayrik : sur téléphone, une fois le
-     doigt posé dans la zone dashboards, impossible de redéfiler la
-     page — touch-action:none capture tout geste qui y démarre). Cette
-     marge reste en touch-action NORMAL (jamais capturée par Panzoom),
-     offrant toujours une zone de repli pour attraper le défilement de
-     la page — même principe que la marge verticale "gratuite" déjà
-     présente sur ordinateur (bords de l'écran hors zone dashboards). */
-  #dashboards-margin { width: 100%; height: 14px; background: #1e1e24; }
+     s'applique PAR-DESSUS cette base. Dernier élément de la colonne
+     flexible de #wrap : se retrouve donc naturellement calé tout en
+     bas de l'écran disponible, sans rien de plus à faire (retour de
+     Mayrik).
+     Les marges de secours qui entouraient autrefois cette zone (pour
+     rattraper le défilement de la PAGE quand touch-action:none
+     capturait un geste tactile) ont été retirées : #wrap remplit
+     maintenant exactement 100dvh sans déborder — il n'y a plus de
+     défilement de page du tout à rattraper. */
   #dashboards-viewport { width: 100%; overflow: hidden; position: relative; touch-action: none; background: #26262e; }
   #dashboards-viewport svg { display: block; width: 100%; height: auto; }
   /* 3 préréglages de zoom (retour de Mayrik) : carrés accolés en haut
@@ -210,14 +240,13 @@
   <div id="info-band"></div>
 
   <!-- Zone 3 : dashboards des joueurs — librement zoomables/déplaçables
-       (Panzoom), contenus à cette seule zone. Marge de secours
-       au-dessus/dessous (touch-action normal), pour toujours pouvoir
-       redéfiler la page sur téléphone (retour de Mayrik). Le
-       double-tap/double-clic (voir ui-script.js) bascule x1/x4 ; les 3
-       boutons x1/x2/x4 (retour de Mayrik) donnent en plus un accès
-       direct à chaque palier, en revenant systématiquement à l'angle
-       haut gauche. -->
-  <div id="dashboards-margin"></div>
+       (Panzoom), contenus à cette seule zone. Le double-tap/double-clic
+       (voir ui-script.js) bascule x1/x4 ; les 3 boutons x1/x2/x4
+       (retour de Mayrik) donnent en plus un accès direct à chaque
+       palier — ancrage natif de Panzoom (centré pour cet élément,
+       accepté tel quel). Dernier élément de la colonne flexible de
+       #wrap (retour de Mayrik) : se retrouve donc naturellement calé
+       tout en bas de l'écran disponible. -->
   <div id="dashboards-viewport">
     <div id="dashboards-zoom-presets">
       <button type="button" data-zoom-preset="1">x1</button>
@@ -226,7 +255,6 @@
     </div>
     <svg id="dashboards" viewBox="0 0 900 300"></svg>
   </div>
-  <div id="dashboards-margin"></div>
 
   <div id="panel"></div>
   <div class="damageList" id="damageRow"></div>
