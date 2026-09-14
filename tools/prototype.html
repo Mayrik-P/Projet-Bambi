@@ -6615,22 +6615,7 @@ function loadRealTiles() {
 
 </script>
 <script>
-/**
-* Panzoom 4.6.2 for panning and zooming elements using CSS transforms
-* Copyright Timmy Willison and other contributors
-* https://github.com/timmywil/panzoom/blob/main/MIT-License.txt
-*/
-((e,t)=>{"object"==typeof exports&&"undefined"!=typeof module?module.exports=t():"function"==typeof define&&define.amd?define(t):(e="undefined"!=typeof globalThis?globalThis:e||self).Panzoom=t()})(this,function(){"undefined"!=typeof window&&(window.NodeList&&!NodeList.prototype.forEach&&(NodeList.prototype.forEach=Array.prototype.forEach),"function"!=typeof window.CustomEvent)&&(window.CustomEvent=function(e,t){t=t||{bubbles:!1,cancelable:!1,detail:null};var n=document.createEvent("CustomEvent");return n.initCustomEvent(e,t.bubbles,t.cancelable,t.detail),n});let i="undefined"!=typeof document&&!!document.documentMode,a;let l=["webkit","moz","ms"],s={};function z(e){if(s[e])return s[e];var t=a=a||document.createElement("div").style;if(e in t)return s[e]=e;var n=e[0].toUpperCase()+e.slice(1);let o=l.length;for(;o--;){var r=""+l[o]+n;if(r in t)return s[e]=r}}function r(e,t){return parseFloat(t[z(e)])||0}function c(e,t,n=window.getComputedStyle(e)){var o="border"===t?"Width":"";return{left:r(t+"Left"+o,n),right:r(t+"Right"+o,n),top:r(t+"Top"+o,n),bottom:r(t+"Bottom"+o,n)}}function X(e,t,n){e.style[z(t)]=n}function Y(e){let t=e.parentNode;t&&1===t.nodeType||(t=document.documentElement);var n=window.getComputedStyle(e),o=window.getComputedStyle(t),r=e.getBoundingClientRect(),a=t.getBoundingClientRect();return{elem:{style:n,width:r.width,height:r.height,top:r.top,bottom:r.bottom,left:r.left,right:r.right,margin:c(e,"margin",n),border:c(e,"border",n)},parent:{style:o,width:a.width,height:a.height,top:a.top,bottom:a.bottom,left:a.left,right:a.right,padding:c(t,"padding",o),border:c(t,"border",o)}}}let C={down:"mousedown",move:"mousemove",up:"mouseup mouseleave"};function N(e,t,n,o){C[e].split(" ").forEach(e=>{t.addEventListener(e,n,o)})}function T(e,t,n){C[e].split(" ").forEach(e=>{t.removeEventListener(e,n)})}function $(e,t){let n=e.length;for(;n--;)if(e[n].pointerId===t.pointerId)return n;return-1}function L(e,t){let n;if(t.touches){n=0;for(var o of t.touches)o.pointerId=n++,L(e,o)}else-1<(n=$(e,t))&&e.splice(n,1),e.push(t)}function V(e){let t=(e=e.slice(0)).pop();for(var n;n=e.pop();)t={clientX:(n.clientX-t.clientX)/2+t.clientX,clientY:(n.clientY-t.clientY)/2+t.clientY};return t}function G(e){var t;return e.length<2?0:(t=e[0],e=e[1],Math.sqrt(Math.pow(Math.abs(e.clientX-t.clientX),2)+Math.pow(Math.abs(e.clientY-t.clientY),2)))}"undefined"!=typeof window&&("function"==typeof window.PointerEvent?C={down:"pointerdown",move:"pointermove",up:"pointerup pointerleave pointercancel"}:"function"==typeof window.TouchEvent&&(C={down:"touchstart",move:"touchmove",up:"touchend touchcancel"}));let I=/^http:[\w\.\/]+svg$/;
-/**
-   * Panzoom for panning and zooming elements using CSS transforms
-   * https://github.com/timmywil/panzoom
-   *
-   * Copyright Timmy Willison and other contributors
-   * Released under the MIT license
-   * https://github.com/timmywil/panzoom/blob/main/MIT-License.txt
-   *
-   */
-let R={animate:!1,canvas:!1,cursor:"move",disablePan:!1,disableZoom:!1,disableXAxis:!1,disableYAxis:!1,duration:200,easing:"ease-in-out",exclude:[],excludeClass:"panzoom-exclude",handleStartEvent:e=>{e.preventDefault(),e.stopPropagation()},maxScale:4,minScale:.125,overflow:"hidden",panOnlyWhenZoomed:!1,pinchAndPan:!1,relative:!1,setTransform:function(e,{x:t,y:n,scale:o,isSVG:r},a){X(e,"transform",`scale(${o}) translate(${t}px, ${n}px)`),r&&i&&(o=window.getComputedStyle(e).getPropertyValue("transform"),e.setAttribute("transform",o))},startX:0,startY:0,startScale:1,step:.3,touchAction:"none"};function e(d,p){if(!d)throw new Error("Panzoom requires an element as an argument");if(1!==d.nodeType)throw new Error("Panzoom requires an element with a nodeType of 1");if(!(e=>{let t=e;for(;t&&t.parentNode;){if(t.parentNode===document)return 1;t=t.parentNode instanceof ShadowRoot?t.parentNode.host:t.parentNode}})(d))throw new Error("Panzoom should be called on elements that have been attached to the DOM");p=Object.assign(Object.assign({},R),p);e=d;let c=I.test(e.namespaceURI)&&"svg"!==e.nodeName.toLowerCase();var e;let n=d.parentNode;n.style.overflow=p.overflow,n.style.userSelect="none",n.style.touchAction=p.touchAction,(p.canvas?n:d).style.cursor=p.cursor,d.style.userSelect="none",d.style.touchAction=p.touchAction,X(d,"transformOrigin","string"==typeof p.origin?p.origin:c?"0 0":"50% 50%");let u=0,m=0,f=1,a=!1;function r(e,t,n){n.silent||(n=new CustomEvent(e,{detail:t}),d.dispatchEvent(n))}function l(t,n,e){let o={x:u,y:m,scale:f,isSVG:c,originalEvent:e};return requestAnimationFrame(()=>{var e;"boolean"==typeof n.animate&&(n.animate?(e=n,X(d,"transition",`${z("transform")} ${e.duration}ms `+e.easing)):X(d,"transition","none")),n.setTransform(d,o,n),r(t,o,n),r("panzoomchange",o,n)}),o}function s(e,t,n,o){var r,a,i,l,s=Object.assign(Object.assign({},p),o),c={x:u,y:m,opts:s};return(null!=o&&o.force||!(s.disablePan||s.panOnlyWhenZoomed&&f===s.startScale))&&(e=parseFloat(e),t=parseFloat(t),s.disableXAxis||(c.x=(s.relative?u:0)+e),s.disableYAxis||(c.y=(s.relative?m:0)+t),s.contain&&(e=((t=(e=(o=Y(d)).elem.width/f)*n)-e)/2,a=((r=(a=o.elem.height/f)*n)-a)/2,"inside"===s.contain?(i=(-o.elem.margin.left-o.parent.padding.left+e)/n,l=(o.parent.width-t-o.parent.padding.left-o.elem.margin.left-o.parent.border.left-o.parent.border.right+e)/n,c.x=Math.max(Math.min(c.x,l),i),l=(-o.elem.margin.top-o.parent.padding.top+a)/n,i=(o.parent.height-r-o.parent.padding.top-o.elem.margin.top-o.parent.border.top-o.parent.border.bottom+a)/n,c.y=Math.max(Math.min(c.y,i),l)):"outside"===s.contain&&(i=(-(t-o.parent.width)-o.parent.padding.left-o.parent.border.left-o.parent.border.right+e)/n,l=(e-o.parent.padding.left)/n,c.x=Math.max(Math.min(c.x,l),i),t=(-(r-o.parent.height)-o.parent.padding.top-o.parent.border.top-o.parent.border.bottom+a)/n,e=(a-o.parent.padding.top)/n,c.y=Math.max(Math.min(c.y,e),t))),s.roundPixels)&&(c.x=Math.round(c.x),c.y=Math.round(c.y)),c}function h(n,o){var r,a=Object.assign(Object.assign({},p),o),i={scale:f,opts:a};if(null!=o&&o.force||!a.disableZoom){let e=p.minScale,t=p.maxScale;a.contain&&(a=(o=Y(d)).elem.width/f,r=o.elem.height/f,1<a)&&1<r&&(a=(o.parent.width-o.parent.border.left-o.parent.border.right)/a,o=(o.parent.height-o.parent.border.top-o.parent.border.bottom)/r,"inside"===p.contain?t=Math.min(t,a,o):"outside"===p.contain&&(e=Math.max(e,a,o))),i.scale=Math.min(Math.max(n,e),t)}return i}function i(e,t,n,o){e=s(e,t,f,n);return u!==e.x||m!==e.y?(u=e.x,m=e.y,l("panzoompan",e.opts,o)):{x:u,y:m,scale:f,isSVG:c,originalEvent:o}}function g(n,o,r){var a=h(n,o),i=a.opts;if(null!=o&&o.force||!i.disableZoom){n=a.scale;let e=u,t=m;i.focal&&(o=i.focal,e=(o.x/n-o.x/f+u*n)/n,t=(o.y/n-o.y/f+m*n)/n);a=s(e,t,n,{relative:!1,force:!0});return u=a.x,m=a.y,f=n,l("panzoomzoom",i,r)}}function t(e,t){t=Object.assign(Object.assign(Object.assign({},p),{animate:!0}),t);return g(f*Math.exp((e?1:-1)*t.step),t)}function v(e,t,n,o){var r=Y(d);const a=r.parent.width-r.parent.padding.left-r.parent.padding.right-r.parent.border.left-r.parent.border.right,i=r.parent.height-r.parent.padding.top-r.parent.padding.bottom-r.parent.border.top-r.parent.border.bottom;let l=t.clientX-r.parent.left-r.parent.padding.left-r.parent.border.left-r.elem.margin.left,s=t.clientY-r.parent.top-r.parent.padding.top-r.parent.border.top-r.elem.margin.top;c||(l-=r.elem.width/f/2,s-=r.elem.height/f/2);t={x:l/a*(a*e),y:s/i*(i*e)};return g(e,Object.assign(Object.assign({},n),{animate:!1,focal:t}),o)}g(p.startScale,{animate:!1,force:!0}),setTimeout(()=>{i(p.startX,p.startY,{animate:!1,force:!0})});let y,b,w,x,O,E,S=[];function o(e){((t,n)=>{for(let e=t;null!=e;e=e.parentNode)if(o=e,r=n.excludeClass,1===o.nodeType&&-1<` ${o=o,(o.getAttribute("class")||"").trim()} `.indexOf(` ${r} `)||-1<n.exclude.indexOf(e))return 1;var o,r})(e.target,p)||(L(S,e),a=!0,p.handleStartEvent(e),y=u,b=m,r("panzoomstart",{x:u,y:m,scale:f,isSVG:c,originalEvent:e},p),e=V(S),w=e.clientX,x=e.clientY,O=f,E=G(S))}function M(t){if(a&&void 0!==y&&void 0!==b&&void 0!==w&&void 0!==x){L(S,t);var n,o=V(S),r=1<S.length;let e=f;r&&(0===E&&(E=G(S)),n=G(S)-E,v(e=h(n*p.step/80+O).scale,o,{animate:!1},t)),r&&!p.pinchAndPan||i(y+(o.clientX-w)/e,b+(o.clientY-x)/e,{animate:!1},t)}}function A(e){1===S.length&&r("panzoomend",{x:u,y:m,scale:f,isSVG:c,originalEvent:e},p);var t=S;if(e.touches)for(;t.length;)t.pop();else{e=$(t,e);-1<e&&t.splice(e,1)}a&&(a=!1,y=b=w=x=void 0)}let P=!1;function j(){P||(P=!0,N("down",p.canvas?n:d,o),N("move",document,M,{passive:!0}),N("up",document,A,{passive:!0}))}return p.noBind||j(),{bind:j,destroy:function(){P=!1,T("down",p.canvas?n:d,o),T("move",document,M),T("up",document,A)},eventNames:C,getPan:()=>({x:u,y:m}),getScale:()=>f,getOptions:()=>{var e,t=p,n={};for(e in t)t.hasOwnProperty(e)&&(n[e]=t[e]);return n},handleDown:o,handleMove:M,handleUp:A,pan:i,reset:function(e){var e=Object.assign(Object.assign(Object.assign({},p),{animate:!0,force:!0}),e),t=(f=h(e.startScale,e).scale,s(e.startX,e.startY,f,e));return u=t.x,m=t.y,l("panzoomreset",e)},resetStyle:function(){n.style.overflow="",n.style.userSelect="",n.style.touchAction="",n.style.cursor="",d.style.cursor="",d.style.userSelect="",d.style.touchAction="",X(d,"transformOrigin","")},setOptions:function(e={}){for(var t in e)e.hasOwnProperty(t)&&(p[t]=e[t]);(e.hasOwnProperty("cursor")||e.hasOwnProperty("canvas"))&&(n.style.cursor=d.style.cursor="",(p.canvas?n:d).style.cursor=p.cursor),e.hasOwnProperty("overflow")&&(n.style.overflow=e.overflow),e.hasOwnProperty("touchAction")&&(n.style.touchAction=e.touchAction,d.style.touchAction=e.touchAction)},setStyle:(e,t)=>X(d,e,t),zoom:g,zoomIn:function(e){return t(!0,e)},zoomOut:function(e){return t(!1,e)},zoomToPoint:v,zoomWithWheel:function(e,t){e.preventDefault();var t=Object.assign(Object.assign(Object.assign({},p),t),{animate:!1}),n=(0===e.deltaY&&e.deltaX?e.deltaX:e.deltaY)<0?1:-1;return v(h(f*Math.exp(n*t.step/3),t).scale,e,t,e)}}}return e.defaultOptions=R,e});
+
 </script>
 <script>
 "use strict";
@@ -7321,6 +7306,21 @@ function diceboardSlots(playerName) {
 // pas avoir à retoucher cette fonction le jour où on passera à un
 // affichage un-joueur-à-la-fois (carousel/slider), décision actée
 // avec Mayrik.
+// Ordre des lignes du bloc dashboards, joueur actif en tête, suivi du
+// reste dans l'ordre RÉEL du tour (rotation de playerOrder à partir du
+// joueur actif) — retour de Mayrik : HUMAN ne doit jamais rester
+// coincé en 2e position pendant tous les tours de chaque IA, mais
+// descendre progressivement selon sa vraie place dans la rotation.
+// Factorisé (ex-code dupliqué dans renderDashboards et réutilisé par
+// l'animation de lancer de dés en début de round, qui a besoin de la
+// même origine de ligne par joueur).
+function currentDashboardRowOrder() {
+  const cp = getCurrentPlayer(G.roundState);
+  const po = G.roundState.playerOrder;
+  const cpIdx = cp ? po.indexOf(cp) : -1;
+  return cpIdx >= 0 ? [...po.slice(cpIdx), ...po.slice(0, cpIdx)] : PLAYER_NAMES;
+}
+
 function renderDashboards() {
   const svg = document.getElementById("dashboards");
   if (!svg) return; // anciens tests jsdom sans ce conteneur : ne casse rien
@@ -7357,9 +7357,7 @@ function renderDashboards() {
   // sinon HUMAN restait coincé en 2e position pendant TOUS les tours
   // de chaque IA, au lieu de descendre progressivement selon sa vraie
   // place dans la rotation.
-  const po = G.roundState.playerOrder;
-  const cpIdx = cp ? po.indexOf(cp) : -1;
-  const order = cpIdx >= 0 ? [...po.slice(cpIdx), ...po.slice(0, cpIdx)] : PLAYER_NAMES;
+  const order = currentDashboardRowOrder();
 
   let maxRight = 0;
   let pendingAiButton = null;
@@ -7453,7 +7451,13 @@ function renderDashboards() {
       const slotKey = "slot" + i;
       const { x: dx, y: dy } = slotDieOrigin(dice, DICEBOARD_SLOT_FRACTION[slotKey]);
       const isClickable = playerName === HUMAN && (dieStep || commandDieStep);
-      svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, isClickable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
+      // data-diceboard-die : accroche utilisée UNIQUEMENT par l'animation
+      // de lancer en début de round (playRoundDiceRollAnimation) pour
+      // retrouver la position écran réelle de CE dé précis (via
+      // getBoundingClientRect, qui tient compte du pan/zoom Panzoom
+      // automatiquement) — sans attribut, pas de comportement changé.
+      const extra = (isClickable ? 'class="clickable" ' : "") + `data-diceboard-die="${playerName}:${i}"`;
+      svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, extra, SLOT_ROTATION[slotKey]));
       if (isClickable) {
         const handler = dieStep ? (() => { pickDie(value); render(); }) : (() => { pickCommandDieChoice(value); render(); });
         svg.lastElementChild.addEventListener("click", handler);
@@ -9496,6 +9500,212 @@ function updateDashboardsViewportHeight() {
   viewport.style.height = naturalHeight.toFixed(1) + "px";
 }
 
+// ===================================================================
+// ANIMATION DE LANCER DE DÉS — début de round (dés de MOUVEMENT du
+// diceboard uniquement pour l'instant). Technique validée avec Mayrik
+// sur un prototype autonome avant intégration ici : position X en
+// avance monotone (jamais de retour en arrière), hauteur pilotée par
+// la fonction de rebond de Robert Penner (easeOutBounce — cf.
+// https://easings.net/#easeOutBounce et le tutoriel javascript.info
+// "Animate the bouncing ball", qui applique exactement cette même
+// fonction à la position verticale d'une chute). Entrée par
+// l'extérieur gauche de l'écran, cyclage rapide des faces pendant le
+// vol, écrasement (squash) automatique à chaque contact avec le sol,
+// ombre qui s'efface en fondu une fois le dé posé.
+//
+// PIÈGE ÉVITÉ (important) : le SVG #dashboards est piloté par Panzoom
+// (voir pièges techniques du projet — ne jamais toucher aux
+// dimensions/viewBox du SVG en dehors de son API). Dessiner les dés
+// animés À L'INTÉRIEUR de ce SVG, hors de son viewBox actuel, les
+// aurait rendus invisibles (le SVG les découpe lui-même avant même que
+// Panzoom applique son propre pan/zoom). Solution : une surcouche HTML
+// `position:fixed` totalement INDÉPENDANTE de Panzoom, positionnée en
+// coordonnées ÉCRAN RÉELLES via getBoundingClientRect() du vrai dé
+// final déjà dessiné par le render() normal (donc toujours juste,
+// quel que soit le pan/zoom en cours) — jamais de recalcul manuel des
+// coordonnées SVG/Panzoom.
+//
+// Choix d'intégration (pour ne RIEN casser d'existant) : cette
+// animation est une SURCOUCHE PUREMENT COSMÉTIQUE, ajoutée PAR-DESSUS
+// un render() déjà terminé et déjà correct (le vrai dé est simplement
+// masqué le temps du vol, puis révélé) — jamais un remplacement du
+// rendu réel, qui reste 100% synchrone comme avant. Elle ne se
+// déclenche que si window.requestAnimationFrame existe réellement :
+// tous nos tests jsdom en sont dépourvus (vérifié : seul
+// test-ui-layout-zoom.js le polyfille, pour Panzoom, et ne traverse
+// aucun changement de round), donc AUCUN test existant n'est affecté.
+function easeOutBounceDie(t) {
+  const n1 = 7.5625, d1 = 2.75;
+  if (t < 1 / d1) return n1 * t * t;
+  if (t < 2 / d1) { t -= 1.5 / d1; return n1 * t * t + 0.75; }
+  if (t < 2.5 / d1) { t -= 2.25 / d1; return n1 * t * t + 0.9375; }
+  t -= 2.625 / d1;
+  return n1 * t * t + 0.984375;
+}
+function easeOutCubicDie(t) { return 1 - Math.pow(1 - t, 3); }
+
+// Round déjà animé (ou en cours d'animation) — évite de relancer le
+// lancer à chaque render() appelé pendant le même round (un clic du
+// joueur redessine tout, mais ne doit rejouer l'animation qu'au
+// changement RÉEL de round). 0 = aucun round encore animé.
+let lastRolledRoundNumber = 0;
+
+// Contenu HTML (face + pips) d'un dé de mouvement pour une valeur
+// donnée, à une taille donnée — même logique de calage que
+// dieMarkup()/diePipLayout() (grille 3x3, un pip = 1/3 de la face),
+// simplement transposée en <img> HTML plutôt qu'en <image> SVG.
+function movingDieOverlayHTML(value, color, size) {
+  const pipCell = size / 3;
+  const facePath = `../images/dice/die-move-${color}.webp`;
+  const pipPath = `../images/dice/die-move-pip.webp`;
+  const pips = diePipLayout(value).map(([col, row]) => {
+    const px = col * pipCell, py = row * pipCell;
+    return `<img src="${pipPath}" style="position:absolute; left:${px}px; top:${py}px; width:${pipCell}px; height:${pipCell}px;">`;
+  }).join("");
+  return `<img src="${facePath}" style="position:absolute; left:0; top:0; width:${size}px; height:${size}px;">${pips}`;
+}
+
+function diceRollOverlayRoot() {
+  let overlay = document.getElementById("dice-roll-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "dice-roll-overlay";
+    Object.assign(overlay.style, {
+      position: "fixed", inset: "0", pointerEvents: "none", zIndex: "9999", overflow: "visible"
+    });
+    document.body.appendChild(overlay);
+  }
+  return overlay;
+}
+
+// Anime UN dé, de l'extérieur gauche de l'écran jusqu'au rectangle
+// écran réel du vrai dé déjà rendu (targetEl) — masqué le temps du
+// vol, révélé une fois l'animation terminée (déjà à la bonne valeur/
+// position, aucun changement visuel au moment de la révélation).
+function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs) {
+  return new Promise((resolve) => {
+    const rect = targetEl.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) { resolve(); return; } // élément non visible (safety net)
+
+    const size = rect.width;
+    const toX = rect.left + size / 2, toY = rect.top + size / 2;
+    const fromX = -size * 2; // hors-champ, à l'extérieur gauche de l'écran
+    const fromY = toY - size * 1.2;
+    const amplitude = Math.max(size, toY - fromY);
+
+    targetEl.style.opacity = "0"; // masqué le temps du vol, révélé à l'identique à la fin
+
+    const overlayRoot = diceRollOverlayRoot();
+
+    const die = document.createElement("div");
+    die.style.position = "fixed";
+    die.style.width = size + "px";
+    die.style.height = size + "px";
+    die.style.willChange = "transform";
+    die.innerHTML = movingDieOverlayHTML(finalValue, color, size);
+
+    const shadow = document.createElement("div");
+    shadow.style.position = "fixed";
+    shadow.style.width = size + "px";
+    shadow.style.height = size * 0.28 + "px";
+    shadow.style.borderRadius = "50%";
+    shadow.style.background = "rgba(0,0,0,0.55)";
+    shadow.style.filter = "blur(2px)";
+
+    overlayRoot.appendChild(shadow);
+    overlayRoot.appendChild(die);
+
+    setTimeout(() => {
+      let cycling = true;
+      const cycle = setInterval(() => {
+        if (cycling) die.innerHTML = movingDieOverlayHTML(1 + Math.floor(Math.random() * 6), color, size);
+      }, 60);
+
+      const startTime = performance.now();
+
+      function frame(now) {
+        const t = Math.min(1, (now - startTime) / totalMs);
+
+        const x = fromX + (toX - fromX) * easeOutCubicDie(t);
+        const heightAboveGround = amplitude * (1 - easeOutBounceDie(t));
+        const y = toY - heightAboveGround;
+
+        const rot = easeOutCubicDie(t) * 420;
+        const contactPulse = Math.max(0, 1 - heightAboveGround / (amplitude * 0.12));
+        const scaleX = 1 + contactPulse * 0.3;
+        const scaleY = 1 - contactPulse * 0.3;
+
+        die.style.transform =
+          `translate(${x - size / 2}px, ${y - size / 2}px) rotate(${rot}deg) scale(${scaleX}, ${scaleY})`;
+
+        const shadowScale = Math.max(0.3, 1 - heightAboveGround / amplitude);
+        shadow.style.transform = `translate(${x - size / 2}px, ${toY + size * 0.36}px) scale(${shadowScale})`;
+        shadow.style.opacity = (0.2 + 0.35 * shadowScale).toFixed(2);
+
+        if (cycling && t > 0.8) {
+          cycling = false;
+          clearInterval(cycle);
+          die.innerHTML = movingDieOverlayHTML(finalValue, color, size);
+        }
+
+        if (t < 1) {
+          requestAnimationFrame(frame);
+        } else {
+          die.style.transform = `translate(${toX - size / 2}px, ${toY - size / 2}px)`;
+          shadow.style.transition = "opacity 400ms ease";
+          shadow.style.opacity = "0";
+          setTimeout(() => {
+            shadow.remove();
+            die.remove();
+            targetEl.style.opacity = ""; // révèle le vrai dé, déjà à la bonne place/valeur
+            resolve();
+          }, 420);
+        }
+      }
+      requestAnimationFrame(frame);
+    }, delay);
+  });
+}
+
+// Déclenche le lancer animé des 4 dés de mouvement de CHAQUE joueur,
+// par-dessus le render() déjà effectué. N'affecte jamais le déroulé
+// réel du jeu : les vraies valeurs (déjà tirées par le moteur dans
+// G.roundState.dicePool) sont connues à l'avance, cette fonction ne
+// fait que les mettre en scène visuellement.
+function playRoundDiceRollAnimation() {
+  const svg = document.getElementById("dashboards");
+  if (!svg) return;
+
+  const order = currentDashboardRowOrder();
+  const allDicePromises = [];
+
+  order.forEach((playerName, rowIndex) => {
+    const values = diceboardSlots(playerName); // 4 valeurs déjà tirées par le moteur pour ce round
+    const color = PLAYER_CAR_COLOR[playerName];
+
+    values.forEach((value, i) => {
+      if (value === null) return;
+      const targetEl = svg.querySelector(`[data-diceboard-die="${playerName}:${i}"]`);
+      if (!targetEl) return; // safety net (ex. test/rendu partiel)
+      allDicePromises.push(animateOneMovingDie(targetEl, value, color, rowIndex * 90 + i * 70, 1300));
+    });
+  });
+
+  Promise.all(allDicePromises);
+}
+
+// Gate de sécurité : ne déclenche l'animation que dans un vrai
+// navigateur (requestAnimationFrame réellement disponible) et
+// seulement au changement RÉEL de round — jamais à chaque simple
+// render() dans le même round. Voir le commentaire détaillé plus haut
+// sur pourquoi ceci ne peut casser aucun test existant.
+function maybeTriggerRoundDiceRollAnimation() {
+  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return;
+  if (G.roundState.roundNumber === lastRolledRoundNumber) return;
+  lastRolledRoundNumber = G.roundState.roundNumber;
+  playRoundDiceRollAnimation();
+}
+
 function render() {
   saveGameState(); // point de contrôle sûr : voir le commentaire détaillé près de SAVE_KEY
 
@@ -9526,6 +9736,8 @@ function render() {
 
   const logEl = document.getElementById("log");
   logEl.innerHTML = fullLog.slice().reverse().map((e) => e.sep ? `<div class="turn-sep">${e.sep}</div>` : `<div class="line">${e.line}</div>`).join("");
+
+  maybeTriggerRoundDiceRollAnimation();
 }
 
 // ===================================================================
