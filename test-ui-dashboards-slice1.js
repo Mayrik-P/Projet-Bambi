@@ -150,7 +150,7 @@ G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.resetSelection();
 win.render();
 
-let slots = win.eval('diceboardSlots("Vous")');
+let slots = win.eval(`diceboardSlots("${HUMAN}")`);
 console.log("Les 4 valeurs imposées apparaissent bien dans les 4 emplacements (attendu true) :",
   JSON.stringify([...slots].sort()) === JSON.stringify([1, 3, 3, 4]));
 
@@ -161,7 +161,7 @@ console.log("Les 4 valeurs imposées apparaissent bien dans les 4 emplacements (
 const idx = G.roundState.dicePool[HUMAN].indexOf(3);
 G.roundState.dicePool[HUMAN].splice(idx, 1);
 win.render();
-const slots2 = win.eval('diceboardSlots("Vous")');
+const slots2 = win.eval(`diceboardSlots("${HUMAN}")`);
 console.log("Les 3 positions des dés restants n'ont PAS bougé (attendu true) :",
   slots.map((v, i) => (v === 3 ? true : v === slots2[i])).every(Boolean));
 console.log("Exactement un emplacement est maintenant vide (attendu true) :",
@@ -726,7 +726,7 @@ section("Test 24 — Bandeau de fin de partie centré sur le plateau (SVG), plus
 dom = makeDom();
 win = dom.window;
 win.newGame();
-win.eval("gameOver = true; gameOverInfo = { winner: 'Vous', reason: 'Finish Line' };");
+win.eval(`gameOver = true; gameOverInfo = { winner: "${HUMAN}", reason: "Finish Line" };`);
 win.render();
 const boardHtml24 = dom.window.document.getElementById("board").innerHTML;
 console.log("Le bandeau est bien dessiné DANS le SVG du plateau, nouveau format anglais (attendu true) :", boardHtml24.includes("Game over: Blue wins by Finish Line"));
@@ -940,14 +940,13 @@ win = dom.window;
 win.newGame();
 win.render();
 console.log("h1 et .sub ont bien été retirés du DOM (attendu true) :", !dom.window.document.querySelector("h1") && !dom.window.document.querySelector(".sub"));
-[".badges", "#panel", ".damageList", ".legend"].forEach((sel) => {
+[".badges", "#panel", ".damageList", ".legend", "#log"].forEach((sel) => {
   const el = dom.window.document.querySelector(sel);
   const display = dom.window.getComputedStyle(el).display;
   console.log(`${sel} est bien masqué (display:none) (attendu true) :`, display === "none");
 });
 const bodyStyle = dom.window.getComputedStyle(dom.window.document.body);
 console.log("Plus de padding sur body (plateau collé en haut) (attendu true) :", bodyStyle.padding === "0px" || bodyStyle.paddingTop === "0px");
-console.log("#log reste bien visible (journal debug conservé) (attendu true) :", dom.window.getComputedStyle(dom.window.document.getElementById("log")).display !== "none");
 
 section("Test 32 — Dé Road actif : rendu intégré aux dashboards, position calibrée, UNIQUEMENT sur la ligne du 1er joueur du round");
 

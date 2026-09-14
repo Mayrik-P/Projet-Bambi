@@ -134,17 +134,15 @@ winNoRaf.newGame();
 winNoRaf.render();
 console.log("Le jeu démarre et se rend normalement malgré l'échec de Panzoom (attendu true) :", winNoRaf.eval("G") !== null && winNoRaf.eval("G.allCars").length > 0);
 
-section("Test 8 — Retours de Mayrik (usage réel) : scrollbar native masquée, marges de secours tactile");
+section("Test 8 — Retours de Mayrik (usage réel) : scrollbar native masquée");
 
 dom = makeDom();
 win = dom.window;
 const boardViewportCss8 = dom.window.getComputedStyle(dom.window.document.getElementById("board-viewport"));
 console.log("La scrollbar native du plateau est bien masquée (scrollbar-width:none) (attendu true) :", boardViewportCss8.scrollbarWidth === "none");
 
-const margins8 = dom.window.document.querySelectorAll("#dashboards-margin");
-console.log("Les 2 marges de secours (au-dessus/dessous des dashboards) sont présentes (attendu true) :", margins8.length === 2);
-const marginCss8 = dom.window.getComputedStyle(margins8[0]);
-console.log("...et restent en touch-action normal (jamais capturées par Panzoom) (attendu true) :", marginCss8.touchAction !== "none");
+console.log("Les marges de secours (retour de Mayrik : plus nécessaires, colonne flexible pleine hauteur, plus de défilement de page à rattraper) ont bien été retirées (attendu true) :",
+  dom.window.document.querySelectorAll("#dashboards-margin").length === 0);
 
 console.log("Le bouton de réinitialisation a bien été retiré (le bouton x1 sert aussi de retour à l'affichage complet) (attendu true) :", !dom.window.document.getElementById("dashboards-reset-btn"));
 
@@ -333,9 +331,53 @@ setTimeout(() => {
         console.log("Démarrer un nouveau panoramique coupe bien l'inertie en cours (attendu true) :", panAfterInterrupt13 === panAtInterrupt13);
         // Le double-tap doit aussi couper une inertie en cours (retour
         // de stopMomentum() dans toggleZoomAt, réajouté avec l'inertie).
-        console.log("\n=== Fin des tests dédiés (mise en page 3 zones + zoom) ===");
+        runTest14(); // séquencement explicite (retour d'expérience : jamais de code synchrone en parallèle d'une chaîne async réelle — voir le commentaire de runTests12And13 plus haut, même souci de timing)
       }, 50);
     }, 30);
   }, 50);
   }, 50);
 }, 50);
+
+function runTest14() {
+section("Test 14 — Répartition globale à l'écran (retour de Mayrik) : colonne flexible pleine hauteur, chaque zone calée sans espace mort");
+
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.render();
+
+const metaViewport14 = dom.window.document.querySelector('meta[name="viewport"]');
+console.log("La balise viewport contient bien viewport-fit=cover (retour de Mayrik : bande noire inutilisée en haut de l'écran) (attendu true) :",
+  metaViewport14.getAttribute("content").includes("viewport-fit=cover"));
+
+const wrapCss14 = dom.window.getComputedStyle(dom.window.document.getElementById("wrap"));
+console.log("#wrap est bien une colonne flexible (attendu true) :", wrapCss14.display === "flex" && wrapCss14.flexDirection === "column");
+console.log("...remplissant 100dvh (dynamic viewport height, plus fiable que 100vh sur mobile) (attendu true) :", wrapCss14.height === "100dvh");
+
+const infoBandCss14 = dom.window.getComputedStyle(dom.window.document.getElementById("info-band"));
+console.log("#info-band est bien flex:1 (absorbe tout l'espace restant entre le curseur et les dashboards) (attendu true) :", infoBandCss14.flexGrow === "1");
+
+const sliderCss14 = dom.window.getComputedStyle(dom.window.document.getElementById("board-position-slider"));
+console.log("Le curseur du plateau n'a plus de marge (collé au plateau au-dessus, à la bande d'info en dessous) (attendu true) :", sliderCss14.margin === "0px");
+
+console.log("#log reste bien masqué (retour de Mayrik : c'était la vraie cause de l'espace vide en bas d'écran — 48px de marges à vide, oublié lors du masquage des éléments obsolètes) (attendu true) :",
+  dom.window.getComputedStyle(dom.window.document.getElementById("log")).display === "none");
+
+// BUG CORRIGÉ (retour de Mayrik : marge indésirable sous le dernier
+// command board) : l'écart ne doit s'appliquer qu'ENTRE les rangées,
+// jamais après la dernière. Vérifie la formule exacte plutôt que la
+// seule valeur numérique, pour rester juste si le nombre de joueurs
+// ou les dimensions des rangées changent.
+const rowBBoxH14 = win.eval("ROW_BBOX.h");
+const rowGap14 = win.eval("PLAYER_ROW_GAP");
+const orderLength14 = win.eval("PLAYER_NAMES.length"); // nombre de rangées affichées (1 humain + IA)
+const expectedTotalH14 = orderLength14 * (rowBBoxH14 + rowGap14) - rowGap14;
+const actualViewBoxH14 = Number(dom.window.document.getElementById("dashboards").getAttribute("viewBox").split(" ")[3]);
+console.log("Le viewBox des dashboards a bien la hauteur exacte (N*(h+écart) - écart, jamais + écart) (attendu true) :",
+  Math.abs(actualViewBoxH14 - expectedTotalH14) < 0.01);
+
+console.log("Les marges de secours (retirées : colonne flexible pleine hauteur, plus de défilement de page à rattraper) restent bien absentes (attendu true) :",
+  dom.window.document.querySelectorAll("#dashboards-margin").length === 0);
+
+console.log("\n=== Fin des tests dédiés (mise en page 3 zones + zoom) ===");
+} // fin de runTest14()
