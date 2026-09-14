@@ -329,7 +329,7 @@ const fsBtn12 = dom.window.document.getElementById("fullscreen-btn");
 console.log("Le bouton existe dans le DOM (attendu true) :", !!fsBtn12);
 console.log("Masqué proprement quand document.fullscreenEnabled est absent (comme sur iOS) (attendu true) :", fsBtn12.style.display === "none");
 
-section("Test 13 — 3 boutons de préréglage de zoom (x1/x2/x4) : échelle posée immédiatement, recalage à (0,0) différé via setTimeout (motif officiel Panzoom, retour de Mayrik)");
+section("Test 13 — 3 boutons de préréglage de zoom (x1/x2/x4) : focal:{0,0} contre le centrage par défaut, recalage à (0,0) différé via setTimeout (retour de Mayrik)");
 
 dom = makeDom();
 win = dom.window;
@@ -339,25 +339,36 @@ const presetBtns13 = [...dom.window.document.querySelectorAll("#dashboards-zoom-
 console.log("Les 3 boutons x1/x2/x4 sont bien présents, dans cet ordre (attendu true) :",
   presetBtns13.map((b) => b.dataset.zoomPreset).join(",") === "1,2,4");
 
-// Espionne pan() plutôt que de recalculer la géométrie réelle de
-// Panzoom : un stub statique de getBoundingClientRect (nécessaire
-// dans jsdom, voir Test 11) ne peut pas refléter fidèlement des
-// dimensions qui changent RÉELLEMENT avec l'échelle — fragile dès
-// qu'un test traverse plusieurs échelles successives, comme ici. Ce
-// qui compte pour CE test : que mon code appelle bien pan(0, 0) après
-// zoom(), et APRÈS un délai (jamais dans le même tick synchrone) — la
-// géométrie de containment elle-même est la responsabilité, déjà
-// testée, de Panzoom.
+// Espionne pan() ET zoom() plutôt que de recalculer la géométrie
+// réelle de Panzoom : un stub statique de getBoundingClientRect
+// (nécessaire dans jsdom, voir Test 11) ne peut pas refléter
+// fidèlement des dimensions qui changent RÉELLEMENT avec l'échelle —
+// fragile dès qu'un test traverse plusieurs échelles successives,
+// comme ici. Ce qui compte pour CE test : que zoom() reçoive bien
+// focal:{x:0,y:0} (BUG CORRIGÉ, retour de Mayrik : sans focal, zoom()
+// vise par défaut le CENTRE de l'élément, jamais son transform-origin
+// — comportement documenté de Panzoom, voir le commentaire du code)
+// et que pan(0,0) soit bien appelé APRÈS un délai (jamais dans le
+// même tick synchrone) — la géométrie de containment elle-même est la
+// responsabilité, déjà testée, de Panzoom.
 const panCalls13 = [];
+const zoomCalls13 = [];
 const originalPan13 = win.eval("dashboardsPanzoom.pan.bind(dashboardsPanzoom)");
+const originalZoom13 = win.eval("dashboardsPanzoom.zoom.bind(dashboardsPanzoom)");
 win.eval("(function(spy){ dashboardsPanzoom.pan = spy; })")((x, y, opts) => {
   panCalls13.push({ x, y, t: Date.now() });
   return originalPan13(x, y, opts);
+});
+win.eval("(function(spy){ dashboardsPanzoom.zoom = spy; })")((scale, opts) => {
+  zoomCalls13.push({ scale, focal: opts && opts.focal });
+  return originalZoom13(scale, opts);
 });
 
 const btnX2_13 = presetBtns13.find((b) => b.dataset.zoomPreset === "2");
 btnX2_13.dispatchEvent(new win.Event("click", { bubbles: true }));
 console.log("Cliquer sur x2 règle bien l'échelle IMMÉDIATEMENT (attendu true) :", win.eval("dashboardsPanzoom.getScale()") === 2);
+console.log("...avec focal:{x:0,y:0} explicitement transmis (vise l'angle haut gauche, pas le centre par défaut) (attendu true) :",
+  zoomCalls13.length === 1 && JSON.stringify(zoomCalls13[0].focal) === '{"x":0,"y":0}');
 console.log("...mais pan(0,0) n'est PAS encore appelé dans le même tick synchrone (attendu true) :", panCalls13.length === 0);
 
 setTimeout(() => {
