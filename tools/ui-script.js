@@ -2574,12 +2574,26 @@ function applyBoardSizing() {
   if (boardWidthRatio === null) return;
   const viewport = document.getElementById("board-viewport");
   const svg = document.getElementById("board");
-  // Plafond raisonnable : 40% de la hauteur d'écran (pas 50%) — les
-  // dashboards peuvent avoir besoin du même genre de plafond au même
-  // moment (voir updateDashboardsViewportHeight), 2×50% ne laisserait
-  // plus de place pour le curseur et la bande d'info ; 2×40% en
-  // laisse toujours 20% + les marges de sécurité système.
-  const maxBoardHeight = window.innerHeight * 0.4;
+  // Plafond raisonnable : 40% de la hauteur RÉELLEMENT disponible
+  // (pas 50%) — les dashboards peuvent avoir besoin du même genre de
+  // plafond au même moment (voir updateDashboardsViewportHeight),
+  // 2×50% ne laisserait plus de place pour le curseur et la bande
+  // d'info ; 2×40% en laisse toujours 20%.
+  //
+  // BUG CORRIGÉ (retour de Mayrik, décalage constaté sur un vrai
+  // téléphone en plein écran — jamais reproduit dans mes tests
+  // Chromium malgré plusieurs tailles essayées, donc corrigé par
+  // prudence plutôt que par certitude absolue) : window.innerHeight
+  // est la hauteur BRUTE de la fenêtre, ignorant le padding
+  // safe-area-inset-top/bottom posé sur #wrap (voir template.html) —
+  // sur un téléphone où cette zone de sécurité système n'est pas
+  // nulle (encoche, barre de gestes, y compris en plein écran selon
+  // l'appareil), le plafond calculé ici pouvait être plus généreux que
+  // l'espace RÉELLEMENT disponible dans #wrap, dont il ampute
+  // pourtant le contenu. #wrap.clientHeight reflète la hauteur déjà
+  // amputée de ce padding — référence plus sûre.
+  const wrapEl = document.getElementById("wrap");
+  const maxBoardHeight = (wrapEl ? wrapEl.clientHeight : window.innerHeight) * 0.4;
   const widthDrivenHeight = viewport.clientWidth * boardWidthRatio * (BOARD_VIEW.h / BOARD_VIEW.w);
   // #board-viewport lui-même reçoit aussi une hauteur EXPLICITE (pas
   // seulement le SVG à l'intérieur) : sans elle, le conteneur n'a
@@ -2821,37 +2835,30 @@ function initDashboardsPanzoom() {
 // correct même si un zoom Panzoom est déjà appliqué au moment de
 // l'appel (measurer directement donnerait la taille TRANSFORMÉE, pas
 // la taille de base).
-// BUG CORRIGÉ (retour de Mayrik, même cause que le plateau — voir
-// applyBoardSizing ci-dessus) : cette zone est structurellement
-// exposée au même risque (hauteur dérivée de la largeur, sans plafond
-// vertical) même si elle n'a pas été prise en défaut dans les mêmes
-// proportions lors des essais — sa hauteur, posée explicitement en JS,
-// absorbe moins la réduction flexbox par défaut que le plateau (dont
-// la hauteur intrinsèque, plus grande, pèse plus lourd dans la
-// répartition), mais reste vulnérable sur un écran assez large et
-// assez peu haut. Même double stratégie : calage par la largeur en
-// usage normal, bascule sur un calage par la hauteur (plateau
-// dashboards alors plus étroit que 100% du conteneur, centré) si la
-// première dépasse un plafond raisonnable.
+// BUG CORRIGÉ (retour de Mayrik, décalage horizontal constaté sur un
+// vrai téléphone — bande vide à gauche des command boards, graphisme
+// tronqué à droite) : une bascule largeur/hauteur avait été ajoutée
+// ici par précaution (même risque structurel que le plateau, voir
+// applyBoardSizing), mais CETTE zone n'avait jamais été prise en
+// défaut par un test réel — contrairement au plateau, elle est
+// gérée par Panzoom (voir initDashboardsPanzoom), qui applique son
+// propre transform (scale+translate) sur ce même SVG. Changer la
+// largeur du SVG en dehors du contrôle de Panzoom entre en conflit
+// avec son transform déjà posé, décalant visuellement le contenu —
+// cause la plus probable du décalage observé, bien que non reproduite
+// dans mes propres tests (uniquement sur l'appareil réel de Mayrik).
+// Annulé par prudence : cette zone est spécifique (gérée par Panzoom,
+// pas par un simple défilement natif comme le plateau) et ne doit pas
+// recevoir la même extension sans une vérification directe sur
+// appareil, plutôt que de continuer à deviner une correction à
+// distance.
 function updateDashboardsViewportHeight() {
   const svg = document.getElementById("dashboards");
   const viewport = document.getElementById("dashboards-viewport");
   const vb = svg.viewBox.baseVal;
   if (!vb || vb.width === 0) return;
-  const widthDrivenHeight = viewport.clientWidth * (vb.height / vb.width);
-  const maxDashHeight = window.innerHeight * 0.4;
-  if (widthDrivenHeight > maxDashHeight && maxDashHeight > 0) {
-    const heightDrivenWidth = maxDashHeight * (vb.width / vb.height);
-    viewport.style.height = maxDashHeight.toFixed(1) + "px";
-    svg.style.width = heightDrivenWidth.toFixed(1) + "px";
-    svg.style.marginLeft = "auto";
-    svg.style.marginRight = "auto";
-  } else {
-    viewport.style.height = widthDrivenHeight.toFixed(1) + "px";
-    svg.style.width = "100%";
-    svg.style.marginLeft = "";
-    svg.style.marginRight = "";
-  }
+  const naturalHeight = viewport.clientWidth * (vb.height / vb.width);
+  viewport.style.height = naturalHeight.toFixed(1) + "px";
 }
 
 function render() {
