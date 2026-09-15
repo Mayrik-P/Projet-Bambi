@@ -196,6 +196,57 @@ check("aucun échec de contrat au-dessus de 360 px de large",
   echecsAuDessus.length === 0, "largeurs en échec : " + echecsAuDessus.join(", "));
 
 // -----------------------------------------------------------------
+// TEST 7 : modules absents — les 16 combinaisons possibles
+// -----------------------------------------------------------------
+section("Modules déclarés absents");
+// L'intégration au jeu se fait par étapes : illustration, dicetrack et
+// road die n'existent pas encore dans le DOM. Un module absent ne doit
+// jamais être placé (pas de boîte vide) et sa place doit revenir aux
+// autres, sans casser aucun invariant.
+const OPTIONNELS = ["illu", "dice", "round", "roaddie"];
+let combinaisonsModules = 0, fantomes = 0, debordementsM = 0, chevauchementsM = 0, contratM = 0;
+for (let masque = 0; masque < 16; masque++) {
+  const present = {};
+  OPTIONNELS.forEach((m, i) => { present[m] = !!(masque & (1 << i)); });
+  for (const [, w, h] of APPAREILS) {
+    for (const joueurs of [2, 4]) {
+      combinaisonsModules++;
+      const L = computeLayout(w, h, joueurs, "auto", present);
+      // Un module absent n'apparaît nulle part.
+      if (OPTIONNELS.some((m) => !present[m] && L.zones[m])) fantomes++;
+      const flux = flowZones(L);
+      if (flux.some((z) => z.x < -0.5 || z.y < -0.5 || z.x + z.w > w + 1 || z.y + z.h > h + 1)) debordementsM++;
+      for (let i = 0; i < flux.length; i++) {
+        for (let j = i + 1; j < flux.length; j++) {
+          if (overlaps(flux[i], flux[j])) { chevauchementsM++; i = flux.length; break; }
+        }
+      }
+      if (allZones(L).some((z) => z.w < z.minW - 0.5 || z.h < z.minH - 0.5)) contratM++;
+    }
+  }
+}
+console.log("  Combinaisons évaluées :", combinaisonsModules);
+check("aucun module absent n'est placé", fantomes === 0, fantomes + " cas");
+check("aucun débordement, quels que soient les modules présents", debordementsM === 0, debordementsM + " cas");
+check("aucun chevauchement, quels que soient les modules présents", chevauchementsM === 0, chevauchementsM + " cas");
+check("contrat respecté sur appareils réels, quels que soient les modules présents",
+  contratM === 0, contratM + " cas");
+
+// Jeu d'aujourd'hui : plateau + info + round + dashboards seulement.
+const ETAPE3 = { illu: false, dice: false, roaddie: false, round: true };
+[["Pixel portrait", 412, 915], ["Pixel paysage", 915, 412], ["Ordinateur", 1512, 850]].forEach(([nom, w, h]) => {
+  const L = computeLayout(w, h, 4, "auto", ETAPE3);
+  check(nom + " (modules d'aujourd'hui) : contrat respecté",
+    allZones(L).every((z) => z.w >= z.minW - 0.5 && z.h >= z.minH - 0.5));
+  check(nom + " (modules d'aujourd'hui) : le round est bien placé", !!L.zones.round);
+});
+// Avec moins de modules, il reste plus de place — jamais moins.
+const complet = computeLayout(412, 915, 4, "auto");
+const reduit  = computeLayout(412, 915, 4, "auto", ETAPE3);
+check("moins de modules = au moins autant de dashboards visibles",
+  reduit.visible >= complet.visible, reduit.visible + " contre " + complet.visible);
+
+// -----------------------------------------------------------------
 section("Bilan");
 console.log("  Vérifications réussies :", passed);
 console.log("  Échecs :", failures.length);

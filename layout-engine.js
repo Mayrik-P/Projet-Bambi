@@ -41,6 +41,14 @@
  *    s'excluent mathématiquement (8 cases dans 348 px font 43,5 px).
  *    La tuile entière gagne, la case cède.
  *
+ * MODULES PRÉSENTS : le 5e argument `present` déclare quels modules
+ * existent réellement dans le DOM appelant. Un module absent n'est pas
+ * placé du tout et sa place est rendue aux autres — jamais une boîte
+ * vide. C'est ce qui permet d'intégrer ce moteur au jeu par étapes :
+ * aujourd'hui seuls le plateau, l'info, le round et les dashboards ont
+ * du contenu ; illustration, dicetrack et road die s'activeront quand
+ * le leur arrivera, sans retoucher à la mise en page.
+ *
  * Utilisable tel quel dans Node (module.exports) comme dans le
  * navigateur (variables globales après concaténation ou <script>).
  */
@@ -65,7 +73,10 @@ const boardMaxH = SPEC.board.vbH * (SPEC.board.cellMax / SPEC.board.cellW);
       Entrée : dimensions utiles + nombre de joueurs.
       Sortie : un rectangle par module + les dégradations appliquées.
    ===================================================================== */
-function computeLayout(W, H, players, forced){
+function computeLayout(W, H, players, forced, present){
+  // Plateau, info et dashboards sont toujours là : ce sont eux qui
+  // portent le jeu. Les quatre autres sont déclarables absents.
+  const has = Object.assign({ illu:true, dice:true, round:true, roaddie:true }, present || {});
   const ratio = W / H;
   const profile = (forced && forced !== "auto") ? forced
     : (ratio < 0.85 ? "portrait" : (W >= 1000 && ratio >= 1.2 && H >= 520 ? "wide" : "landscape"));
@@ -85,34 +96,55 @@ function computeLayout(W, H, players, forced){
   if (profile === "portrait") {
     const w = W - 2*G;
     let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
-    let illuFlow = true, clusterFlow = true, drawer = false;
-    // Colonne média : illustration à gauche, pile dicetrack / road die / round à droite.
-    let illu = Math.min(SPEC.illu.target, w - G - SPEC.dice.minW);
-    if (illu < SPEC.illu.min) { clusterFlow = false; illu = Math.min(SPEC.illu.target, w);
-      steps.push("dicetrack et road die en surimpression : largeur insuffisante à côté de l'illustration"); }
-    let stackW = clusterFlow ? w - illu - G : 0;
-    let diceH = SPEC.dice.minH + 16;
-    let rdSide = clusterFlow ? Math.min(SPEC.roaddie.target, stackW - SPEC.round.minW - G) : 0;
-    let rdBeside = rdSide >= SPEC.roaddie.min;      // road die et round côte à côte ?
-    if (clusterFlow && !rdBeside) rdSide = Math.min(SPEC.roaddie.target, stackW);
-    const stackH = clusterFlow
-      ? diceH + G + rdSide + (rdBeside ? 0 : G + SPEC.round.minH) : 0;
-    let mediaH = illuFlow ? Math.max(illu, stackH) : 0;
+    let drawer = false, illuOver = false, clusterOver = false;
+    const diceH = SPEC.dice.minH + 16;
+    // Largeur minimale réclamée par la pile de droite, selon ce qui existe.
+    const pairW = (has.roaddie && has.round) ? SPEC.roaddie.min + G + SPEC.round.minW
+                : has.roaddie ? SPEC.roaddie.min
+                : has.round   ? SPEC.round.minW : 0;
+    const stackMinW = Math.max(has.dice ? SPEC.dice.minW : 0, pairW);
+    let illu = 0, stackW = 0, rdSide = 0, rdBeside = false, stackH = 0;
+    let illuFlow = false, clusterFlow = false;
+
+    function layoutMedia(){
+      illuFlow = has.illu && !illuOver;
+      clusterFlow = stackMinW > 0 && !clusterOver;
+      if (illuFlow) {
+        illu = clusterFlow ? Math.min(SPEC.illu.target, w - G - stackMinW) : Math.min(SPEC.illu.target, w);
+        if (clusterFlow && illu < SPEC.illu.min) {
+          clusterOver = true; clusterFlow = false; illu = Math.min(SPEC.illu.target, w);
+          steps.push("dicetrack, road die et round en surimpression : largeur insuffisante à côté de l'illustration");
+        }
+        stackW = clusterFlow ? w - illu - G : 0;
+      } else { illu = 0; stackW = clusterFlow ? w : 0; }
+      if (clusterFlow) {
+        rdSide = has.roaddie
+          ? Math.min(SPEC.roaddie.target, has.round ? stackW - SPEC.round.minW - G : stackW) : 0;
+        rdBeside = has.roaddie && has.round && rdSide >= SPEC.roaddie.min;
+        if (has.roaddie && !rdBeside) rdSide = Math.min(SPEC.roaddie.target, stackW);
+        stackH = (has.dice ? diceH : 0)
+               + (has.roaddie ? (has.dice ? G : 0) + rdSide : 0)
+               + (has.round && !rdBeside ? ((has.dice || has.roaddie) ? G : 0) + SPEC.round.minH : 0);
+      } else stackH = 0;
+      return Math.max(illuFlow ? illu : 0, clusterFlow ? stackH : 0);
+    }
+    let mediaH = layoutMedia();
 
     let rowH = w / SPEC.dash.aspect, visible = SPEC.dash.minVisible;
     const rest = () => H - (infoH + mediaH + (drawer ? 0 : visible*rowH + (visible-1)*G)
-                            + (mediaH?5:4)*G - (drawer ? G : 0));
+                            + (mediaH ? 5 : 4)*G - (drawer ? G : 0));
     let boardH = rest(), guard = 0;
     while (boardH < boardMin(w) && guard++ < 5) {
-      if (clusterFlow && illuFlow) { clusterFlow = false; mediaH = illu;
+      if (clusterFlow) { clusterOver = true;
         steps.push("dicetrack, road die et round en surimpression pour préserver les 6 rangées"); }
-      else if (illuFlow) { illuFlow = false; mediaH = 0;
+      else if (illuFlow) { illuOver = true;
         steps.push("illustration en surimpression pour préserver les 6 rangées"); }
       else if (infoH > SPEC.info.hOneLine) { infoH = SPEC.info.hOneLine;
         steps.push("texte court sur une ligne"); }
       else if (!drawer) { drawer = true;
         steps.push("dashboards en tiroir escamotable : hauteur insuffisante"); }
       else break;
+      mediaH = layoutMedia();
       boardH = rest();
     }
     const cap = Math.min(boardMaxH, capByTile(w));
@@ -125,28 +157,40 @@ function computeLayout(W, H, players, forced){
 
     let y = G;
     put("board", G, y, w, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(w));
+    const boardTop = y, boardBottom = y + boardH;
     y += boardH + G;
     put("info", G, y, w, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
-    if (illuFlow) {
-      put("illu", G, y, illu, illu, SPEC.illu.min, SPEC.illu.min);
-      if (clusterFlow) {
-        const sx = G + illu + G;
-        put("dice", sx, y, stackW, diceH, SPEC.dice.minW, SPEC.dice.minH);
-        put("roaddie", sx, y+diceH+G, rdSide, rdSide, SPEC.roaddie.min, SPEC.roaddie.min);
-        if (rdBeside) put("round", sx+rdSide+G, y+diceH+G+(rdSide-SPEC.round.minH)/2,
-                          stackW-rdSide-G, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
-        else put("round", sx, y+diceH+G+rdSide+G, stackW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
+
+    if (illuFlow) put("illu", G, y, illu, illu, SPEC.illu.min, SPEC.illu.min);
+    if (clusterFlow) {
+      const sx = G + (illuFlow ? illu + G : 0);
+      let sy = y;
+      if (has.dice) { put("dice", sx, sy, stackW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
+      if (has.roaddie) {
+        put("roaddie", sx, sy, rdSide, rdSide, SPEC.roaddie.min, SPEC.roaddie.min);
+        if (rdBeside) put("round", sx+rdSide+G, sy+(rdSide-SPEC.round.minH)/2, stackW-rdSide-G,
+                          SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
+        sy += rdSide + G;
       }
-      y += mediaH + G;
-    } else {
-      put("illu", W-G-SPEC.illu.min, G+40, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, true);
+      if (has.round && !rdBeside) put("round", sx, sy, stackW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
     }
-    if (!clusterFlow) {
-      put("dice", G+8, G+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, true);
-      put("roaddie", G+8+SPEC.dice.minW+8, G+boardH-SPEC.roaddie.min-8, SPEC.roaddie.min, SPEC.roaddie.min,
-          SPEC.roaddie.min, SPEC.roaddie.min, true);
-      put("round", G+8, G+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
-    }
+    if (mediaH) y += mediaH + G;
+
+    // Modules renvoyés en surimpression sur le plateau, faute de place.
+    if (has.illu && !illuFlow)
+      put("illu", W-G-8-SPEC.illu.min, boardTop+8, SPEC.illu.min, SPEC.illu.min,
+          SPEC.illu.min, SPEC.illu.min, true);
+    if (has.dice && !clusterFlow)
+      put("dice", G+8, boardBottom-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
+          SPEC.dice.minW, SPEC.dice.minH, true);
+    if (has.roaddie && !clusterFlow)
+      put("roaddie", W-G-8-SPEC.roaddie.min, boardBottom-SPEC.roaddie.min-8,
+          SPEC.roaddie.min, SPEC.roaddie.min, SPEC.roaddie.min, SPEC.roaddie.min, true);
+    // Le round garde toujours son second emplacement : coin haut-gauche du plateau.
+    if (has.round && !clusterFlow)
+      put("round", G+8, boardTop+8, SPEC.round.minW, SPEC.round.minH,
+          SPEC.round.minW, SPEC.round.minH, true);
+
     for (let i=0;i<visible;i++) put("dash"+i, G, drawer ? H-G-rowH : y+i*(rowH+G), w, rowH,
       SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect, drawer);
     if (drawer) visible = 1;
@@ -161,10 +205,12 @@ function computeLayout(W, H, players, forced){
   else if (profile === "landscape") {
     const w = W - 2*G;
     let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
-    // Colonne droite le long du plateau : illustration, dicetrack, round.
-    let side = Math.max(SPEC.illu.min, Math.min(SPEC.illu.target, w*0.22));
-    let sideFlow = (w - side - G) >= SPEC.board.tileW + 40;
-    if (!sideFlow) { side = 0; steps.push("colonne droite abandonnée : le plateau perdrait sa tuile"); }
+    // La colonne droite n'existe que si l'illustration est là : c'est elle
+    // qui justifie 200 px de large. Seuls, un dicetrack ou un round ne
+    // valent pas qu'on ampute le plateau.
+    let side = has.illu ? Math.max(SPEC.illu.min, Math.min(SPEC.illu.target, w*0.22)) : 0;
+    let sideFlow = has.illu && (w - side - G) >= SPEC.board.tileW + 40;
+    if (has.illu && !sideFlow) { side = 0; steps.push("colonne droite abandonnée : le plateau perdrait sa tuile"); }
     let boardW = sideFlow ? w - side - G : w;
 
     let cols = 2, colW = (w - G)/2, drawer = false;
@@ -186,17 +232,23 @@ function computeLayout(W, H, players, forced){
     put("board", G, y, boardW, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(boardW));
     // La colonne droite s'étend sur la hauteur du plateau ET de la bande d'info.
     const colH = boardH + G + infoH, sx = G + boardW + G;
-    let colOk = sideFlow && colH >= SPEC.illu.min + SPEC.dice.minH + SPEC.round.minH + 2*G;
+    const colNeed = SPEC.illu.min + (has.dice ? SPEC.dice.minH + G : 0)
+                                  + (has.round ? SPEC.round.minH + G : 0);
+    const colOk = sideFlow && colH >= colNeed;
     if (colOk) {
-      const ill = Math.min(side, colH - SPEC.dice.minH - SPEC.round.minH - 2*G);
+      const ill = Math.min(side, colH - (colNeed - SPEC.illu.min));
       put("illu", sx, y, side, ill, SPEC.illu.min, SPEC.illu.min);
-      put("dice", sx, y+ill+G, side, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH);
-      put("round", sx, y+ill+G+SPEC.dice.minH+G, side, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
+      let sy = y + ill + G;
+      if (has.dice) { put("dice", sx, sy, side, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH); sy += SPEC.dice.minH + G; }
+      if (has.round) put("round", sx, sy, side, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
     } else {
-      put("illu", W-G-8-SPEC.illu.min, y+8, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, true);
-      put("dice", G+8, y+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, true);
-      put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
-      steps.push("illustration, dicetrack et round en surimpression sur le plateau");
+      if (has.illu) put("illu", W-G-8-SPEC.illu.min, y+8, SPEC.illu.min, SPEC.illu.min,
+                        SPEC.illu.min, SPEC.illu.min, true);
+      if (has.dice) put("dice", G+8, y+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
+                        SPEC.dice.minW, SPEC.dice.minH, true);
+      if (has.round) put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH,
+                        SPEC.round.minW, SPEC.round.minH, true);
+      if (has.illu) steps.push("illustration, dicetrack et round en surimpression sur le plateau");
     }
     y += boardH + G;
     put("info", G, y, boardW, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
@@ -204,18 +256,22 @@ function computeLayout(W, H, players, forced){
     for (let i=0;i<cols;i++) put("dash"+i, G+i*(colW+G), dy, colW, rowH,
       SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect, drawer);
     // Le road die se loge dans la largeur laissée libre par les dashboards.
-    const freeW = w - (cols*colW + (cols-1)*G) - G;
-    if (freeW >= SPEC.roaddie.min && !drawer) {
-      const rd = Math.min(SPEC.roaddie.target, freeW, rowH);
-      put("roaddie", W-G-rd, dy+(rowH-rd)/2, rd, rd, SPEC.roaddie.min, SPEC.roaddie.min);
-    } else put("roaddie", W-G-8-SPEC.roaddie.min, G+8, SPEC.roaddie.min, SPEC.roaddie.min,
-               SPEC.roaddie.min, SPEC.roaddie.min, true);
+    if (has.roaddie) {
+      const freeW = w - (cols*colW + (cols-1)*G) - G;
+      if (freeW >= SPEC.roaddie.min && !drawer) {
+        const rd = Math.min(SPEC.roaddie.target, freeW, rowH);
+        put("roaddie", W-G-rd, dy+(rowH-rd)/2, rd, rd, SPEC.roaddie.min, SPEC.roaddie.min);
+      } else put("roaddie", W-G-8-SPEC.roaddie.min, G+8, SPEC.roaddie.min, SPEC.roaddie.min,
+                 SPEC.roaddie.min, SPEC.roaddie.min, true);
+    }
     z._visible = cols;
   }
 
   else { /* wide */
-    const sideW = Math.max(340, Math.min(420, W*0.26));
-    const leftW = W - sideW - 3*G;
+    // Colonne latérale seulement si l'illustration est là (même raison
+    // qu'en paysage) ; sinon le plateau prend toute la largeur.
+    const sideW = has.illu ? Math.max(340, Math.min(420, W*0.26)) : 0;
+    const leftW = has.illu ? W - sideW - 3*G : W - 2*G;
     let infoH = SPEC.info.hOneLine;
     let cols = 2, colW = (leftW - G)/2;
     if (colW < SPEC.dash.minW) { cols = 1; colW = leftW;
@@ -233,6 +289,7 @@ function computeLayout(W, H, players, forced){
 
     let y = G;
     put("board", G, y, leftW, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(leftW));
+    const boardTop = y;
     y += boardH + G;
     put("info", G, y, leftW, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
     let shown = 0;
@@ -240,27 +297,45 @@ function computeLayout(W, H, players, forced){
       put("dash"+shown, G+c*(colW+G), y+r*(rowH+G), colW, rowH, SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect);
     z._visible = shown;
 
-    // Colonne latérale : illustration, dicetrack, road die, round — chacun son budget.
-    const sx = W - sideW - G;
-    const diceH = Math.max(SPEC.dice.minH, Math.min(140, sideW*SPEC.dice.minH/SPEC.dice.minW));
-    const need = diceH + SPEC.roaddie.target + SPEC.round.minH + 3*G;
-    let sy = G, ill = Math.min(sideW, 400, H - G - need);
-    if (ill >= SPEC.illu.min) { put("illu", sx, sy, sideW, ill, SPEC.illu.min, SPEC.illu.min); sy += ill + G; }
-    else { put("illu", W-sideW, H-G-8-SPEC.illu.min, SPEC.illu.min, SPEC.illu.min,
-                SPEC.illu.min, SPEC.illu.min, true);
-           steps.push("illustration en surimpression : colonne latérale trop courte"); }
-    if (H - sy - G >= diceH) { put("dice", sx, sy, sideW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
-    else { put("dice", sx+8, H-G-8-SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH,
-                SPEC.dice.minW, SPEC.dice.minH, true); steps.push("dicetrack en surimpression"); }
-    const rd = SPEC.roaddie.target;
-    if (H - sy - G >= rd) {
-      put("roaddie", sx, sy, rd, rd, SPEC.roaddie.min, SPEC.roaddie.min);
-      put("round", sx+rd+G, sy+(rd-SPEC.round.minH)/2, sideW-rd-G, SPEC.round.minH,
-          SPEC.round.minW, SPEC.round.minH);
+    if (has.illu) {
+      // Colonne latérale : illustration, dicetrack, road die, round — chacun son budget.
+      const sx = W - sideW - G;
+      const diceH = Math.max(SPEC.dice.minH, Math.min(140, sideW*SPEC.dice.minH/SPEC.dice.minW));
+      const need = (has.dice ? diceH + G : 0) + (has.roaddie ? SPEC.roaddie.target + G : 0)
+                 + (has.round ? SPEC.round.minH + G : 0) + G;
+      let sy = G, ill = Math.min(sideW, 400, H - G - need);
+      if (ill >= SPEC.illu.min) { put("illu", sx, sy, sideW, ill, SPEC.illu.min, SPEC.illu.min); sy += ill + G; }
+      else { put("illu", W-sideW, H-G-8-SPEC.illu.min, SPEC.illu.min, SPEC.illu.min,
+                  SPEC.illu.min, SPEC.illu.min, true);
+             steps.push("illustration en surimpression : colonne latérale trop courte"); }
+      if (has.dice) {
+        if (H - sy - G >= diceH) { put("dice", sx, sy, sideW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
+        else { put("dice", sx+8, H-G-8-SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH,
+                    SPEC.dice.minW, SPEC.dice.minH, true); steps.push("dicetrack en surimpression"); }
+      }
+      const rd = SPEC.roaddie.target;
+      const rdOk = has.roaddie && H - sy - G >= rd;
+      if (rdOk) {
+        put("roaddie", sx, sy, rd, rd, SPEC.roaddie.min, SPEC.roaddie.min);
+        if (has.round) put("round", sx+rd+G, sy+(rd-SPEC.round.minH)/2, sideW-rd-G, SPEC.round.minH,
+                           SPEC.round.minW, SPEC.round.minH);
+      } else {
+        if (has.roaddie) put("roaddie", sx, H-G-SPEC.roaddie.min, SPEC.roaddie.min, SPEC.roaddie.min,
+                             SPEC.roaddie.min, SPEC.roaddie.min, true);
+        if (has.round) {
+          if (H - sy - G >= SPEC.round.minH) put("round", sx, sy, sideW, SPEC.round.minH,
+                                                 SPEC.round.minW, SPEC.round.minH);
+          else put("round", G+8, boardTop+8, SPEC.round.minW, SPEC.round.minH,
+                   SPEC.round.minW, SPEC.round.minH, true);
+        }
+      }
     } else {
-      put("roaddie", sx, H-G-SPEC.roaddie.min, SPEC.roaddie.min, SPEC.roaddie.min,
-          SPEC.roaddie.min, SPEC.roaddie.min, true);
-      put("round", G+8, G+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
+      if (has.dice) put("dice", G+8, boardTop+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
+                        SPEC.dice.minW, SPEC.dice.minH, true);
+      if (has.roaddie) put("roaddie", W-G-8-SPEC.roaddie.min, boardTop+8, SPEC.roaddie.min, SPEC.roaddie.min,
+                           SPEC.roaddie.min, SPEC.roaddie.min, true);
+      if (has.round) put("round", G+8, boardTop+8, SPEC.round.minW, SPEC.round.minH,
+                        SPEC.round.minW, SPEC.round.minH, true);
     }
   }
 
