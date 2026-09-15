@@ -9,7 +9,7 @@
     --bg:#0f1318; --panel:#171d25; --line:#2b3540; --ink:#e8eaed; --ink-dim:#93a0ad;
     --ok:#4ea87a; --bad:#d4564a;
     --z-board:#4a7ba8; --z-dash:#2f7d6f; --z-info:#b07d2a;
-    --z-illu:#7a5a9e; --z-dice:#a8543f; --z-round:#6a7a55;
+    --z-illu:#7a5a9e; --z-dice:#a8543f; --z-round:#6a7a55; --z-rd:#3f6f96;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
@@ -60,6 +60,7 @@
   .z-illu {background:rgba(122,90,158,.30);border-color:var(--z-illu)}
   .z-dice {background:rgba(168,84,63,.30);border-color:var(--z-dice)}
   .z-round{background:rgba(106,122,85,.34);border-color:var(--z-round)}
+  .z-rd   {background:rgba(63,111,150,.34);border-color:var(--z-rd)}
 
   /* ---------- rapport ---------- */
   #report{flex:0 0 auto;max-height:34vh;overflow:auto;background:var(--panel);
@@ -140,7 +141,8 @@ const SPEC = {
   info:  { hTwoLines:48, hOneLine:32, minW:340, oneLineFrom:800 },
   illu:  { min:160, target:200 },
   dice:  { minW:140, minH:72 },
-  round: { minW:104, minH:32 },
+  round: { minW:80,  minH:28 },
+  roaddie:{ min:64, target:88 },
   gap: 6
 };
 const boardMinH = SPEC.board.vbH * (SPEC.board.cellMin / SPEC.board.cellW); // 266 px
@@ -155,41 +157,49 @@ function computeLayout(W, H, players, forced){
   const ratio = W / H;
   const profile = (forced && forced !== "auto") ? forced
     : (ratio < 0.85 ? "portrait" : (W >= 1000 && ratio >= 1.2 && H >= 520 ? "wide" : "landscape"));
-  const G = profile === "landscape" ? 4 : SPEC.gap;   // gouttières resserrées sur écran plat
+  const G = profile === "landscape" ? 4 : SPEC.gap;
   const steps = [];
   const z = {};
+  const put = (id, x, y, w, h, minW, minH, over) =>
+    z[id] = { id, x:Math.round(x), y:Math.round(y), w:Math.round(w), h:Math.round(h),
+              minW, minH, overlay: !!over };
   // Le plateau ne doit jamais être agrandi au point de montrer moins d'une tuile
   // complète en largeur : c'est ce plafond, et non la taille de case, qui le borne.
   const capByTile = bw => SPEC.board.vbH * (bw / SPEC.board.tileW);
   // Sous ~363 px de large, « une tuile entière » et « case ≥ 44 px » s'excluent :
   // 8 cases dans 348 px font 43,5 px. La tuile entière gagne, la case cède.
   const boardMin = bw => Math.min(boardMinH, capByTile(bw));
-  const put = (id, x, y, w, h, minW, minH, over) =>
-    z[id] = { id, x:Math.round(x), y:Math.round(y), w:Math.round(w), h:Math.round(h),
-              minW, minH, overlay: !!over };
 
   if (profile === "portrait") {
     const w = W - 2*G;
     let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
-    let diceFlow = true, illuFlow = true;
+    let illuFlow = true, clusterFlow = true, drawer = false;
+    // Colonne média : illustration à gauche, pile dicetrack / road die / round à droite.
     let illu = Math.min(SPEC.illu.target, w - G - SPEC.dice.minW);
-    if (illu < SPEC.illu.min) { diceFlow = false; illu = Math.min(SPEC.illu.target, w);
-      steps.push("dicetrack en surimpression : pas assez de largeur à côté de l'illustration"); }
-    let mediaH = illuFlow ? (diceFlow ? Math.max(illu, SPEC.dice.minH) : illu) : 0;
-    let rowH = w / SPEC.dash.aspect, visible = SPEC.dash.minVisible, drawer = false;
+    if (illu < SPEC.illu.min) { clusterFlow = false; illu = Math.min(SPEC.illu.target, w);
+      steps.push("dicetrack et road die en surimpression : largeur insuffisante à côté de l'illustration"); }
+    let stackW = clusterFlow ? w - illu - G : 0;
+    let diceH = SPEC.dice.minH + 16;
+    let rdSide = clusterFlow ? Math.min(SPEC.roaddie.target, stackW - SPEC.round.minW - G) : 0;
+    let rdBeside = rdSide >= SPEC.roaddie.min;      // road die et round côte à côte ?
+    if (clusterFlow && !rdBeside) rdSide = Math.min(SPEC.roaddie.target, stackW);
+    const stackH = clusterFlow
+      ? diceH + G + rdSide + (rdBeside ? 0 : G + SPEC.round.minH) : 0;
+    let mediaH = illuFlow ? Math.max(illu, stackH) : 0;
+
+    let rowH = w / SPEC.dash.aspect, visible = SPEC.dash.minVisible;
     const rest = () => H - (infoH + mediaH + (drawer ? 0 : visible*rowH + (visible-1)*G)
                             + (mediaH?5:4)*G - (drawer ? G : 0));
-
     let boardH = rest(), guard = 0;
-    while (boardH < boardMin(w) && guard++ < 4) {
-      if (diceFlow && illuFlow) { diceFlow = false; mediaH = illu;
-        steps.push("dicetrack en surimpression pour préserver les 6 rangées du plateau"); }
+    while (boardH < boardMin(w) && guard++ < 5) {
+      if (clusterFlow && illuFlow) { clusterFlow = false; mediaH = illu;
+        steps.push("dicetrack, road die et round en surimpression pour préserver les 6 rangées"); }
       else if (illuFlow) { illuFlow = false; mediaH = 0;
-        steps.push("illustration en surimpression pour préserver les 6 rangées du plateau"); }
+        steps.push("illustration en surimpression pour préserver les 6 rangées"); }
       else if (infoH > SPEC.info.hOneLine) { infoH = SPEC.info.hOneLine;
         steps.push("texte court sur une ligne"); }
       else if (!drawer) { drawer = true;
-        steps.push("dashboards en tiroir escamotable : hauteur insuffisante pour les loger"); }
+        steps.push("dashboards en tiroir escamotable : hauteur insuffisante"); }
       else break;
       boardH = rest();
     }
@@ -197,30 +207,34 @@ function computeLayout(W, H, players, forced){
     let slack = 0;
     if (boardH > cap) {
       slack = boardH - cap; boardH = cap;
-      while (visible < players && slack >= rowH + G) { visible++; slack -= rowH + G;
+      while (!drawer && visible < players && slack >= rowH + G) { visible++; slack -= rowH + G;
         steps.push("un dashboard de plus tient à l'écran"); }
     }
 
     let y = G;
     put("board", G, y, w, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(w));
-    put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
     y += boardH + G;
     put("info", G, y, w, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
     if (illuFlow) {
       put("illu", G, y, illu, illu, SPEC.illu.min, SPEC.illu.min);
-      if (diceFlow) {
-        const dh = Math.min(mediaH, 96);
-        put("dice", G+illu+G, y, w-illu-G, dh, SPEC.dice.minW, SPEC.dice.minH);
-        // Le creux sous le dicetrack accueille le round : le plateau reste net.
-        if (mediaH - dh - G >= SPEC.round.minH)
-          put("round", G+illu+G, y+dh+G, w-illu-G, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
+      if (clusterFlow) {
+        const sx = G + illu + G;
+        put("dice", sx, y, stackW, diceH, SPEC.dice.minW, SPEC.dice.minH);
+        put("roaddie", sx, y+diceH+G, rdSide, rdSide, SPEC.roaddie.min, SPEC.roaddie.min);
+        if (rdBeside) put("round", sx+rdSide+G, y+diceH+G+(rdSide-SPEC.round.minH)/2,
+                          stackW-rdSide-G, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
+        else put("round", sx, y+diceH+G+rdSide+G, stackW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
       }
       y += mediaH + G;
     } else {
       put("illu", W-G-SPEC.illu.min, G+40, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, true);
     }
-    if (!diceFlow) put("dice", G+8, G+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
-                       SPEC.dice.minW, SPEC.dice.minH, true);
+    if (!clusterFlow) {
+      put("dice", G+8, G+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, true);
+      put("roaddie", G+8+SPEC.dice.minW+8, G+boardH-SPEC.roaddie.min-8, SPEC.roaddie.min, SPEC.roaddie.min,
+          SPEC.roaddie.min, SPEC.roaddie.min, true);
+      put("round", G+8, G+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
+    }
     for (let i=0;i<visible;i++) put("dash"+i, G, drawer ? H-G-rowH : y+i*(rowH+G), w, rowH,
       SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect, drawer);
     if (drawer) visible = 1;
@@ -235,31 +249,55 @@ function computeLayout(W, H, players, forced){
   else if (profile === "landscape") {
     const w = W - 2*G;
     let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
+    // Colonne droite le long du plateau : illustration, dicetrack, round.
+    let side = Math.max(SPEC.illu.min, Math.min(SPEC.illu.target, w*0.22));
+    let sideFlow = (w - side - G) >= SPEC.board.tileW + 40;
+    if (!sideFlow) { side = 0; steps.push("colonne droite abandonnée : le plateau perdrait sa tuile"); }
+    let boardW = sideFlow ? w - side - G : w;
+
     let cols = 2, colW = (w - G)/2, drawer = false;
-    if (colW < SPEC.dash.minW) { cols = 1; colW = w; steps.push("dashboards sur une colonne : largeur insuffisante"); }
+    if (colW < SPEC.dash.minW) { cols = 1; colW = w; steps.push("dashboards sur une colonne"); }
     let rowH = colW / SPEC.dash.aspect;
     const rest = () => H - (infoH + (drawer ? 0 : rowH) + (drawer ? 3 : 4)*G);
     let boardH = rest(), guard = 0;
-    while (boardH < boardMin(w) && guard++ < 4) {
+    while (boardH < boardMin(boardW) && guard++ < 4) {
       if (colW > SPEC.dash.minW) { colW = SPEC.dash.minW; rowH = colW/SPEC.dash.aspect;
-        steps.push("dashboards ramenés à leur largeur minimale pour laisser respirer le plateau"); }
+        steps.push("dashboards ramenés à leur largeur minimale"); }
       else if (infoH > SPEC.info.hOneLine) { infoH = SPEC.info.hOneLine; steps.push("texte court sur une ligne"); }
-      else if (!drawer) { drawer = true; steps.push("dashboards en tiroir escamotable : écran trop plat pour les loger"); }
+      else if (!drawer) { drawer = true; steps.push("dashboards en tiroir escamotable : écran trop plat"); }
       else break;
       boardH = rest();
     }
-    boardH = Math.min(boardH, boardMaxH, capByTile(w));
+    boardH = Math.min(boardH, boardMaxH, capByTile(boardW));
 
     let y = G;
-    put("board", G, y, w, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(w));
-    put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
-    put("illu", W-G-8-SPEC.illu.min, y+8, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, true);
-    put("dice", G+8, y+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, true);
-    steps.push("illustration, dicetrack et round en surimpression sur le plateau");
+    put("board", G, y, boardW, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(boardW));
+    // La colonne droite s'étend sur la hauteur du plateau ET de la bande d'info.
+    const colH = boardH + G + infoH, sx = G + boardW + G;
+    let colOk = sideFlow && colH >= SPEC.illu.min + SPEC.dice.minH + SPEC.round.minH + 2*G;
+    if (colOk) {
+      const ill = Math.min(side, colH - SPEC.dice.minH - SPEC.round.minH - 2*G);
+      put("illu", sx, y, side, ill, SPEC.illu.min, SPEC.illu.min);
+      put("dice", sx, y+ill+G, side, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH);
+      put("round", sx, y+ill+G+SPEC.dice.minH+G, side, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
+    } else {
+      put("illu", W-G-8-SPEC.illu.min, y+8, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, true);
+      put("dice", G+8, y+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, true);
+      put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
+      steps.push("illustration, dicetrack et round en surimpression sur le plateau");
+    }
     y += boardH + G;
-    put("info", G, y, w, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
-    for (let i=0;i<cols;i++) put("dash"+i, G+i*(colW+G), drawer ? H-G-rowH : y, colW, rowH,
+    put("info", G, y, boardW, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
+    const dy = drawer ? H - G - rowH : y;
+    for (let i=0;i<cols;i++) put("dash"+i, G+i*(colW+G), dy, colW, rowH,
       SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect, drawer);
+    // Le road die se loge dans la largeur laissée libre par les dashboards.
+    const freeW = w - (cols*colW + (cols-1)*G) - G;
+    if (freeW >= SPEC.roaddie.min && !drawer) {
+      const rd = Math.min(SPEC.roaddie.target, freeW, rowH);
+      put("roaddie", W-G-rd, dy+(rowH-rd)/2, rd, rd, SPEC.roaddie.min, SPEC.roaddie.min);
+    } else put("roaddie", W-G-8-SPEC.roaddie.min, G+8, SPEC.roaddie.min, SPEC.roaddie.min,
+               SPEC.roaddie.min, SPEC.roaddie.min, true);
     z._visible = cols;
   }
 
@@ -283,27 +321,35 @@ function computeLayout(W, H, players, forced){
 
     let y = G;
     put("board", G, y, leftW, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(leftW));
-    put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
     y += boardH + G;
     put("info", G, y, leftW, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
     let shown = 0;
     for (let r=0;r<rows;r++) for (let c=0;c<cols && shown<players;c++,shown++)
       put("dash"+shown, G+c*(colW+G), y+r*(rowH+G), colW, rowH, SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect);
     z._visible = shown;
-    // La colonne latérale a son propre budget vertical : illustration d'abord,
-    // puis dicetrack, puis round ; ce qui ne rentre pas passe en surimpression.
+
+    // Colonne latérale : illustration, dicetrack, road die, round — chacun son budget.
     const sx = W - sideW - G;
     const diceH = Math.max(SPEC.dice.minH, Math.min(140, sideW*SPEC.dice.minH/SPEC.dice.minW));
-    const budget = H - 4*G;
-    let sy = G, illuSide = Math.min(sideW, 400, budget - diceH - SPEC.round.minH - 2*G);
-    if (illuSide >= SPEC.illu.min) { put("illu", sx, sy, illuSide, illuSide, SPEC.illu.min, SPEC.illu.min); sy += illuSide + G; }
-    else { put("illu", W-sideW, H-G-8-SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, true);
+    const need = diceH + SPEC.roaddie.target + SPEC.round.minH + 3*G;
+    let sy = G, ill = Math.min(sideW, 400, H - G - need);
+    if (ill >= SPEC.illu.min) { put("illu", sx, sy, sideW, ill, SPEC.illu.min, SPEC.illu.min); sy += ill + G; }
+    else { put("illu", W-sideW, H-G-8-SPEC.illu.min, SPEC.illu.min, SPEC.illu.min,
+                SPEC.illu.min, SPEC.illu.min, true);
            steps.push("illustration en surimpression : colonne latérale trop courte"); }
     if (H - sy - G >= diceH) { put("dice", sx, sy, sideW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
-    else { put("dice", sx+8, H-G-8-SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, true);
-           steps.push("dicetrack en surimpression : colonne latérale trop courte"); }
-    if (H - sy - G >= SPEC.round.minH) put("round", sx, sy, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
-    else put("round", G+8, G+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
+    else { put("dice", sx+8, H-G-8-SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH,
+                SPEC.dice.minW, SPEC.dice.minH, true); steps.push("dicetrack en surimpression"); }
+    const rd = SPEC.roaddie.target;
+    if (H - sy - G >= rd) {
+      put("roaddie", sx, sy, rd, rd, SPEC.roaddie.min, SPEC.roaddie.min);
+      put("round", sx+rd+G, sy+(rd-SPEC.round.minH)/2, sideW-rd-G, SPEC.round.minH,
+          SPEC.round.minW, SPEC.round.minH);
+    } else {
+      put("roaddie", sx, H-G-SPEC.roaddie.min, SPEC.roaddie.min, SPEC.roaddie.min,
+          SPEC.roaddie.min, SPEC.roaddie.min, true);
+      put("round", G+8, G+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
+    }
   }
 
   const scale = z.board.h / SPEC.board.vbH;
@@ -318,7 +364,8 @@ function computeLayout(W, H, players, forced){
    ===================================================================== */
 const LABEL = {
   board:["Plateau","z-board"], info:["Info contextuelle","z-info"], illu:["Illustration","z-illu"],
-  dice:["Dicetrack","z-dice"], round:["Round","z-round"], dash:["Dashboard","z-dash"]
+  dice:["Dicetrack","z-dice"], round:["Round","z-round"], dash:["Dashboard","z-dash"],
+  roaddie:["Road die","z-rd"]
 };
 const frame = document.getElementById("frame");
 
@@ -360,6 +407,7 @@ function draw(L, W, H){
           : base==="info" ? `${Math.floor(zn.w/8.8)} car. par ligne`
           : base==="illu" ? `véhicule ${Math.round((zn.w-28)/2)} px de large`
           : base==="dice" ? `dé ${Math.round(Math.min((zn.w-28)/2, zn.h-16))} px`
+          : base==="roaddie" ? `face de ${Math.round(zn.w-12)} px`
           : base==="dash" ? `${(zn.w/871*100).toFixed(0)} % de l'échelle native` : "—"}</td>`;
     rowsEl.appendChild(tr);
   });
