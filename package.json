@@ -1,0 +1,13 @@
+{
+  "name": "projet-bambi",
+  "version": "1.0.0",
+  "description": "Thunder Road Vendetta — adaptation solo jouable sur telephone (humain vs IA).",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "scripts": {
+    "build": "cd tools && node build-bundle.js"
+  },
+  "dependencies": {
+    "jsdom": "^30.0.1"
+  }
+}
