@@ -116,7 +116,24 @@ if (fs.existsSync(templatePath) && fs.existsSync(uiScriptPath)) {
   // chargée depuis un CDN externe — cohérent avec le reste du projet
   // (tout tient dans un seul fichier autonome, aucune dépendance
   // réseau au chargement).
-  const panzoomSrc = fs.existsSync(panzoomPath) ? fs.readFileSync(panzoomPath, "utf8") : "";
+  //
+  // BUG CORRIGÉ (incident réel) : ce chargement était auparavant
+  // silencieusement tolérant (`fs.existsSync(...) ? ... : ""`), donc un
+  // panzoom.min.js absent produisait un prototype.html PARFAITEMENT
+  // FONCTIONNEL EN APPARENCE mais amputé de tout le zoom des
+  // dashboards (3 boutons x1/x2/x4 + double-tap morts), sans le
+  // moindre message au build ni erreur JS au chargement — le mode
+  // d'échec le plus coûteux à diagnostiquer. Le fichier est une
+  // dépendance obligatoire du prototype : son absence doit arrêter le
+  // build bruyamment, jamais produire un livrable dégradé.
+  if (!fs.existsSync(panzoomPath)) {
+    throw new Error(
+      "tools/panzoom.min.js introuvable — le prototype serait assemblé SANS Panzoom " +
+      "(zoom des dashboards silencieusement mort, aucune erreur visible à l'exécution). " +
+      "Récupérer le fichier avant de reconstruire."
+    );
+  }
+  const panzoomSrc = fs.readFileSync(panzoomPath, "utf8");
   const finalHtml = template.replace("__ENGINE_BUNDLE__", bundle).replace("__UI_SCRIPT__", uiScript).replace("__PANZOOM_BUNDLE__", panzoomSrc);
   const finalPath = path.join(__dirname, "prototype.html");
   fs.writeFileSync(finalPath, finalHtml);
