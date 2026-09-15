@@ -59,54 +59,59 @@ console.log("#dashboards-viewport existe (zone 3) (attendu true) :", !!doc.getEl
 console.log("#board est bien DANS #board-viewport (attendu true) :", doc.getElementById("board-viewport").contains(doc.getElementById("board")));
 console.log("#dashboards est bien DANS #dashboards-viewport (attendu true) :", doc.getElementById("dashboards-viewport").contains(doc.getElementById("dashboards")));
 
-section("Test 2 — Zone 1 : la largeur du SVG plateau correspond bien à ~3 tuiles (BOARD_VIEW / largeur d'une tuile)");
+section("Test 2 — Zone 1 : le plateau est calé par la HAUTEUR — ses 6 rangées tiennent toujours dans sa fenêtre");
 
+// RÈGLE CHANGÉE (refonte de la mise en page) : le plateau n'est plus
+// calé par la largeur avec un plafond à 40% de la hauteur. Il est
+// désormais calé par la HAUTEUR — c'est ce qui garantit les 6 rangées —
+// et sa largeur en découle, le débordement étant absorbé par le
+// défilement horizontal. Les anciennes assertions (ratio en %, largeur
+// 'auto', plafond 40%) vérifiaient des règles volontairement supprimées.
 win.newGame();
 win.render();
+const wrap2 = doc.getElementById("wrap");
+const boardViewport2 = doc.getElementById("board-viewport");
 const boardSvg2 = doc.getElementById("board");
-const oneTileWidth2 = win.eval("TILE_NATIVE_COLS * IMG_CELL_W");
-const expectedRatio2 = win.eval("BOARD_VIEW.w") / oneTileWidth2;
-const actualWidthPercent2 = parseFloat(boardSvg2.style.width);
-console.log("Largeur du SVG posée en % (attendu ~" + (expectedRatio2 * 100).toFixed(1) + "%) :", boardSvg2.style.width);
-console.log("Le ratio correspond bien à BOARD_VIEW.w / (1 tuile) (attendu true) :", Math.abs(actualWidthPercent2 - expectedRatio2 * 100) < 0.5);
+stubBox(wrap2, { clientWidth: 412, clientHeight: 915 }); // Pixel en portrait
+win.eval("applyLayout()");
+const L2 = win.eval("lastLayout");
+const vb2 = boardSvg2.viewBox.baseVal;
+console.log("Profil retenu pour un écran haut et étroit (attendu portrait) :", L2.profile);
+console.log("La fenêtre du plateau et le SVG ont exactement la même hauteur — aucune troncature possible (attendu true) :",
+  Math.abs(parseFloat(boardSvg2.style.height) - parseFloat(boardViewport2.style.height)) < 0.5);
+console.log("La largeur du SVG découle du rapport d'aspect, pas d'un pourcentage (attendu true) :",
+  Math.abs(parseFloat(boardSvg2.style.width) / parseFloat(boardSvg2.style.height) - vb2.width / vb2.height) < 0.01);
+console.log("Au moins une tuile entière reste visible en largeur (attendu true) :", L2.tiles >= 0.995);
+console.log("La case atteint la cible tactile de 44 px (attendu true) :", L2.cell >= 44);
 console.log("setupBoardScroll() est bien idempotent (rappel sans danger) (attendu true) :", (win.setupBoardScroll(), true));
 
-section("Test 2bis — BUG CORRIGÉ (retour de Mayrik, écran large/peu haut — ordinateur ou téléphone en mode paysage) : le plateau ne se retrouve plus tronqué, bascule vers un calage par la hauteur");
+section("Test 2bis — BUG CORRIGÉ (mesuré sur navigateur réel) : sur écran plat, le plateau n'est plus tronqué");
 
+// Avant la refonte, sur un Pixel en paysage, le conteneur du plateau
+// obtenait 50 px alors que 164 lui avaient été posés : flexbox
+// rétrécissait la boîte en silence pendant que le SVG gardait sa
+// taille, et le plateau était coupé. On vérifie ici que la boîte et son
+// contenu ne peuvent plus diverger, et que rien ne sort de l'écran.
 dom = makeDom();
 win = dom.window;
 win.newGame();
 win.render();
-const boardViewport2b = dom.window.document.getElementById("board-viewport");
-const boardSvg2b = dom.window.document.getElementById("board");
-const wrap2b = dom.window.document.getElementById("wrap");
-stubBox(boardViewport2b, { clientWidth: 900 });
-const boardRatio2b = win.eval("boardWidthRatio");
-const boardVbW2b = win.eval("BOARD_VIEW.w"), boardVbH2b = win.eval("BOARD_VIEW.h");
-const widthDrivenH2b = 900 * boardRatio2b * (boardVbH2b / boardVbW2b);
-// Écran volontairement peu haut : le calage par la largeur dépasse
-// largement 40% de la hauteur disponible (vérifié par construction du
-// calcul ci-dessus, avant même d'appeler applyBoardSizing).
-// #wrap.clientHeight, pas window.innerHeight (retour de Mayrik :
-// window.innerHeight ignore le padding safe-area-inset de #wrap,
-// cause d'un décalage constaté sur un vrai téléphone).
-stubBox(wrap2b, { clientHeight: 400 });
-win.eval("applyBoardSizing()");
-const expectedMaxH2b = 400 * 0.4;
-console.log("Cette configuration dépasse bien le plafond, condition du test respectée (attendu true) :", widthDrivenH2b > expectedMaxH2b);
-console.log("Le conteneur ne dépasse jamais le plafond (40% de la hauteur disponible) (attendu true) :",
-  Math.abs(parseFloat(boardViewport2b.style.height) - expectedMaxH2b) < 1);
-console.log("...et la largeur du SVG passe bien en 'auto' avec une hauteur explicite (plateau plus étroit, centré) (attendu true) :",
-  boardSvg2b.style.width === "auto" && Math.abs(parseFloat(boardSvg2b.style.height) - expectedMaxH2b) < 1);
-console.log("...centré horizontalement (marges automatiques) (attendu true) :",
-  boardSvg2b.style.marginLeft === "auto" && boardSvg2b.style.marginRight === "auto");
-
-// Redevenu un écran normal (assez haut) : doit repasser en calage par
-// la largeur (pas de blocage permanent dans le mode "hauteur").
-stubBox(wrap2b, { clientHeight: 2000 });
-win.eval("applyBoardSizing()");
-console.log("Redevenu un écran assez haut, le calage revient bien à 100% piloté par la largeur (attendu true) :",
-  boardSvg2b.style.width === (boardRatio2b * 100).toFixed(2) + "%" && boardSvg2b.style.marginLeft === "");
+const doc2b = dom.window.document;
+stubBox(doc2b.getElementById("wrap"), { clientWidth: 915, clientHeight: 412 });
+win.eval("applyLayout()");
+const L2b = win.eval("lastLayout");
+const boardSvg2b = doc2b.getElementById("board");
+const boardViewport2b = doc2b.getElementById("board-viewport");
+console.log("Profil retenu pour un écran plat (attendu landscape) :", L2b.profile);
+console.log("Le SVG ne dépasse plus jamais sa fenêtre (attendu true) :",
+  parseFloat(boardSvg2b.style.height) <= parseFloat(boardViewport2b.style.height) + 0.5);
+console.log("Les 6 rangées tiennent toujours (attendu true) :",
+  parseFloat(boardViewport2b.style.height) >= 229.3 * (44 / 37.9) - 1);
+console.log("Aucun module ne sort de l'écran (attendu true) :",
+  Object.values(L2b.zones).filter((z) => z && z.id && !z.overlay)
+    .every((z) => z.x >= -0.5 && z.y >= -0.5 && z.x + z.w <= 915 + 1 && z.y + z.h <= 412 + 1));
+console.log("Le curseur de position est passé en surimpression plutôt que de coûter une rangée (attendu true) :",
+  L2b.sliderOverlay === true && doc2b.getElementById("board-position-slider").classList.contains("over-board"));
 
 section("Test 3 — Zone 1 : le curseur de position se synchronise dans les deux sens avec le défilement");
 
@@ -134,27 +139,36 @@ let G = win.eval("G");
 win.render();
 const infoBand4 = dom.window.document.getElementById("info-band");
 const cp4 = win.getCurrentPlayer(G.roundState);
-console.log("La bande d'info mentionne bien le round (attendu true) :", infoBand4.textContent.includes("ROUND " + G.roundState.roundNumber));
+console.log("Le module ROUND affiche bien le numéro de manche, séparément de la bande d'info (attendu true) :",
+  /ROUND\s*\d+/.test(dom.window.document.getElementById("round-module").textContent));
+console.log("[règle changée : le round a quitté la bande d'info] la bande ne le répète plus (attendu false) :", infoBand4.textContent.includes("ROUND " + G.roundState.roundNumber));
 console.log("La bande d'info mentionne bien le joueur actif, en toutes lettres (attendu true) :", infoBand4.textContent.includes(win.eval(`playerLabel("${cp4}")`).toUpperCase()));
 
 win.eval("gameOver = true;");
 win.render();
 console.log("Une fois la partie terminée, affiche 'PARTIE TERMINÉE' (attendu true) :", dom.window.document.getElementById("info-band").textContent.includes("PARTIE TERMINÉE"));
 
-section("Test 5 — Zone 3 : la hauteur du conteneur dashboards correspond au ratio du viewBox (cadre tout à l'échelle 1)");
+section("Test 5 — Zone 3 : la hauteur du conteneur dashboards vient du moteur, et le SVG de Panzoom n'est jamais touché");
 
 dom = makeDom();
 win = dom.window;
 win.newGame();
 win.render();
-const dashViewport5 = dom.window.document.getElementById("dashboards-viewport");
-stubBox(dashViewport5, { clientWidth: 800 });
-win.updateDashboardsViewportHeight();
-const dashSvg5 = dom.window.document.getElementById("dashboards");
-const vbHeight5 = dashSvg5.viewBox.baseVal.height, vbWidth5 = dashSvg5.viewBox.baseVal.width;
-const expectedHeight5 = 800 * (vbHeight5 / vbWidth5);
-console.log("Hauteur du conteneur = largeur * (ratio du viewBox) (attendu true) :",
-  Math.abs(parseFloat(dashViewport5.style.height) - expectedHeight5) < 1);
+const doc5 = dom.window.document;
+stubBox(doc5.getElementById("wrap"), { clientWidth: 412, clientHeight: 915 });
+win.eval("applyLayout()");
+const L5 = win.eval("lastLayout");
+const dashViewport5 = doc5.getElementById("dashboards-viewport");
+const dashSvg5 = doc5.getElementById("dashboards");
+console.log("La hauteur du conteneur correspond au rectangle calculé par le moteur (attendu true) :",
+  Math.abs(parseFloat(dashViewport5.style.height) - L5.zones.dash0.h) < 1);
+console.log("Au moins 2 dashboards tiennent dans cette hauteur (attendu true) :",
+  L5.zones.dash0.h >= 2 * (L5.zones.dash0.w / (871 / 234)) - 1);
+// RÈGLE CLÉ : la mise en page dimensionne des CONTENEURS, jamais
+// l'élément transformé par Panzoom — c'est la confusion des deux qui
+// décalait le zoom après un redimensionnement.
+console.log("Le SVG piloté par Panzoom ne reçoit aucune dimension de la mise en page (attendu true) :",
+  dashSvg5.style.height === "" && dashSvg5.style.width === "");
 
 section("Test 6 — Zone 3 : Panzoom s'initialise correctement (avec le polyfill requestAnimationFrame)");
 
@@ -392,11 +406,22 @@ console.log("La balise viewport contient bien viewport-fit=cover (retour de Mayr
   metaViewport14.getAttribute("content").includes("viewport-fit=cover"));
 
 const wrapCss14 = dom.window.getComputedStyle(dom.window.document.getElementById("wrap"));
-console.log("#wrap est bien une colonne flexible (attendu true) :", wrapCss14.display === "flex" && wrapCss14.flexDirection === "column");
-console.log("...remplissant 100dvh (dynamic viewport height, plus fiable que 100vh sur mobile) (attendu true) :", wrapCss14.height === "100dvh");
+// STRUCTURE CHANGÉE : #wrap n'est plus une colonne flexible mais un
+// repère de positionnement ; chaque module est placé en absolu aux
+// coordonnées du moteur. 100dvh sert d'amorce avant le premier passage
+// de JS, qui pose ensuite la hauteur réellement mesurée.
+console.log("#wrap est bien un repère de positionnement en position fixe (attendu true) :",
+  wrapCss14.position === "fixed" && wrapCss14.display === "block");
+console.log("...avec 100dvh comme amorce avant la première mesure (attendu true) :", wrapCss14.height === "100dvh");
+console.log("...et plus aucune largeur maximale qui gâcherait l'écran d'un ordinateur (attendu true) :",
+  wrapCss14.maxWidth === "" || wrapCss14.maxWidth === "none");
 
-const infoBandCss14 = dom.window.getComputedStyle(dom.window.document.getElementById("info-band"));
-console.log("#info-band est bien flex:1 (absorbe tout l'espace restant entre le curseur et les dashboards) (attendu true) :", infoBandCss14.flexGrow === "1");
+const modulesAbsolus14 = ["board-viewport", "info-band", "dashboards-viewport", "round-module", "board-position-slider"]
+  .every((id) => dom.window.getComputedStyle(dom.window.document.getElementById(id)).position === "absolute");
+console.log("Les modules sont bien positionnés en absolu par la couche d'application (attendu true) :", modulesAbsolus14);
+
+console.log("L'écran d'accueil passe bien AU-DESSUS de #wrap, lui aussi en position fixe (attendu true) :",
+  parseInt(dom.window.getComputedStyle(dom.window.document.getElementById("start-screen")).zIndex, 10) > 0);
 
 const sliderCss14 = dom.window.getComputedStyle(dom.window.document.getElementById("board-position-slider"));
 console.log("Le curseur du plateau n'a plus de marge (collé au plateau au-dessus, à la bande d'info en dessous) (attendu true) :", sliderCss14.margin === "0px");

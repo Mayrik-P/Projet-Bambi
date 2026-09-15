@@ -127,7 +127,9 @@ for (let w = 360; w <= 1920; w += 20) {
     // La hauteur du plateau ne descend jamais sous son minimum, lui-même
     // plafonné par la règle de la tuile sur les écrans très étroits.
     const b = L.zones.board;
-    if (b.h < Math.min(boardMinH, SPEC.board.vbH * (b.w / SPEC.board.tileW)) - 0.5) rangeesPerdues++;
+    // La fenêtre de jeu, curseur de position déduit, garde ses 6 rangées.
+    const fenetre = b.h - L.chrome;
+    if (fenetre < Math.min(boardMinH, SPEC.board.vbH * (b.w / SPEC.board.tileW)) - 0.5) rangeesPerdues++;
   }
 }
 check("au moins une tuile entière visible partout", tuileTropPetite === 0, tuileTropPetite + " cas");

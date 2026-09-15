@@ -56,7 +56,7 @@
 "use strict";
 
 const SPEC = {
-  board: { vbW:907.7, vbH:229.3, cellW:37.90, tileW:303.0, cellMin:44, cellMax:92 },
+  board: { vbW:907.7, vbH:229.3, cellW:37.90, tileW:303.0, cellMin:44, cellMax:92, sliderH:18 },
   dash:  { aspect:871/234, minW:340, minVisible:2 },
   info:  { hTwoLines:48, hOneLine:32, minW:340, oneLineFrom:800 },
   illu:  { min:160, target:200 },
@@ -65,6 +65,9 @@ const SPEC = {
   roaddie:{ min:64, target:88 },
   gap: 6
 };
+// Hauteurs de la FENÊTRE de jeu du plateau (hors curseur de position).
+// La zone rendue vaut celle-ci + `chrome`, qui vaut 18 px quand le
+// curseur a sa propre bande et 0 quand il passe en surimpression.
 const boardMinH = SPEC.board.vbH * (SPEC.board.cellMin / SPEC.board.cellW); // 266 px
 const boardMaxH = SPEC.board.vbH * (SPEC.board.cellMax / SPEC.board.cellW);
 
@@ -77,6 +80,10 @@ function computeLayout(W, H, players, forced, present){
   // Plateau, info et dashboards sont toujours là : ce sont eux qui
   // portent le jeu. Les quatre autres sont déclarables absents.
   const has = Object.assign({ illu:true, dice:true, round:true, roaddie:true }, present || {});
+  // dashMode "rail" : un rectangle par joueur (cible).
+  // dashMode "block" : un seul rectangle englobant, pour le SVG unique
+  // d'aujourd'hui — étape intermédiaire, pas une variante durable.
+  const dashMode = (present && present.dashMode) || "rail";
   const ratio = W / H;
   const profile = (forced && forced !== "auto") ? forced
     : (ratio < 0.85 ? "portrait" : (W >= 1000 && ratio >= 1.2 && H >= 520 ? "wide" : "landscape"));
@@ -88,10 +95,17 @@ function computeLayout(W, H, players, forced, present){
               minW, minH, overlay: !!over };
   // Le plateau ne doit jamais être agrandi au point de montrer moins d'une tuile
   // complète en largeur : c'est ce plafond, et non la taille de case, qui le borne.
-  const capByTile = bw => SPEC.board.vbH * (bw / SPEC.board.tileW);
+  // Le curseur de position occupe sa propre bande sous le plateau tant
+  // qu'il y a la place ; quand la hauteur manque, il passe en
+  // surimpression sur le plateau AVANT qu'on sacrifie le moindre
+  // module — c'est l'échelon le moins cher de l'échelle.
+  let chrome = SPEC.board.sliderH;
+  const capByTile = bw => SPEC.board.vbH * (bw / SPEC.board.tileW) + chrome;
   // Sous ~363 px de large, « une tuile entière » et « case ≥ 44 px » s'excluent :
   // 8 cases dans 348 px font 43,5 px. La tuile entière gagne, la case cède.
-  const boardMin = bw => Math.min(boardMinH, capByTile(bw));
+  const boardMin = bw => Math.min(boardMinH + chrome, capByTile(bw));
+  // Échelle du plateau : calculée sur la FENÊTRE, donc hors curseur.
+  const boardScale = h => (h - chrome) / SPEC.board.vbH;
 
   if (profile === "portrait") {
     const w = W - 2*G;
@@ -134,8 +148,10 @@ function computeLayout(W, H, players, forced, present){
     const rest = () => H - (infoH + mediaH + (drawer ? 0 : visible*rowH + (visible-1)*G)
                             + (mediaH ? 5 : 4)*G - (drawer ? G : 0));
     let boardH = rest(), guard = 0;
-    while (boardH < boardMin(w) && guard++ < 5) {
-      if (clusterFlow) { clusterOver = true;
+    while (boardH < boardMin(w) && guard++ < 6) {
+      if (chrome) { chrome = 0;
+        steps.push("curseur de position en surimpression sur le plateau"); }
+      else if (clusterFlow) { clusterOver = true;
         steps.push("dicetrack, road die et round en surimpression pour préserver les 6 rangées"); }
       else if (illuFlow) { illuOver = true;
         steps.push("illustration en surimpression pour préserver les 6 rangées"); }
@@ -147,7 +163,7 @@ function computeLayout(W, H, players, forced, present){
       mediaH = layoutMedia();
       boardH = rest();
     }
-    const cap = Math.min(boardMaxH, capByTile(w));
+    const cap = Math.min(boardMaxH + chrome, capByTile(w));
     let slack = 0;
     if (boardH > cap) {
       slack = boardH - cap; boardH = cap;
@@ -156,7 +172,7 @@ function computeLayout(W, H, players, forced, present){
     }
 
     let y = G;
-    put("board", G, y, w, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(w));
+    put("board", G, y, w, boardH, Math.round(SPEC.board.tileW*boardScale(boardH)), boardMin(w));
     const boardTop = y, boardBottom = y + boardH;
     y += boardH + G;
     put("info", G, y, w, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
@@ -218,18 +234,20 @@ function computeLayout(W, H, players, forced, present){
     let rowH = colW / SPEC.dash.aspect;
     const rest = () => H - (infoH + (drawer ? 0 : rowH) + (drawer ? 3 : 4)*G);
     let boardH = rest(), guard = 0;
-    while (boardH < boardMin(boardW) && guard++ < 4) {
-      if (colW > SPEC.dash.minW) { colW = SPEC.dash.minW; rowH = colW/SPEC.dash.aspect;
+    while (boardH < boardMin(boardW) && guard++ < 5) {
+      if (chrome) { chrome = 0;
+        steps.push("curseur de position en surimpression sur le plateau"); }
+      else if (colW > SPEC.dash.minW) { colW = SPEC.dash.minW; rowH = colW/SPEC.dash.aspect;
         steps.push("dashboards ramenés à leur largeur minimale"); }
       else if (infoH > SPEC.info.hOneLine) { infoH = SPEC.info.hOneLine; steps.push("texte court sur une ligne"); }
       else if (!drawer) { drawer = true; steps.push("dashboards en tiroir escamotable : écran trop plat"); }
       else break;
       boardH = rest();
     }
-    boardH = Math.min(boardH, boardMaxH, capByTile(boardW));
+    boardH = Math.min(boardH, boardMaxH + chrome, capByTile(boardW));
 
     let y = G;
-    put("board", G, y, boardW, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(boardW));
+    put("board", G, y, boardW, boardH, Math.round(SPEC.board.tileW*boardScale(boardH)), boardMin(boardW));
     // La colonne droite s'étend sur la hauteur du plateau ET de la bande d'info.
     const colH = boardH + G + infoH, sx = G + boardW + G;
     const colNeed = SPEC.illu.min + (has.dice ? SPEC.dice.minH + G : 0)
@@ -280,15 +298,17 @@ function computeLayout(W, H, players, forced, present){
     let rows = Math.ceil(players/cols);
     const rest = () => H - (infoH + rows*rowH + (rows-1)*G + 4*G);
     let boardH = rest(), guard = 0;
-    while (boardH < boardMin(leftW) && guard++ < 3) {
-      if (rows > 1) { rows--; steps.push("une rangée de dashboards sur deux, les autres au défilement"); }
+    while (boardH < boardMin(leftW) && guard++ < 4) {
+      if (chrome) { chrome = 0;
+        steps.push("curseur de position en surimpression sur le plateau"); }
+      else if (rows > 1) { rows--; steps.push("une rangée de dashboards sur deux, les autres au défilement"); }
       else break;
       boardH = rest();
     }
-    boardH = Math.min(boardH, boardMaxH, capByTile(leftW));
+    boardH = Math.min(boardH, boardMaxH + chrome, capByTile(leftW));
 
     let y = G;
-    put("board", G, y, leftW, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(leftW));
+    put("board", G, y, leftW, boardH, Math.round(SPEC.board.tileW*boardScale(boardH)), boardMin(leftW));
     const boardTop = y;
     y += boardH + G;
     put("info", G, y, leftW, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
@@ -339,8 +359,19 @@ function computeLayout(W, H, players, forced, present){
     }
   }
 
-  const scale = z.board.h / SPEC.board.vbH;
-  return { profile, zones:z, steps, ratio,
+  if (dashMode === "block") {
+    const rows = Object.values(z).filter((r) => r && r.id && /^dash\d+$/.test(r.id));
+    if (rows.length) {
+      const x = Math.min(...rows.map((r) => r.x)), y = Math.min(...rows.map((r) => r.y));
+      const x2 = Math.max(...rows.map((r) => r.x + r.w)), y2 = Math.max(...rows.map((r) => r.y + r.h));
+      rows.forEach((r) => delete z[r.id]);
+      put("dash0", x, y, x2 - x, y2 - y, SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect, rows[0].overlay);
+      steps.push("dashboards en bloc unique (rail pas encore en place)");
+    }
+  }
+
+  const scale = boardScale(z.board.h);
+  return { profile, zones:z, steps, ratio, dashMode, chrome, sliderOverlay: chrome === 0,
     cell: SPEC.board.cellW * scale,
     tiles: (z.board.w / scale) / SPEC.board.tileW,
     visible: z._visible, players };
