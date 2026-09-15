@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Layout Lab — Projet Bambi</title>
+<style>
+  :root{
+    --bg:#0f1318; --panel:#171d25; --line:#2b3540; --ink:#e8eaed; --ink-dim:#93a0ad;
+    --ok:#4ea87a; --bad:#d4564a;
+    --z-board:#4a7ba8; --z-dash:#2f7d6f; --z-info:#b07d2a;
+    --z-illu:#7a5a9e; --z-dice:#a8543f; --z-round:#6a7a55;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI",Roboto,system-ui,sans-serif;font-size:14px;overscroll-behavior:none}
+  body{display:flex;flex-direction:column}
+
+  /* ---------- barre de contrôle ---------- */
+  #controls{background:var(--panel);border-bottom:1px solid var(--line);padding:10px 12px;
+    display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;flex:0 0 auto}
+  .grp{display:flex;flex-direction:column;gap:5px}
+  .grp>span{font-size:11px;color:var(--ink-dim)}
+  .row{display:flex;gap:6px;align-items:center}
+  button,select{background:#222b35;color:var(--ink);border:1px solid var(--line);
+    border-radius:5px;padding:6px 10px;font:inherit;font-size:13px;cursor:pointer}
+  button:hover,select:hover{background:#2c3742}
+  button.on{background:#3d5a72;border-color:#5b7f9e}
+  button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #6ea8d8;outline-offset:1px}
+  input[type=number]{width:72px;background:#222b35;color:var(--ink);border:1px solid var(--line);
+    border-radius:5px;padding:6px;font:inherit}
+  input[type=range]{width:150px;accent-color:#6ea8d8}
+
+  /* ---------- scène ---------- */
+  #stage{flex:1 1 auto;min-height:0;position:relative;overflow:auto;padding:14px;
+    background:repeating-linear-gradient(45deg,#0f1318,#0f1318 10px,#121720 10px,#121720 20px)}
+  #frame{position:relative;background:#05070a;border:1px solid #3a4652;
+    transform-origin:top left;box-shadow:0 6px 30px rgba(0,0,0,.6)}
+  body.real #controls{display:none}
+  body.real #stage{padding:0;overflow:hidden;background:#05070a}
+  body.real #frame{border:none;box-shadow:none}
+
+  .zone{position:absolute;border-radius:5px;border:1.5px solid;overflow:hidden;
+    display:flex;flex-direction:column;justify-content:center;align-items:center;
+    padding:4px;text-align:center;line-height:1.3}
+  .zone b{font-size:13px;font-weight:600;letter-spacing:.2px}
+  .zone small{font-size:11px;color:rgba(255,255,255,.72);font-variant-numeric:tabular-nums}
+  .zone.tight{justify-content:flex-start}
+  .zone.tight b{font-size:11px}
+  .zone.tight small{font-size:10px}
+  .zone.tight .badge{display:none}
+  .zone.bad{border-color:var(--bad) !important;border-width:2px;
+    box-shadow:inset 0 0 0 9999px rgba(212,86,74,.12)}
+  .zone.over{border-style:dashed;opacity:.92}
+  .badge{position:absolute;top:3px;right:5px;font-size:10px;color:rgba(255,255,255,.6)}
+
+  .z-board{background:rgba(74,123,168,.28);border-color:var(--z-board)}
+  .z-dash {background:rgba(47,125,111,.28);border-color:var(--z-dash)}
+  .z-info {background:rgba(176,125,42,.28);border-color:var(--z-info)}
+  .z-illu {background:rgba(122,90,158,.30);border-color:var(--z-illu)}
+  .z-dice {background:rgba(168,84,63,.30);border-color:var(--z-dice)}
+  .z-round{background:rgba(106,122,85,.34);border-color:var(--z-round)}
+
+  /* ---------- rapport ---------- */
+  #report{flex:0 0 auto;max-height:34vh;overflow:auto;background:var(--panel);
+    border-top:1px solid var(--line);padding:10px 12px}
+  body.real #report{display:none}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;font-variant-numeric:tabular-nums}
+  th,td{text-align:left;padding:4px 8px;border-bottom:1px solid #222b35}
+  th{color:var(--ink-dim);font-weight:500;font-size:11px}
+  td.v-ok{color:var(--ok)} td.v-bad{color:var(--bad)}
+  .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:baseline}
+  #verdict{margin:0 0 8px;font-size:13px}
+  #verdict .tag{border-radius:4px;padding:2px 7px;margin-right:8px;font-size:12px}
+  .tag.ok{background:rgba(78,168,122,.2);color:var(--ok)}
+  .tag.bad{background:rgba(212,86,74,.2);color:var(--bad)}
+  #steps{color:var(--ink-dim);font-size:12px;margin:6px 0 0}
+  #exit{position:fixed;top:8px;right:8px;z-index:50;display:none}
+  body.real #exit{display:block}
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <div class="grp"><span>Appareil simulé</span>
+    <div class="row" id="presets"></div>
+  </div>
+  <div class="grp"><span>Largeur</span>
+    <div class="row">
+      <input type="number" id="wNum" min="280" max="2560" step="1">
+      <input type="range" id="wRng" min="280" max="2560" step="1">
+    </div>
+  </div>
+  <div class="grp"><span>Hauteur</span>
+    <div class="row">
+      <input type="number" id="hNum" min="280" max="1600" step="1">
+      <input type="range" id="hRng" min="280" max="1600" step="1">
+    </div>
+  </div>
+  <div class="grp"><span>Joueurs</span>
+    <select id="players"><option>2</option><option>3</option><option selected>4</option></select>
+  </div>
+  <div class="grp"><span>Profil</span>
+    <select id="profile">
+      <option value="auto">automatique</option>
+      <option value="portrait">portrait</option>
+      <option value="landscape">paysage compact</option>
+      <option value="wide">écran large</option>
+    </select>
+  </div>
+  <div class="grp"><span>Écran réel</span>
+    <div class="row">
+      <button id="realBtn">Utiliser mon écran</button>
+      <button id="fsBtn">Plein écran</button>
+    </div>
+  </div>
+</div>
+
+<div id="stage"><div id="frame"></div></div>
+<button id="exit">Revenir aux réglages</button>
+
+<div id="report">
+  <p id="verdict"></p>
+  <table>
+    <thead><tr><th>Module</th><th>Taille obtenue</th><th>Minimum</th><th>Marge</th><th>Lecture</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p id="steps"></p>
+</div>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   1. CONTRAT D'AFFICHAGE — les minimums mesurés, en un seul endroit.
+   ===================================================================== */
+const SPEC = {
+  board: { vbW:907.7, vbH:229.3, cellW:37.90, tileW:303.0, cellMin:44, cellMax:92 },
+  dash:  { aspect:871/234, minW:340, minVisible:2 },
+  info:  { hTwoLines:48, hOneLine:32, minW:340, oneLineFrom:800 },
+  illu:  { min:160, target:200 },
+  dice:  { minW:140, minH:72 },
+  round: { minW:104, minH:32 },
+  gap: 6
+};
+const boardMinH = SPEC.board.vbH * (SPEC.board.cellMin / SPEC.board.cellW); // 266 px
+const boardMaxH = SPEC.board.vbH * (SPEC.board.cellMax / SPEC.board.cellW);
+
+/* =====================================================================
+   2. MOTEUR DE MISE EN PAGE — fonction pure, testable hors navigateur.
+      Entrée : dimensions utiles + nombre de joueurs.
+      Sortie : un rectangle par module + les dégradations appliquées.
+   ===================================================================== */
+function computeLayout(W, H, players, forced){
+  const ratio = W / H;
+  const profile = (forced && forced !== "auto") ? forced
+    : (ratio < 0.85 ? "portrait" : (W >= 1000 && ratio >= 1.2 && H >= 520 ? "wide" : "landscape"));
+  const G = profile === "landscape" ? 4 : SPEC.gap;   // gouttières resserrées sur écran plat
+  const steps = [];
+  const z = {};
+  // Le plateau ne doit jamais être agrandi au point de montrer moins d'une tuile
+  // complète en largeur : c'est ce plafond, et non la taille de case, qui le borne.
+  const capByTile = bw => SPEC.board.vbH * (bw / SPEC.board.tileW);
+  // Sous ~363 px de large, « une tuile entière » et « case ≥ 44 px » s'excluent :
+  // 8 cases dans 348 px font 43,5 px. La tuile entière gagne, la case cède.
+  const boardMin = bw => Math.min(boardMinH, capByTile(bw));
+  const put = (id, x, y, w, h, minW, minH, over) =>
+    z[id] = { id, x:Math.round(x), y:Math.round(y), w:Math.round(w), h:Math.round(h),
+              minW, minH, overlay: !!over };
+
+  if (profile === "portrait") {
+    const w = W - 2*G;
+    let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
+    let diceFlow = true, illuFlow = true;
+    let illu = Math.min(SPEC.illu.target, w - G - SPEC.dice.minW);
+    if (illu < SPEC.illu.min) { diceFlow = false; illu = Math.min(SPEC.illu.target, w);
+      steps.push("dicetrack en surimpression : pas assez de largeur à côté de l'illustration"); }
+    let mediaH = illuFlow ? (diceFlow ? Math.max(illu, SPEC.dice.minH) : illu) : 0;
+    let rowH = w / SPEC.dash.aspect, visible = SPEC.dash.minVisible, drawer = false;
+    const rest = () => H - (infoH + mediaH + (drawer ? 0 : visible*rowH + (visible-1)*G)
+                            + (mediaH?5:4)*G - (drawer ? G : 0));
+
+    let boardH = rest(), guard = 0;
+    while (boardH < boardMin(w) && guard++ < 4) {
+      if (diceFlow && illuFlow) { diceFlow = false; mediaH = illu;
+        steps.push("dicetrack en surimpression pour préserver les 6 rangées du plateau"); }
+      else if (illuFlow) { illuFlow = false; mediaH = 0;
+        steps.push("illustration en surimpression pour préserver les 6 rangées du plateau"); }
+      else if (infoH > SPEC.info.hOneLine) { infoH = SPEC.info.hOneLine;
+        steps.push("texte court sur une ligne"); }
+      else if (!drawer) { drawer = true;
+        steps.push("dashboards en tiroir escamotable : hauteur insuffisante pour les loger"); }
+      else break;
+      boardH = rest();
+    }
+    const cap = Math.min(boardMaxH, capByTile(w));
+    let slack = 0;
+    if (boardH > cap) {
+      slack = boardH - cap; boardH = cap;
+      while (visible < players && slack >= rowH + G) { visible++; slack -= rowH + G;
+        steps.push("un dashboard de plus tient à l'écran"); }
+    }
+
+    let y = G;
+    put("board", G, y, w, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(w));
+    put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
+    y += boardH + G;
+    put("info", G, y, w, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
+    if (illuFlow) {
+      put("illu", G, y, illu, illu, SPEC.illu.min, SPEC.illu.min);
+      if (diceFlow) {
+        const dh = Math.min(mediaH, 96);
+        put("dice", G+illu+G, y, w-illu-G, dh, SPEC.dice.minW, SPEC.dice.minH);
+        // Le creux sous le dicetrack accueille le round : le plateau reste net.
+        if (mediaH - dh - G >= SPEC.round.minH)
+          put("round", G+illu+G, y+dh+G, w-illu-G, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
+      }
+      y += mediaH + G;
+    } else {
+      put("illu", W-G-SPEC.illu.min, G+40, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, true);
+    }
+    if (!diceFlow) put("dice", G+8, G+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
+                       SPEC.dice.minW, SPEC.dice.minH, true);
+    for (let i=0;i<visible;i++) put("dash"+i, G, drawer ? H-G-rowH : y+i*(rowH+G), w, rowH,
+      SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect, drawer);
+    if (drawer) visible = 1;
+    // L'espace restant sert d'amorce du dashboard suivant : le joueur voit qu'il peut défiler.
+    if (!drawer && visible < players && slack >= 24) {
+      put("dash"+visible, G, y+visible*(rowH+G), w, Math.min(slack-G, rowH), SPEC.dash.minW, 0);
+      steps.push("amorce du dashboard suivant visible : indice de défilement");
+    }
+    z._visible = visible;
+  }
+
+  else if (profile === "landscape") {
+    const w = W - 2*G;
+    let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
+    let cols = 2, colW = (w - G)/2, drawer = false;
+    if (colW < SPEC.dash.minW) { cols = 1; colW = w; steps.push("dashboards sur une colonne : largeur insuffisante"); }
+    let rowH = colW / SPEC.dash.aspect;
+    const rest = () => H - (infoH + (drawer ? 0 : rowH) + (drawer ? 3 : 4)*G);
+    let boardH = rest(), guard = 0;
+    while (boardH < boardMin(w) && guard++ < 4) {
+      if (colW > SPEC.dash.minW) { colW = SPEC.dash.minW; rowH = colW/SPEC.dash.aspect;
+        steps.push("dashboards ramenés à leur largeur minimale pour laisser respirer le plateau"); }
+      else if (infoH > SPEC.info.hOneLine) { infoH = SPEC.info.hOneLine; steps.push("texte court sur une ligne"); }
+      else if (!drawer) { drawer = true; steps.push("dashboards en tiroir escamotable : écran trop plat pour les loger"); }
+      else break;
+      boardH = rest();
+    }
+    boardH = Math.min(boardH, boardMaxH, capByTile(w));
+
+    let y = G;
+    put("board", G, y, w, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(w));
+    put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
+    put("illu", W-G-8-SPEC.illu.min, y+8, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, true);
+    put("dice", G+8, y+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, true);
+    steps.push("illustration, dicetrack et round en surimpression sur le plateau");
+    y += boardH + G;
+    put("info", G, y, w, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
+    for (let i=0;i<cols;i++) put("dash"+i, G+i*(colW+G), drawer ? H-G-rowH : y, colW, rowH,
+      SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect, drawer);
+    z._visible = cols;
+  }
+
+  else { /* wide */
+    const sideW = Math.max(340, Math.min(420, W*0.26));
+    const leftW = W - sideW - 3*G;
+    let infoH = SPEC.info.hOneLine;
+    let cols = 2, colW = (leftW - G)/2;
+    if (colW < SPEC.dash.minW) { cols = 1; colW = leftW;
+      steps.push("dashboards sur une colonne : la colonne latérale mange la largeur"); }
+    let rowH = colW/SPEC.dash.aspect;
+    let rows = Math.ceil(players/cols);
+    const rest = () => H - (infoH + rows*rowH + (rows-1)*G + 4*G);
+    let boardH = rest(), guard = 0;
+    while (boardH < boardMin(leftW) && guard++ < 3) {
+      if (rows > 1) { rows--; steps.push("une rangée de dashboards sur deux, les autres au défilement"); }
+      else break;
+      boardH = rest();
+    }
+    boardH = Math.min(boardH, boardMaxH, capByTile(leftW));
+
+    let y = G;
+    put("board", G, y, leftW, boardH, Math.round(SPEC.board.tileW*(boardH/SPEC.board.vbH)), boardMin(leftW));
+    put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
+    y += boardH + G;
+    put("info", G, y, leftW, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
+    let shown = 0;
+    for (let r=0;r<rows;r++) for (let c=0;c<cols && shown<players;c++,shown++)
+      put("dash"+shown, G+c*(colW+G), y+r*(rowH+G), colW, rowH, SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect);
+    z._visible = shown;
+    // La colonne latérale a son propre budget vertical : illustration d'abord,
+    // puis dicetrack, puis round ; ce qui ne rentre pas passe en surimpression.
+    const sx = W - sideW - G;
+    const diceH = Math.max(SPEC.dice.minH, Math.min(140, sideW*SPEC.dice.minH/SPEC.dice.minW));
+    const budget = H - 4*G;
+    let sy = G, illuSide = Math.min(sideW, 400, budget - diceH - SPEC.round.minH - 2*G);
+    if (illuSide >= SPEC.illu.min) { put("illu", sx, sy, illuSide, illuSide, SPEC.illu.min, SPEC.illu.min); sy += illuSide + G; }
+    else { put("illu", W-sideW, H-G-8-SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, SPEC.illu.min, true);
+           steps.push("illustration en surimpression : colonne latérale trop courte"); }
+    if (H - sy - G >= diceH) { put("dice", sx, sy, sideW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
+    else { put("dice", sx+8, H-G-8-SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH, true);
+           steps.push("dicetrack en surimpression : colonne latérale trop courte"); }
+    if (H - sy - G >= SPEC.round.minH) put("round", sx, sy, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
+    else put("round", G+8, G+8, SPEC.round.minW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH, true);
+  }
+
+  const scale = z.board.h / SPEC.board.vbH;
+  return { profile, zones:z, steps, ratio,
+    cell: SPEC.board.cellW * scale,
+    tiles: (z.board.w / scale) / SPEC.board.tileW,
+    visible: z._visible, players };
+}
+
+/* =====================================================================
+   3. RENDU — rectangles + rapport chiffré.
+   ===================================================================== */
+const LABEL = {
+  board:["Plateau","z-board"], info:["Info contextuelle","z-info"], illu:["Illustration","z-illu"],
+  dice:["Dicetrack","z-dice"], round:["Round","z-round"], dash:["Dashboard","z-dash"]
+};
+const frame = document.getElementById("frame");
+
+function draw(L, W, H){
+  frame.style.width = W+"px"; frame.style.height = H+"px";
+  frame.textContent = "";
+  const rowsEl = document.getElementById("rows"); rowsEl.textContent = "";
+  let allOk = true;
+
+  Object.values(L.zones).forEach(zn => {
+    if (!zn || !zn.id) return;
+    const base = zn.id.replace(/\d+$/,"");
+    const [name, cls] = LABEL[base];
+    const ok = zn.w >= zn.minW - 0.5 && zn.h >= zn.minH - 0.5;
+    if (!ok) allOk = false;
+
+    const el = document.createElement("div");
+    el.className = "zone " + cls + (ok ? "" : " bad") + (zn.overlay ? " over" : "")
+                 + (zn.h < 64 ? " tight" : "");
+    el.style.cssText = `left:${zn.x}px;top:${zn.y}px;width:${zn.w}px;height:${zn.h}px`;
+    const idx = zn.id.match(/\d+$/);
+    const title = base === "dash" ? `${name} ${Number(idx[0])+1}` : name;
+    el.innerHTML = `<b>${title}</b><small>${zn.w} × ${zn.h}</small>`;
+    if (zn.overlay) el.insertAdjacentHTML("beforeend", '<span class="badge">surimpression</span>');
+    if (base === "board") el.insertAdjacentHTML("beforeend",
+      `<small>case ${L.cell.toFixed(0)} px · ${L.tiles.toFixed(1)} tuile(s) visible(s)</small>`);
+    frame.appendChild(el);
+
+    if (base === "dash" && idx[0] !== "0") return;
+    const tr = document.createElement("tr");
+    const mw = zn.w - zn.minW, mh = zn.h - zn.minH;
+    const label = base === "dash" ? `${name}s (${L.visible} sur ${L.players} visibles)` : title;
+    tr.innerHTML = `<td><span class="swatch" style="background:var(--${cls.replace('z-','z-')})"></span>${label}
+        ${zn.overlay ? '<small> — surimpression</small>' : ''}</td>
+      <td>${zn.w} × ${zn.h}</td>
+      <td>${Math.round(zn.minW)} × ${Math.round(zn.minH)}</td>
+      <td class="${ok?'v-ok':'v-bad'}">${mw>=0?'+':''}${Math.round(mw)} / ${mh>=0?'+':''}${Math.round(mh)}</td>
+      <td>${base==="board" ? `case de ${L.cell.toFixed(0)} px`
+          : base==="info" ? `${Math.floor(zn.w/8.8)} car. par ligne`
+          : base==="illu" ? `véhicule ${Math.round((zn.w-28)/2)} px de large`
+          : base==="dice" ? `dé ${Math.round(Math.min((zn.w-28)/2, zn.h-16))} px`
+          : base==="dash" ? `${(zn.w/871*100).toFixed(0)} % de l'échelle native` : "—"}</td>`;
+    rowsEl.appendChild(tr);
+  });
+
+  document.getElementById("verdict").innerHTML =
+    `<span class="tag ${allOk?'ok':'bad'}">${allOk?'Contrat respecté':'Contrat non respecté'}</span>`
+    + `Profil <strong>${L.profile}</strong> — ${W} × ${H} px, rapport ${L.ratio.toFixed(2)}`;
+  document.getElementById("steps").textContent =
+    L.steps.length ? "Dégradations appliquées : " + L.steps.join(" · ") : "Aucune dégradation nécessaire.";
+  return allOk;
+}
+
+/* =====================================================================
+   4. PILOTAGE
+   ===================================================================== */
+const PRESETS = [
+  ["Pixel portrait",412,915], ["Pixel paysage",915,412],
+  ["iPhone SE",375,667], ["Tablette",820,1180],
+  ["Ordinateur",1512,850], ["Grand écran",1920,1080]
+];
+const wNum=document.getElementById("wNum"), wRng=document.getElementById("wRng"),
+      hNum=document.getElementById("hNum"), hRng=document.getElementById("hRng"),
+      stage=document.getElementById("stage");
+let real = false;
+
+PRESETS.forEach(([n,w,h])=>{
+  const b=document.createElement("button"); b.textContent=n;
+  b.onclick=()=>{ real=false; document.body.classList.remove("real"); setSize(w,h); };
+  document.getElementById("presets").appendChild(b);
+});
+
+function setSize(w,h){ wNum.value=wRng.value=w; hNum.value=hRng.value=h; render(); }
+[wNum,wRng].forEach(el=>el.oninput=()=>{ wNum.value=wRng.value=el.value; render(); });
+[hNum,hRng].forEach(el=>el.oninput=()=>{ hNum.value=hRng.value=el.value; render(); });
+document.getElementById("players").onchange = render;
+document.getElementById("profile").onchange = render;
+
+/* Mesure de l'espace réellement utilisable : visualViewport d'abord,
+   innerWidth/Height en repli. Les insets système sont lus via env(). */
+const probe = document.createElement("div");
+probe.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;"
+  + "padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);"
+  + "padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)";
+document.body.appendChild(probe);
+function usableSpace(){
+  const vv = window.visualViewport;
+  const w = Math.round(vv ? vv.width : window.innerWidth);
+  const h = Math.round(vv ? vv.height : window.innerHeight);
+  const cs = getComputedStyle(probe);
+  const px = s => parseFloat(s) || 0;
+  return { w: w - px(cs.paddingLeft) - px(cs.paddingRight),
+           h: h - px(cs.paddingTop) - px(cs.paddingBottom) };
+}
+
+document.getElementById("realBtn").onclick = ()=>{ real=true; document.body.classList.add("real"); render(); };
+document.getElementById("exit").onclick = ()=>{
+  real=false; document.body.classList.remove("real");
+  if (document.fullscreenElement) document.exitFullscreen(); render();
+};
+document.getElementById("fsBtn").onclick = async ()=>{
+  try{
+    if (!document.fullscreenElement) { await document.documentElement.requestFullscreen({navigationUI:"hide"}); }
+    else await document.exitFullscreen();
+  }catch(e){ alert("Plein écran refusé par le navigateur : " + e.message); }
+  real=true; document.body.classList.add("real"); render();
+};
+
+function render(){
+  let W, H;
+  if (real) { const u = usableSpace(); W = u.w; H = u.h; }
+  else { W = +wNum.value; H = +hNum.value; }
+  const L = computeLayout(W, H, +document.getElementById("players").value,
+                          document.getElementById("profile").value);
+  draw(L, W, H);
+  if (real) { frame.style.transform = "none"; }
+  else {
+    const availW = stage.clientWidth - 28, availH = stage.clientHeight - 28;
+    const k = Math.min(1, availW/W, availH/H);
+    frame.style.transform = k < 1 ? `scale(${k})` : "none";
+  }
+}
+
+/* Un seul point d'écoute, toutes les sources de changement de taille. */
+const schedule = (()=>{ let id=0; return ()=>{ cancelAnimationFrame(id); id=requestAnimationFrame(render); }; })();
+new ResizeObserver(schedule).observe(document.body);
+if (window.visualViewport) window.visualViewport.addEventListener("resize", schedule);
+window.addEventListener("orientationchange", schedule);
+document.addEventListener("fullscreenchange", schedule);
+
+setSize(412, 915);
+</script>
+</body>
+</html>
