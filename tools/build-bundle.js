@@ -20,6 +20,11 @@ function stripRequiresAndDestructuring(src, patterns) {
 // --- engine.js : aucun require, utilisé tel quel ---
 const engineSrc = fs.readFileSync(path.join(repoRoot, "engine.js"), "utf8");
 
+// --- layout-engine.js : aucun require, aucune dépendance, utilisé tel
+// quel (comme engine.js). Fonction pure de mise en page — voir
+// test-layout-engine.js pour sa couverture. ---
+const layoutSrc = fs.readFileSync(path.join(repoRoot, "layout-engine.js"), "utf8");
+
 // --- ai-decision.js : retirer son require(engine) + destructuring ---
 let aiSrc = fs.readFileSync(path.join(repoRoot, "ai-decision.js"), "utf8");
 aiSrc = stripRequiresAndDestructuring(aiSrc, [
@@ -86,6 +91,8 @@ const bundle = [
   '"use strict";',
   "// ==================== engine.js ====================",
   engineSrc.replace('"use strict";', ""),
+  "// ==================== layout-engine.js ====================",
+  layoutSrc.replace('"use strict";', ""),
   "// ==================== ai-decision.js ====================",
   aiSrc.replace('"use strict";', ""),
   "// ==================== human-decision.js ====================",

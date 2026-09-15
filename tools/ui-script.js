@@ -2589,57 +2589,94 @@ function setupBoardScroll() {
   }
   applyBoardSizing();
 }
-function applyBoardSizing() {
-  if (boardWidthRatio === null) return;
-  const viewport = document.getElementById("board-viewport");
-  const svg = document.getElementById("board");
-  // Plafond raisonnable : 40% de la hauteur RÉELLEMENT disponible
-  // (pas 50%) — les dashboards peuvent avoir besoin du même genre de
-  // plafond au même moment (voir updateDashboardsViewportHeight),
-  // 2×50% ne laisserait plus de place pour le curseur et la bande
-  // d'info ; 2×40% en laisse toujours 20%.
-  //
-  // BUG CORRIGÉ (retour de Mayrik, décalage constaté sur un vrai
-  // téléphone en plein écran — jamais reproduit dans mes tests
-  // Chromium malgré plusieurs tailles essayées, donc corrigé par
-  // prudence plutôt que par certitude absolue) : window.innerHeight
-  // est la hauteur BRUTE de la fenêtre, ignorant le padding
-  // safe-area-inset-top/bottom posé sur #wrap (voir template.html) —
-  // sur un téléphone où cette zone de sécurité système n'est pas
-  // nulle (encoche, barre de gestes, y compris en plein écran selon
-  // l'appareil), le plafond calculé ici pouvait être plus généreux que
-  // l'espace RÉELLEMENT disponible dans #wrap, dont il ampute
-  // pourtant le contenu. #wrap.clientHeight reflète la hauteur déjà
-  // amputée de ce padding — référence plus sûre.
-  const wrapEl = document.getElementById("wrap");
-  const maxBoardHeight = (wrapEl ? wrapEl.clientHeight : window.innerHeight) * 0.4;
-  const widthDrivenHeight = viewport.clientWidth * boardWidthRatio * (BOARD_VIEW.h / BOARD_VIEW.w);
-  // #board-viewport lui-même reçoit aussi une hauteur EXPLICITE (pas
-  // seulement le SVG à l'intérieur) : sans elle, le conteneur n'a
-  // qu'une hauteur "intrinsèque" (dérivée de son contenu), que
-  // flexbox continue de comprimer par défaut au-delà de ce qu'on
-  // vient de calculer pour le SVG — vérifié : un léger écart
-  // subsistait (SVG à 350px, conteneur retombé à 320px) tant que
-  // seul le SVG recevait une taille explicite. Même technique déjà
-  // utilisée pour la zone dashboards (voir updateDashboardsViewportHeight).
-  if (widthDrivenHeight > maxBoardHeight && maxBoardHeight > 0) {
-    svg.style.width = "auto";
-    svg.style.height = maxBoardHeight.toFixed(2) + "px";
-    svg.style.marginLeft = "auto";
-    svg.style.marginRight = "auto";
-    viewport.style.height = maxBoardHeight.toFixed(2) + "px";
-  } else {
-    svg.style.width = (boardWidthRatio * 100).toFixed(2) + "%";
-    svg.style.height = "auto";
-    svg.style.marginLeft = "";
-    svg.style.marginRight = "";
-    viewport.style.height = widthDrivenHeight.toFixed(2) + "px";
+// -------------------------------------------------------------------
+// COUCHE D'APPLICATION DE LA MISE EN PAGE
+// Seul endroit du jeu qui pose des positions et des tailles. Elle ne
+// décide de rien : elle mesure l'espace réellement utilisable, demande
+// les rectangles à computeLayout() (layout-engine.js, fonction pure et
+// testée), et les recopie sur les éléments.
+//
+// RÈGLE À NE JAMAIS ENFREINDRE : cette couche dimensionne des
+// CONTENEURS, jamais l'élément transformé par Panzoom (#dashboards).
+// C'est la confusion des deux qui provoquait le décalage du zoom des
+// dashboards après un redimensionnement.
+//
+// MODULES DÉCLARÉS PRÉSENTS : illustration, dicetrack et road die
+// n'existent pas encore dans le DOM — le moteur ne leur réserve donc
+// aucune place (pas de boîte vide) et rend leur part aux autres.
+// Chaque étape suivante n'aura qu'à passer son drapeau à true.
+// dashMode "block" : les dashboards restent un SVG unique pour
+// l'instant ; le passage au rail (un SVG par joueur) viendra avec sa
+// propre étape.
+// -------------------------------------------------------------------
+const LAYOUT_PRESENT = { illu: false, dice: false, roaddie: false, round: true, dashMode: "block" };
+let lastLayout = null;
+
+function applyBoardSizing() { applyLayout(); }
+
+function applyLayout() {
+  const wrap = document.getElementById("wrap");
+  if (!wrap || typeof computeLayout !== "function") return;
+  // Hauteur réellement visible : visualViewport tient compte des barres
+  // système qui apparaissent/disparaissent, là où une unité CSS seule
+  // peut rester en retard d'un instant.
+  const vv = window.visualViewport;
+  if (vv && vv.height) {
+    wrap.style.height = Math.round(vv.height) + "px";
+    wrap.style.width = Math.round(vv.width) + "px";
   }
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  if (!W || !H) return; // jsdom sans mise en page réelle : rien à faire
+  const players = (typeof order !== "undefined" && order && order.length) ? order.length : 4;
+  const L = computeLayout(W, H, players, "auto", LAYOUT_PRESENT);
+  lastLayout = L;
+
+  const place = (el, r) => {
+    if (!el || !r) return;
+    el.style.left = r.x + "px"; el.style.top = r.y + "px";
+    el.style.width = r.w + "px"; el.style.height = r.h + "px";
+    el.style.display = "";
+  };
+
+  // --- Plateau : le rectangle rendu inclut le curseur de position ---
+  const b = L.zones.board;
+  const winH = b.h - L.chrome;            // fenêtre de jeu seule
+  place(document.getElementById("board-viewport"), { x: b.x, y: b.y, w: b.w, h: winH });
+  const svg = document.getElementById("board");
+  const vb = svg && svg.viewBox && svg.viewBox.baseVal;
+  if (vb && vb.height) {
+    // Calage par la HAUTEUR : c'est ce qui garantit les 6 rangées.
+    // La largeur en découle par le rapport d'aspect, et le débordement
+    // est absorbé par le défilement horizontal natif.
+    svg.style.height = winH.toFixed(1) + "px";
+    svg.style.width = (winH * vb.width / vb.height).toFixed(1) + "px";
+  }
+  const slider = document.getElementById("board-position-slider");
+  if (slider) {
+    slider.style.left = b.x + "px";
+    slider.style.width = b.w + "px";
+    slider.style.height = BOARD_SLIDER_H + "px";
+    slider.style.top = (L.sliderOverlay ? b.y + winH - BOARD_SLIDER_H : b.y + winH) + "px";
+    slider.classList.toggle("over-board", !!L.sliderOverlay);
+  }
+
+  // --- Bande d'info et module round ---
+  place(document.getElementById("info-band"), L.zones.info);
+  const roundEl = document.getElementById("round-module");
+  if (roundEl) {
+    if (L.zones.round) {
+      place(roundEl, L.zones.round);
+      roundEl.classList.toggle("over-board", !!L.zones.round.overlay);
+    } else roundEl.style.display = "none";
+  }
+
+  // --- Dashboards : on ne pose QUE le conteneur. Le SVG à l'intérieur
+  //     appartient à Panzoom et garde sa mise à l'échelle par CSS. ---
+  place(document.getElementById("dashboards-viewport"), L.zones.dash0);
 }
 
-// Curseur de position (PAS un zoom, retour de Mayrik) : simple
-// raccourci + repère visuel de la position horizontale sur le plateau
-// assemblé complet, synchronisé dans les deux sens avec scrollLeft.
+const BOARD_SLIDER_H = 18;
+
 function syncBoardSlider() {
   const viewport = document.getElementById("board-viewport");
   const slider = document.getElementById("board-position-slider");
@@ -2664,7 +2701,18 @@ function updateInfoBand(cp) {
   if (!el) return;
   el.textContent = gameOver
     ? "PARTIE TERMINÉE"
-    : cp ? `ROUND ${G.roundState.roundNumber} — ${playerLabel(cp).toUpperCase()}` : "";
+    : cp ? playerLabel(cp).toUpperCase() : "";
+  updateRoundModule();
+}
+
+// Module ROUND : cadence de rafraîchissement propre (une fois par
+// manche), séparée de la bande d'info réécrite à chaque action — c'est
+// ce qui permettra plus tard à une animation d'y vivre sans être
+// détruite à chaque changement de contexte.
+function updateRoundModule() {
+  const el = document.getElementById("round-module");
+  if (!el) return;
+  el.textContent = (G && G.roundState && !gameOver) ? `ROUND ${G.roundState.roundNumber}` : "";
 }
 
 // ===================================================================
@@ -2871,14 +2919,11 @@ function initDashboardsPanzoom() {
 // recevoir la même extension sans une vérification directe sur
 // appareil, plutôt que de continuer à deviner une correction à
 // distance.
-function updateDashboardsViewportHeight() {
-  const svg = document.getElementById("dashboards");
-  const viewport = document.getElementById("dashboards-viewport");
-  const vb = svg.viewBox.baseVal;
-  if (!vb || vb.width === 0) return;
-  const naturalHeight = viewport.clientWidth * (vb.height / vb.width);
-  viewport.style.height = naturalHeight.toFixed(1) + "px";
-}
+// Conservée sous son nom d'origine (appelée par render()) : la hauteur
+// de la zone dashboards est désormais calculée par le moteur, en même
+// temps que celle de tous les autres modules — il n'y a plus de calcul
+// séparé qui puisse entrer en contradiction avec les autres.
+function updateDashboardsViewportHeight() { applyLayout(); }
 
 // ===================================================================
 // ANIMATION DE LANCER DE DÉS — début de round (dés de MOUVEMENT du
@@ -3156,7 +3201,24 @@ if (fullscreenBtn) {
 }
 document.getElementById("board-viewport").addEventListener("scroll", syncBoardSlider);
 document.getElementById("board-position-slider").addEventListener("input", onBoardSliderInput);
-window.addEventListener("resize", () => { applyBoardSizing(); syncBoardSlider(); if (G) updateDashboardsViewportHeight(); });
+// Toutes les sources de changement de taille convergent vers un unique
+// passage, groupé sur la prochaine image. window.resize seul ne suffit
+// pas sur mobile : il ne se déclenche pas quand les barres système
+// apparaissent ou disparaissent (plein écran, rotation) — d'où
+// visualViewport.resize et fullscreenchange.
+const scheduleLayout = (() => {
+  let frame = 0;
+  return () => {
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
+    const run = () => { applyLayout(); syncBoardSlider(); };
+    frame = (typeof requestAnimationFrame === "function") ? requestAnimationFrame(run) : (run(), 0);
+  };
+})();
+window.addEventListener("resize", scheduleLayout);
+window.addEventListener("orientationchange", scheduleLayout);
+document.addEventListener("fullscreenchange", scheduleLayout);
+if (window.visualViewport) window.visualViewport.addEventListener("resize", scheduleLayout);
+if (typeof ResizeObserver === "function") new ResizeObserver(scheduleLayout).observe(document.documentElement);
 
 // Écran d'accueil (retour de Mayrik) : visible par défaut (voir
 // template.html), masqué dès qu'une partie démarre — que ce soit par
