@@ -1168,31 +1168,51 @@ function findFrontmostCar(cars) {
 
 // Dé de slam à 6 faces : 2 faces "top", 4 faces "bottom" (p.10).
 // injectedValue permet de forcer un résultat précis pour les tests.
+// -----------------------------------------------------------------
+// OBSERVATEUR DE DÉS — crochet de PRÉSENTATION, jamais de règle.
+// Le moteur tire ses dés spéciaux en interne et n'en rendait compte
+// que dans ses textes de journal, impossibles à exploiter sans les
+// analyser. Cet observateur, désactivé par défaut, prévient
+// l'interface de chaque tirage réel. Il ne change aucun résultat, ne
+// lit aucun état, et une exception dans l'observateur ne peut pas
+// interrompre une partie.
+// Sûr par construction : l'IA n'appelle aucune fonction de tirage
+// (elle évalue de façon déterministe), donc l'observateur ne voit
+// jamais un dé « imaginé » pendant une réflexion.
+// -----------------------------------------------------------------
+let diceObserver = null;
+function setDiceObserver(fn) { diceObserver = (typeof fn === "function") ? fn : null; }
+function notifyDieRolled(kind, value) {
+  if (!diceObserver) return value;
+  try { diceObserver(kind, value); } catch (e) { /* la présentation ne bloque jamais le jeu */ }
+  return value;
+}
+
 function rollSlamDie(injectedValue = null) {
-  if (injectedValue) return injectedValue; // "top" | "bottom"
-  return DICE_FACES.SLAM[Math.floor(Math.random() * DICE_FACES.SLAM.length)];
+  if (injectedValue) return notifyDieRolled("slam", injectedValue); // "top" | "bottom"
+  return notifyDieRolled("slam", DICE_FACES.SLAM[Math.floor(Math.random() * DICE_FACES.SLAM.length)]);
 }
 
 // Dé de direction à 6 faces, une par direction (p.10).
 // injectedValue permet de forcer une direction précise pour les tests.
 function rollDirectionDie(injectedValue = null) {
-  if (injectedValue) return injectedValue;
+  if (injectedValue) return notifyDieRolled("direction", injectedValue);
   const faces = Object.keys(DIRECTIONS);
-  return faces[Math.floor(Math.random() * faces.length)];
+  return notifyDieRolled("direction", faces[Math.floor(Math.random() * faces.length)]);
 }
 
 // Dé de cascade (Stunt) à 6 faces : 1-2-2-3-3-4 (confirmé par Mayrik).
 // Utilisé par les jetons Dazed et Blast Off.
 function rollStuntDie(injectedValue = null) {
-  if (injectedValue) return injectedValue;
-  return DICE_FACES.STUNT[Math.floor(Math.random() * DICE_FACES.STUNT.length)];
+  if (injectedValue) return notifyDieRolled("stunt", injectedValue);
+  return notifyDieRolled("stunt", DICE_FACES.STUNT[Math.floor(Math.random() * DICE_FACES.STUNT.length)]);
 }
 
 // Dé de tir à 6 faces : large×3, medium×1, small-medium×1, any×1
 // (confirmé par Mayrik, correspond à DICE_FACES.SHOOTING).
 function rollShootingDie(injectedValue = null) {
-  if (injectedValue) return injectedValue;
-  return DICE_FACES.SHOOTING[Math.floor(Math.random() * DICE_FACES.SHOOTING.length)];
+  if (injectedValue) return notifyDieRolled("shooting", injectedValue);
+  return notifyDieRolled("shooting", DICE_FACES.SHOOTING[Math.floor(Math.random() * DICE_FACES.SHOOTING.length)]);
 }
 
 // Dé Road à 6 faces : 1-1-1-2-2-3 (confirmé par Mayrik). Tiré une
@@ -1205,8 +1225,8 @@ function rollShootingDie(injectedValue = null) {
 // (options.roadDieValue + options.roadBonusPath, jamais ici — ce dé
 // n'est que le TIRAGE, pas son application).
 function rollRoadDie(injectedValue = null) {
-  if (injectedValue) return injectedValue;
-  return DICE_FACES.ROAD[Math.floor(Math.random() * DICE_FACES.ROAD.length)];
+  if (injectedValue) return notifyDieRolled("road", injectedValue);
+  return notifyDieRolled("road", DICE_FACES.ROAD[Math.floor(Math.random() * DICE_FACES.ROAD.length)]);
 }
 
 
@@ -3130,6 +3150,7 @@ function rollMovementDie(injectedValue = null) {
 
 if (typeof module !== "undefined" && module.exports) {
 module.exports = {
+  setDiceObserver,
 
   driveSync,
   TERRAIN,
