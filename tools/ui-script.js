@@ -2631,7 +2631,7 @@ function setupBoardScroll() {
 // l'instant ; le passage au rail (un SVG par joueur) viendra avec sa
 // propre étape.
 // -------------------------------------------------------------------
-const LAYOUT_PRESENT = { illu: false, dice: false, roaddie: false, round: true, dashMode: "rail" };
+const LAYOUT_PRESENT = { illu: false, dice: false, roaddie: true, round: true, dashMode: "rail" };
 let lastLayout = null;
 
 function applyBoardSizing() { applyLayout(); }
@@ -2684,6 +2684,13 @@ function applyLayout() {
 
   // --- Bande d'info et module round ---
   place(document.getElementById("info-band"), L.zones.info);
+  const roadEl = document.getElementById("roaddie-module");
+  if (roadEl) {
+    if (L.zones.roaddie) {
+      place(roadEl, L.zones.roaddie);
+      roadEl.classList.toggle("over-board", !!L.zones.roaddie.overlay);
+    } else roadEl.style.display = "none";
+  }
   const roundEl = document.getElementById("round-module");
   if (roundEl) {
     if (L.zones.round) {
@@ -2754,6 +2761,7 @@ function onBoardSliderInput() {
 function updateInfoBand(cp) {
   const el = document.getElementById("info-band");
   if (!el) return;
+  updateRoadDieModule();
   el.textContent = gameOver
     ? "PARTIE TERMINÉE"
     : cp ? playerLabel(cp).toUpperCase() : "";
@@ -2775,6 +2783,35 @@ function scrollActivePlayerIntoView() {
   const row = rail.querySelector(`[data-dash-row="${cp}"]`);
   if (row && typeof row.scrollIntoView === "function") {
     row.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+}
+
+// Module ROAD DIE (retour de Mayrik) : la face active du dé de round,
+// affichée en grand et en permanence jusqu'à la fin du round. Le petit
+// dé posé sur le dashboard du premier joueur reste en place — il porte
+// l'information « qui commence » — mais il est illisible (14 px au zoom
+// x1), alors que ce module le montre à 88 px.
+// Le dé Road est un VRAI dé à 6 faces, mais avec seulement 3 résultats
+// distincts : sa table physique est [1,1,1,2,2,3] (un 1 une fois sur
+// deux, un 3 une fois sur six). On pioche dans cette table plutôt que
+// dans {1,2,3} à chances égales, pour que le dé qui roule pendant le
+// vol se comporte comme le vrai — et pour rester juste automatiquement
+// si la composition du dé changeait dans le moteur.
+const ROAD_DIE_TABLE = (typeof DICE_FACES !== "undefined" && DICE_FACES.ROAD)
+  ? DICE_FACES.ROAD : [1, 1, 1, 2, 2, 3];
+function roadDieFaceHTML(value, size) {
+  return `<img src="../images/dice/die-fx-road-${value}.webp" style="position:absolute;left:0;top:0;width:${size}px;height:${size}px;">`;
+}
+
+function updateRoadDieModule() {
+  const face = document.getElementById("roaddie-face");
+  if (!face) return;
+  const value = (G && G.roundState && G.roundState.roadDie) || null;
+  if (value) {
+    face.setAttribute("src", `../images/dice/die-fx-road-${value}.webp`);
+    face.style.visibility = "";
+  } else {
+    face.style.visibility = "hidden";
   }
 }
 
@@ -3045,7 +3082,12 @@ function diceRollOverlayRoot() {
 // écran réel du vrai dé déjà rendu (targetEl) — masqué le temps du
 // vol, révélé une fois l'animation terminée (déjà à la bonne valeur/
 // position, aucun changement visuel au moment de la révélation).
-function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs) {
+// opts.faceHTML(valeur, taille) permet de voler une face différente des
+// dés de mouvement : le dé de round a son propre visuel (images
+// die-fx-road-N.webp) et seulement 3 faces, pas 6.
+function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs, opts) {
+  const faceHTML = (opts && opts.faceHTML) || ((v, sz) => movingDieOverlayHTML(v, color, sz));
+  const randomFace = (opts && opts.randomFace) || (() => 1 + Math.floor(Math.random() * 6));
   return new Promise((resolve) => {
     const rect = targetEl.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) { resolve(); return; } // élément non visible (safety net)
@@ -3065,7 +3107,7 @@ function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs) {
     die.style.width = size + "px";
     die.style.height = size + "px";
     die.style.willChange = "transform";
-    die.innerHTML = movingDieOverlayHTML(finalValue, color, size);
+    die.innerHTML = faceHTML(finalValue, size);
 
     const shadow = document.createElement("div");
     shadow.style.position = "fixed";
@@ -3081,7 +3123,7 @@ function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs) {
     setTimeout(() => {
       let cycling = true;
       const cycle = setInterval(() => {
-        if (cycling) die.innerHTML = movingDieOverlayHTML(1 + Math.floor(Math.random() * 6), color, size);
+        if (cycling) die.innerHTML = faceHTML(randomFace(), size);
       }, 60);
 
       const startTime = performance.now();
@@ -3108,7 +3150,7 @@ function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs) {
         if (cycling && t > 0.8) {
           cycling = false;
           clearInterval(cycle);
-          die.innerHTML = movingDieOverlayHTML(finalValue, color, size);
+          die.innerHTML = faceHTML(finalValue, size);
         }
 
         if (t < 1) {
@@ -3162,11 +3204,33 @@ function playRoundDiceRollAnimation() {
 // seulement au changement RÉEL de round — jamais à chaque simple
 // render() dans le même round. Voir le commentaire détaillé plus haut
 // sur pourquoi ceci ne peut casser aucun test existant.
+// Lance le dé de round vers son module, puis rend la main. La face
+// reste ensuite affichée jusqu'au round suivant.
+function playRoadDieRollAnimation() {
+  const face = document.getElementById("roaddie-face");
+  const value = (G && G.roundState && G.roundState.roadDie) || null;
+  if (!face || !value) return Promise.resolve();
+  return animateOneMovingDie(face, value, null, 0, 1100, {
+    faceHTML: roadDieFaceHTML,
+    randomFace: () => ROAD_DIE_TABLE[Math.floor(Math.random() * ROAD_DIE_TABLE.length)]
+  });
+}
+
+// SÉQUENCE DE DÉBUT DE ROUND (ordre demandé par Mayrik) :
+//   1. l'afficheur ROUND porte déjà le nouveau numéro — updateRoundModule()
+//      a tourné plus tôt dans ce même render(), donc avant tout le reste
+//      (une mise en scène de ce changement viendra plus tard) ;
+//   2. le dé de round part seul vers son module ;
+//   3. sa face y reste affichée jusqu'à la fin du round ;
+//   4. seulement ensuite les 4 dés de mouvement de chaque joueur
+//      s'envolent vers les diceboards.
+// Le chaînage garantit l'ordre : les dés des joueurs ne partent qu'une
+// fois le dé de round posé, jamais en même temps.
 function maybeTriggerRoundDiceRollAnimation() {
   if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return;
   if (G.roundState.roundNumber === lastRolledRoundNumber) return;
   lastRolledRoundNumber = G.roundState.roundNumber;
-  playRoundDiceRollAnimation();
+  playRoadDieRollAnimation().then(() => playRoundDiceRollAnimation());
 }
 
 function render() {
