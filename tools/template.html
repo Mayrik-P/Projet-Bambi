@@ -161,38 +161,23 @@
     text-align: center; }
 
   /* --------------------------------------------------------------
-     Zone 3 — dashboards des joueurs (retour de Mayrik) : librement
-     zoomable/déplaçable au pincement tactile ET à la souris, mais
-     CONTENUE à cette seule zone (contrairement au pincement natif du
-     téléphone, qui zoomait toute la page HTML avant ce correctif).
-     Gérée par Panzoom (voir tools/panzoom.min.js, vendorisé — voir
-     initDashboardsPanzoom() dans ui-script.js). touch-action:none
-     laisse Panzoom gérer lui-même tous les gestes tactiles sans que le
-     navigateur ne s'en mêle. La hauteur du conteneur est posée
-     dynamiquement en JS pour toujours cadrer exactement l'ensemble des
-     dashboards à l'échelle 1 (comme aujourd'hui) — le zoom du joueur
-     s'applique PAR-DESSUS cette base. Dernier élément de la colonne
-     flexible de #wrap : se retrouve donc naturellement calé tout en
-     bas de l'écran disponible, sans rien de plus à faire (retour de
-     Mayrik).
-     Les marges de secours qui entouraient autrefois cette zone (pour
-     rattraper le défilement de la PAGE quand touch-action:none
-     capturait un geste tactile) ont été retirées : #wrap remplit
-     maintenant exactement 100dvh sans déborder — il n'y a plus de
-     défilement de page du tout à rattraper. */
-  /* position:relative RETIRÉ : il écrasait le position:absolute de la
-     couche de mise en page (règle déclarée plus haut, même spécificité,
-     donc c'est la dernière qui gagnait) et laissait la zone dans le flux
-     — l'affichage semblait correct par coïncidence de calcul. Le
-     contexte de positionnement dont ont besoin les boutons de zoom est
-     fourni aussi bien par position:absolute. */
-  #dashboards-viewport { overflow: hidden; touch-action: none; background: #26262e; }
+     Zone 3 — dashboards des joueurs. Panzoom retiré : le déplacement
+     est le DÉFILEMENT NATIF du navigateur et le zoom change la largeur
+     du SVG (voir le long commentaire dans ui-script.js).
+     touch-action: pan-x pan-y — le navigateur gère lui-même le
+     déplacement à un doigt, avec son inertie ; le pincement à deux
+     doigts est intercepté par nos gestionnaires d'événements pointeur.
+     overscroll-behavior: contain — un geste qui atteint le bord de la
+     zone ne déborde pas sur la page.
+     -------------------------------------------------------------- */
+  #dashboards-viewport { overflow: auto; overscroll-behavior: contain;
+    touch-action: pan-x pan-y; background: #26262e; }
   #dashboards-viewport svg { display: block; width: 100%; height: auto; }
-  /* 3 préréglages de zoom (retour de Mayrik) : carrés accolés en haut
-     droit de la zone dashboards. touch-action:auto : ce sont des
-     boutons normaux, jamais capturés par Panzoom (touch-action:none
-     du conteneur parent). */
-  #dashboards-zoom-presets { position: absolute; top: 0; right: 0; z-index: 10; display: flex; touch-action: auto; }
+  /* Sortis du conteneur défilant : à l'intérieur, ils défileraient avec
+     le contenu. Posés sur le coin haut-droit de la zone par
+     applyLayout(). */
+  #dashboards-zoom-presets { position: absolute; z-index: 10; display: flex; touch-action: auto; }
+  #dashboards-zoom-presets button.active { background: rgba(90,120,150,0.95); }
   #dashboards-zoom-presets button { width: 32px; height: 32px; background: rgba(30,30,36,0.85);
     border: 1px solid #555; color: #eee; font-size: 12px; font-weight: bold; cursor: pointer; padding: 0; }
   #dashboards-zoom-presets button + button { border-left: none; }
@@ -298,17 +283,18 @@
        (Panzoom), contenus à cette seule zone. Le double-tap/double-clic
        (voir ui-script.js) bascule x1/x4 ; les 3 boutons x1/x2/x4
        (retour de Mayrik) donnent en plus un accès direct à chaque
-       palier — ancrage natif de Panzoom (centré pour cet élément,
-       accepté tel quel). Dernier élément de la colonne flexible de
-       #wrap (retour de Mayrik) : se retrouve donc naturellement calé
-       tout en bas de l'écran disponible. -->
+       palier. Position et taille posées par applyLayout(). -->
   <div id="dashboards-viewport">
-    <div id="dashboards-zoom-presets">
-      <button type="button" data-zoom-preset="1">x1</button>
-      <button type="button" data-zoom-preset="2">x2</button>
-      <button type="button" data-zoom-preset="4">x4</button>
-    </div>
     <svg id="dashboards" viewBox="0 0 900 300"></svg>
+  </div>
+  <!-- Les préréglages de zoom sont SORTIS du conteneur : celui-ci
+       défile désormais nativement, et des boutons placés dedans
+       défileraient avec le contenu. applyLayout() les pose sur son coin
+       haut-droit. -->
+  <div id="dashboards-zoom-presets">
+    <button type="button" data-zoom-preset="1">x1</button>
+    <button type="button" data-zoom-preset="2">x2</button>
+    <button type="button" data-zoom-preset="4">x4</button>
   </div>
 
   <div id="panel"></div>

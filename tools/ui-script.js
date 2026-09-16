@@ -834,7 +834,7 @@ function renderDashboards() {
       // data-diceboard-die : accroche utilisée UNIQUEMENT par l'animation
       // de lancer en début de round (playRoundDiceRollAnimation) pour
       // retrouver la position écran réelle de CE dé précis (via
-      // getBoundingClientRect, qui tient compte du pan/zoom Panzoom
+      // getBoundingClientRect, qui tient compte du zoom et du défilement
       // automatiquement) — sans attribut, pas de comportement changé.
       const extra = (isClickable ? 'class="clickable" ' : "") + `data-diceboard-die="${playerName}:${i}"`;
       svg.insertAdjacentHTML("beforeend", dieMarkup(value, PLAYER_CAR_COLOR[playerName], dx, dy, DIE_DISPLAY_SIZE, extra, SLOT_ROTATION[slotKey]));
@@ -2597,9 +2597,8 @@ function setupBoardScroll() {
 // testée), et les recopie sur les éléments.
 //
 // RÈGLE À NE JAMAIS ENFREINDRE : cette couche dimensionne des
-// CONTENEURS, jamais l'élément transformé par Panzoom (#dashboards).
-// C'est la confusion des deux qui provoquait le décalage du zoom des
-// dashboards après un redimensionnement.
+// CONTENEURS. Le SVG des dashboards n'est dimensionné que par son
+// propre zoom (voir setDashboardsZoom), jamais par la mise en page.
 //
 // MODULES DÉCLARÉS PRÉSENTS : illustration, dicetrack et road die
 // n'existent pas encore dans le DOM — le moteur ne leur réserve donc
@@ -2671,8 +2670,17 @@ function applyLayout() {
   }
 
   // --- Dashboards : on ne pose QUE le conteneur. Le SVG à l'intérieur
-  //     appartient à Panzoom et garde sa mise à l'échelle par CSS. ---
-  place(document.getElementById("dashboards-viewport"), L.zones.dash0);
+  //     est dimensionné par son seul zoom (largeur en %), et le
+  //     défilement natif se recale tout seul. ---
+  const dashRect = L.zones.dash0;
+  place(document.getElementById("dashboards-viewport"), dashRect);
+  // Les boutons de zoom sont sortis du conteneur défilant : dedans, ils
+  // auraient défilé avec le contenu. On les pose sur son coin haut-droit.
+  const presets = document.getElementById("dashboards-zoom-presets");
+  if (presets && dashRect) {
+    presets.style.left = (dashRect.x + dashRect.w - presets.offsetWidth) + "px";
+    presets.style.top = dashRect.y + "px";
+  }
 }
 
 const BOARD_SLIDER_H = 18;
@@ -2716,184 +2724,150 @@ function updateRoundModule() {
 }
 
 // ===================================================================
-// ZONE 3 — Dashboards des joueurs : librement zoomables/déplaçables
-// (Panzoom, vendorisé — voir tools/panzoom.min.js), CONTENUS à cette
-// seule zone (retour de Mayrik : le pincement tactile du téléphone
-// zoomait toute la page avant ce correctif). initDashboardsPanzoom()
-// tourne une seule fois au démarrage ; updateDashboardsViewportHeight()
-// tourne à CHAQUE render() car le nombre de lignes (donc la hauteur du
-// contenu) dépend du nombre de joueurs.
+// ZONE 3 — Dashboards : zoom et déplacement
+//
+// PANZOOM A ÉTÉ RETIRÉ ICI. Ce n'était pas un défaut de la
+// bibliothèque : son option contain:"outside" garantit que le contenu
+// RECOUVRE son conteneur. Tant que la hauteur du conteneur était posée
+// égale à la hauteur naturelle du contenu, « recouvrir » et « tenir
+// dedans » étaient la même chose. Depuis que le moteur de mise en page
+// décide de cette hauteur, les deux divergent : au clic sur x1,
+// Panzoom appliquait scale(1,039) pour recouvrir 447 px de conteneur
+// avec 430 px de contenu, d'où 16 px de débordement à droite sur
+// téléphone. Le désaccord était structurel, pas accidentel.
+//
+// À LA PLACE : le défilement natif du navigateur, et un zoom qui change
+// simplement la LARGEUR du SVG.
+//   - le confinement devient structurel : on ne peut pas défiler
+//     au-delà du contenu, il n'y a plus rien à calculer ni à recaler
+//     après un redimensionnement ;
+//   - l'inertie du geste est celle du système, pas une décroissance
+//     exponentielle écrite à la main (une cinquantaine de lignes
+//     supprimées avec Panzoom) ;
+//   - le SVG est redessiné en vectoriel à sa nouvelle taille, donc le
+//     texte des cartes est NET à x4 — seule raison d'être du x4.
+// Mesuré : un changement de largeur coûte au pire 0,4 ms sur ce SVG, on
+// peut donc le committer à chaque image d'un pincement sans saccade
+// (pas besoin de la technique en deux temps transform/largeur).
 // ===================================================================
-let dashboardsPanzoom = null;
-function initDashboardsPanzoom() {
-  if (typeof Panzoom === "undefined") return; // filet de sécurité : jamais bloquant si la lib ne charge pas
-  try {
-    const svg = document.getElementById("dashboards");
-    // Retour à une base simple et éprouvée — l'API native de Panzoom,
-    // telle quelle, y compris son containment intégré ("outside") et
-    // son ancrage par défaut (centré pour cet élément — accepté tel
-    // quel, "si le zoom s'effectue au milieu, tant pis").
-    dashboardsPanzoom = Panzoom(svg, { maxScale: 4, minScale: 1, contain: "outside", canvas: true });
-    const viewport = document.getElementById("dashboards-viewport");
-    viewport.addEventListener("wheel", dashboardsPanzoom.zoomWithWheel);
+const DASH_ZOOM_MIN = 1, DASH_ZOOM_MAX = 4;
+const DASH_TAP_MS = 300, DASH_TAP_SLOP = 30;
+let dashZoom = 1;
 
-    // -----------------------------------------------------------
-    // Plus de distance parcourue par le glissement (retour de Mayrik :
-    // "je n'ai pas de chiffre exact, mais... x4"). Deux tentatives de
-    // multiplier le geste EN DIRECT (live) se sont révélées bancales :
-    //   1. Écouter panzoompan et corriger après coup : Panzoom suit le
-    //      pointeur de façon ABSOLUE depuis le début du geste, donc
-    //      chaque nouvel échantillon natif écrasait notre correction
-    //      précédente (zigzag).
-    //   2. noBind + relayer un événement "amplifié" à handleMove
-    //      (pourtant la méthode officiellement documentée pour étendre
-    //      Panzoom) : cassait sur "Illegal invocation" — un objet
-    //      construit par Object.create(événementRéel,...) n'est pas
-    //      accepté par les méthodes natives internes qui exigent le
-    //      VRAI objet Event, pas un simple héritier par prototype.
-    // Retour de Mayrik (bon rappel) : l'inertie mise en place la
-    // veille donnait déjà, elle, "plus d'ampleur au mouvement, avec un
-    // peu d'inertie" — et fonctionnait bien EN ELLE-MÊME. Le souci de
-    // l'époque venait d'ailleurs (un containment maison incohérent
-    // avec un transform-origin personnalisé, tous deux abandonnés
-    // depuis). Reprise ici telle quelle, mais plus simplement : le
-    // containment NATIF de Panzoom ("outside" ci-dessus, origine par
-    // défaut, sans rien de personnalisé) suffit maintenant à clamper
-    // correctement chaque pas de l'inertie, sans plus avoir besoin
-    // d'aucun calcul de limite fait maison.
-    //
-    // Méthode de référence "JavaScript Kinetic Scrolling" d'Ariya
-    // Hidayat (github.com/ariya/kinetic, source à laquelle remontent
-    // la plupart des bibliothèques de kinetic scrolling depuis 2013) :
-    // décroissance exponentielle de la vitesse après le relâché.
-    // panzoompan fournit x/y à chaque frame de panoramique ; on garde
-    // une petite fenêtre glissante de 200ms pour calculer la vitesse
-    // au relâché (panzoomend), plus robuste qu'un simple delta entre
-    // les 2 derniers échantillons. MOMENTUM_DISTANCE_MULTIPLIER
-    // amplifie la distance parcourue SANS ralentir la décélération
-    // elle-même (qui ne dépend que de timeConstant, pas de
-    // l'amplitude) — exactement le paramètre qu'Ariya Hidayat décrit
-    // lui-même comme volontairement ajustable pour la "sensation".
-    const KINETIC_TIME_CONSTANT = 325;
-    const MOMENTUM_DISTANCE_MULTIPLIER = 4;
-    let panSamples = [];
-    let momentumFrame = null;
-    function stopMomentum() {
-      if (momentumFrame) { cancelAnimationFrame(momentumFrame); momentumFrame = null; }
+function getDashboardsZoom() { return dashZoom; }
+
+// Applique un zoom en gardant sous le doigt (ou sous le curseur) le
+// point visé. Le rapport des défilements suffit : il ne dépend ni de la
+// taille du conteneur ni de l'apparition d'une barre de défilement.
+function setDashboardsZoom(next, anchor) {
+  const vp = document.getElementById("dashboards-viewport");
+  const svg = document.getElementById("dashboards");
+  if (!vp || !svg) return;
+  const target = Math.min(DASH_ZOOM_MAX, Math.max(DASH_ZOOM_MIN, next));
+  const rect = vp.getBoundingClientRect();
+  const ax = anchor ? anchor.clientX - rect.left : rect.width / 2;
+  const ay = anchor ? anchor.clientY - rect.top : rect.height / 2;
+  const k = target / dashZoom;
+  dashZoom = target;
+  svg.style.width = (target * 100) + "%";
+  vp.scrollLeft = (vp.scrollLeft + ax) * k - ax;
+  vp.scrollTop = (vp.scrollTop + ay) * k - ay;
+  updateDashboardsZoomButtons();
+}
+
+function updateDashboardsZoomButtons() {
+  document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
+    btn.classList.toggle("active", Number(btn.dataset.zoomPreset) === Math.round(dashZoom));
+  });
+}
+
+function initDashboardsZoom() {
+  const vp = document.getElementById("dashboards-viewport");
+  const svg = document.getElementById("dashboards");
+  if (!vp || !svg) return;
+  svg.style.width = "100%";
+
+  document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setDashboardsZoom(Number(btn.dataset.zoomPreset), null);
+    });
+  });
+
+  // Molette : zoom seulement avec Ctrl/Cmd (c'est aussi ce que le
+  // navigateur envoie pour un pincement sur pavé tactile). La molette
+  // seule fait défiler, comme partout ailleurs.
+  vp.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    setDashboardsZoom(dashZoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e);
+  }, { passive: false });
+
+  // --- Gestes : un seul flux d'événements pointeur pour la souris, le
+  // tactile et le stylet. Plus de touchend + dblclick en parallèle,
+  // donc plus de double déclenchement à rattraper avec preventDefault,
+  // un drapeau de garde et un écouteur non-passif — ce dernier
+  // empêchait d'ailleurs le défilement natif d'être fluide.
+  const pointers = new Map();
+  let pinchStartDist = 0, pinchStartZoom = 1;
+  let downAt = 0, downX = 0, downY = 0, moved = false;
+  // -Infinity et non 0 comme sentinelle « tap déjà consommé » : dans les
+  // 300 premières millisecondes de vie de la page, performance.now() - 0
+  // est lui-même sous le seuil, et un 3e tap serait pris pour le second
+  // d'un nouveau double-tap (défaut trouvé au test, pas à la relecture).
+  let lastTapAt = -Infinity, lastTapX = 0, lastTapY = 0;
+
+  const dist = () => {
+    const [a, b] = [...pointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  const mid = () => {
+    const [a, b] = [...pointers.values()];
+    return { clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 };
+  };
+
+  vp.addEventListener("pointerdown", (e) => {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) { pinchStartDist = dist(); pinchStartZoom = dashZoom; }
+    downAt = performance.now(); downX = e.clientX; downY = e.clientY; moved = false;
+  });
+
+  vp.addEventListener("pointermove", (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (Math.hypot(e.clientX - downX, e.clientY - downY) > 10) moved = true;
+    if (pointers.size === 2 && pinchStartDist > 0) {
+      // Pincement : on commite la largeur en direct (0,4 ms) plutôt que
+      // de passer par un transform provisoire — le texte reste net
+      // pendant tout le geste.
+      e.preventDefault();
+      setDashboardsZoom(pinchStartZoom * (dist() / pinchStartDist), mid());
     }
-    svg.addEventListener("panzoomstart", stopMomentum); // un nouveau geste coupe toujours le coast en cours
-    svg.addEventListener("panzoompan", (e) => {
-      const now = performance.now();
-      panSamples.push({ x: e.detail.x, y: e.detail.y, t: now });
-      panSamples = panSamples.filter((s) => now - s.t < 200);
-    });
-    svg.addEventListener("panzoomend", () => {
-      const samples = panSamples;
-      panSamples = [];
-      if (samples.length < 2) return;
-      const first = samples[0], last = samples[samples.length - 1];
-      const dt = last.t - first.t;
-      if (dt <= 0) return;
-      const vx = (last.x - first.x) / dt, vy = (last.y - first.y) / dt; // px/ms
-      const speed = Math.hypot(vx, vy);
-      if (speed < 0.05) return; // relâché trop lentement -> pas de coast, juste s'arrêter
-      const startX = last.x, startY = last.y;
-      const ampX = vx * KINETIC_TIME_CONSTANT * MOMENTUM_DISTANCE_MULTIPLIER;
-      const ampY = vy * KINETIC_TIME_CONSTANT * MOMENTUM_DISTANCE_MULTIPLIER;
-      const startTime = performance.now();
-      function step() {
-        const elapsed = performance.now() - startTime;
-        const decay = Math.exp(-elapsed / KINETIC_TIME_CONSTANT); // calculé UNE fois, réutilisé pour la position ET la vitesse restante (mathématiquement liées : factor = 1 - decay)
-        // Containment NATIF de Panzoom (pas de calcul maison) : appelé
-        // normalement, comme n'importe quel autre pan() programmatique
-        // — sa propre logique "outside" s'applique, cohérente cette
-        // fois puisque l'origine n'est plus modifiée.
-        dashboardsPanzoom.pan(startX + ampX * (1 - decay), startY + ampY * (1 - decay), { animate: false });
-        const remainingSpeed = speed * decay;
-        momentumFrame = remainingSpeed > 0.02 ? requestAnimationFrame(step) : null;
-      }
-      momentumFrame = requestAnimationFrame(step);
-    });
+  }, { passive: false });
 
-    // 3 préréglages de zoom (x1/x2/x4) : simple appel à l'API native,
-    // sans tentative de calage particulière — le bouton x1 sert aussi
-    // de retour à l'affichage complet, plus besoin d'un geste dédié.
-    document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        stopMomentum();
-        dashboardsPanzoom.zoom(Number(btn.dataset.zoomPreset), { animate: false });
-      });
-    });
-
-    // -----------------------------------------------------------
-    // Double-tap / double-clic (retour de Mayrik : gardé — "fonctionne
-    // vraiment bien et est naturel pour un utilisateur de téléphone",
-    // contrairement au calage précis/inertie mis de côté juste avant).
-    // Bascule x1 -> x4 (zoomToPoint, CENTRÉ SUR LE POINT TAPÉ — API
-    // native de Panzoom, aucun calcul de position personnalisé) ; >x1
-    // -> reset() (retour natif à l'affichage complet, ancrage par
-    // défaut de Panzoom, accepté tel quel). Un vrai TAP (déplacement
-    // < 10px entre touchstart et touchend, jamais un glissé de
-    // panoramique) suivi d'un second dans les 350ms et à moins de 30px
-    // du premier -> bascule. `dblclick` natif couvre la souris
-    // séparément.
-    //
-    // BUG CORRIGÉ (retour de Mayrik, usage réel) : sur tactile, un
-    // touchend déclenche ENSUITE un click puis un dblclick SYNTHÉTIQUES
-    // (comportement standard des navigateurs mobiles, documenté —
-    // c'est la raison d'être historique de bibliothèques comme
-    // FastClick) — sans protection, la bascule se déclenchait deux
-    // fois pour un seul geste physique (une fois via ce gestionnaire
-    // touchend, une fois via le dblclick synthétique juste après),
-    // annulant l'effet visuel l'une de l'autre. Double protection
-    // éprouvée : preventDefault() sur le touchend qui bascule (coupe
-    // le click/dblclick synthétique à la source — nécessite
-    // passive:false, sinon preventDefault() est silencieusement
-    // ignoré) + un drapeau de garde côté dblclick en filet de
-    // sécurité (au cas où un navigateur ne respecterait pas le
-    // preventDefault, cross-browser oblige).
-    let ignoreNextDblclickUntil = 0;
-    function toggleZoomAt(point) {
-      stopMomentum();
-      const scale = dashboardsPanzoom.getScale();
-      if (scale > 1.01) dashboardsPanzoom.reset();
-      else dashboardsPanzoom.zoomToPoint(4, point);
+  const release = (e) => {
+    const wasPinching = pointers.size === 2;
+    pointers.delete(e.pointerId);
+    if (wasPinching) { pinchStartDist = 0; return; } // fin de pincement : jamais un tap
+    if (pointers.size > 0 || moved) return;
+    if (performance.now() - downAt > 250) return;    // appui long : pas un tap
+    const now = performance.now();
+    if (now - lastTapAt < DASH_TAP_MS &&
+        Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY) < DASH_TAP_SLOP) {
+      // Double-tap (retour de Mayrik) : x1 -> x4, sinon retour à x1.
+      // Le x4 n'est pas un confort mais la seule façon de lire une carte
+      // sur téléphone, il doit rester atteignable en un geste.
+      setDashboardsZoom(dashZoom > 1.01 ? 1 : DASH_ZOOM_MAX,
+                        { clientX: e.clientX, clientY: e.clientY });
+      lastTapAt = -Infinity;
+    } else {
+      lastTapAt = now; lastTapX = e.clientX; lastTapY = e.clientY;
     }
-    viewport.addEventListener("dblclick", (e) => {
-      if (Date.now() < ignoreNextDblclickUntil) return; // déjà déclenché via le double-tap tactile ci-dessous
-      toggleZoomAt(e);
-    });
-    let tapStartX = 0, tapStartY = 0, lastTapTime = 0, lastTapX = 0, lastTapY = 0;
-    viewport.addEventListener("touchstart", (e) => {
-      const t = e.touches[0];
-      if (t) { tapStartX = t.clientX; tapStartY = t.clientY; }
-    }, { passive: true });
-    viewport.addEventListener("touchend", (e) => {
-      const t = e.changedTouches[0];
-      if (!t) return;
-      const movedDuringTouch = Math.hypot(t.clientX - tapStartX, t.clientY - tapStartY);
-      if (movedDuringTouch > 10) return; // glissé (panoramique), pas un tap
-      const now = Date.now();
-      const distFromLastTap = Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY);
-      if (now - lastTapTime < 350 && distFromLastTap < 30) {
-        e.preventDefault(); // coupe le click/dblclick synthétique qui suivrait sinon
-        ignoreNextDblclickUntil = now + 400; // filet de sécurité si preventDefault est ignoré
-        toggleZoomAt({ clientX: t.clientX, clientY: t.clientY });
-        lastTapTime = 0; // absorbe un éventuel 3e tap rapide
-      } else {
-        lastTapTime = now;
-        lastTapX = t.clientX;
-        lastTapY = t.clientY;
-      }
-    }, { passive: false }); // requis pour que preventDefault() ci-dessus ait un effet réel
-  } catch (e) {
-    // Best-effort : le zoom/déplacement de la zone dashboards est un
-    // confort, jamais une dépendance dure — une IA/un environnement où
-    // Panzoom échouerait à s'initialiser (ex. requestAnimationFrame
-    // absent, comme dans jsdom) ne doit jamais empêcher le jeu de
-    // fonctionner par ailleurs.
-    dashboardsPanzoom = null;
-  }
+  };
+  vp.addEventListener("pointerup", release);
+  vp.addEventListener("pointercancel", (e) => { pointers.delete(e.pointerId); pinchStartDist = 0; });
+
+  updateDashboardsZoomButtons();
 }
 
 // Cale la hauteur du conteneur pour cadrer EXACTEMENT l'ensemble des
@@ -3172,7 +3146,7 @@ function render() {
 // une seule fois ici, jamais répété dans render() (contrairement à
 // setupBoardScroll()/updateDashboardsViewportHeight(), rappelées à
 // chaque rendu — voir leurs commentaires respectifs).
-initDashboardsPanzoom();
+initDashboardsZoom();
 
 // Bouton plein écran (retour de Mayrik : voir le rendu réel sans la
 // barre d'adresse du navigateur, en attendant une vraie installation

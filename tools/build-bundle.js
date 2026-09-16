@@ -113,34 +113,14 @@ console.log("Bundle écrit :", outPath, "(" + bundle.length + " octets)");
 // à le faire à la main à chaque régénération.
 const templatePath = path.join(__dirname, "template.html");
 const uiScriptPath = path.join(__dirname, "ui-script.js");
-const panzoomPath = path.join(__dirname, "panzoom.min.js");
 if (fs.existsSync(templatePath) && fs.existsSync(uiScriptPath)) {
   const template = fs.readFileSync(templatePath, "utf8");
   const uiScript = fs.readFileSync(uiScriptPath, "utf8");
-  // Panzoom (retour de Mayrik, zoom/défilement de la zone 3) : petite
-  // bibliothèque tierce (~3.7ko gzippé, zéro dépendance, gère
-  // nativement SVG + pincement tactile) vendorisée ici plutôt que
-  // chargée depuis un CDN externe — cohérent avec le reste du projet
-  // (tout tient dans un seul fichier autonome, aucune dépendance
-  // réseau au chargement).
-  //
-  // BUG CORRIGÉ (incident réel) : ce chargement était auparavant
-  // silencieusement tolérant (`fs.existsSync(...) ? ... : ""`), donc un
-  // panzoom.min.js absent produisait un prototype.html PARFAITEMENT
-  // FONCTIONNEL EN APPARENCE mais amputé de tout le zoom des
-  // dashboards (3 boutons x1/x2/x4 + double-tap morts), sans le
-  // moindre message au build ni erreur JS au chargement — le mode
-  // d'échec le plus coûteux à diagnostiquer. Le fichier est une
-  // dépendance obligatoire du prototype : son absence doit arrêter le
-  // build bruyamment, jamais produire un livrable dégradé.
-  if (!fs.existsSync(panzoomPath)) {
-    throw new Error(
-      "tools/panzoom.min.js introuvable — le prototype serait assemblé SANS Panzoom " +
-      "(zoom des dashboards silencieusement mort, aucune erreur visible à l'exécution). " +
-      "Récupérer le fichier avant de reconstruire."
-    );
-  }
-  const panzoomSrc = fs.readFileSync(panzoomPath, "utf8");
+  // Panzoom N'EST PLUS inclus : le zoom/déplacement des dashboards repose
+// désormais sur le défilement natif du navigateur (voir ui-script.js).
+// Le fichier tools/panzoom.min.js reste dans le dépôt mais n'est plus
+// injecté nulle part — plus aucune ligne du jeu ne l'appelle.
+const panzoomSrc = "";
   const finalHtml = template.replace("__ENGINE_BUNDLE__", bundle).replace("__UI_SCRIPT__", uiScript).replace("__PANZOOM_BUNDLE__", panzoomSrc);
   const finalPath = path.join(__dirname, "prototype.html");
   fs.writeFileSync(finalPath, finalHtml);
