@@ -57,7 +57,7 @@ console.log("#board-position-slider existe (zone 1) (attendu true) :", !!doc.get
 console.log("#info-band existe (zone 2) (attendu true) :", !!doc.getElementById("info-band"));
 console.log("#dashboards-viewport existe (zone 3) (attendu true) :", !!doc.getElementById("dashboards-viewport"));
 console.log("#board est bien DANS #board-viewport (attendu true) :", doc.getElementById("board-viewport").contains(doc.getElementById("board")));
-console.log("#dashboards est bien DANS #dashboards-viewport (attendu true) :", doc.getElementById("dashboards-viewport").contains(doc.getElementById("dashboards")));
+console.log("#dashboards-rail est bien DANS #dashboards-viewport (attendu true) :", doc.getElementById("dashboards-viewport").contains(doc.getElementById("dashboards-rail")));
 
 section("Test 2 — Zone 1 : le plateau est calé par la HAUTEUR — ses 6 rangées tiennent toujours dans sa fenêtre");
 
@@ -159,21 +159,25 @@ stubBox(doc5.getElementById("wrap"), { clientWidth: 412, clientHeight: 915 });
 win.eval("applyLayout()");
 const L5 = win.eval("lastLayout");
 const dashViewport5 = doc5.getElementById("dashboards-viewport");
-const dashSvg5 = doc5.getElementById("dashboards");
-console.log("La hauteur du conteneur correspond au rectangle calculé par le moteur (attendu true) :",
-  Math.abs(parseFloat(dashViewport5.style.height) - L5.zones.dash0.h) < 1);
-console.log("Au moins 2 dashboards tiennent dans cette hauteur (attendu true) :",
-  L5.zones.dash0.h >= 2 * (L5.zones.dash0.w / (871 / 234)) - 1);
+const dashSvg5 = doc5.getElementById("dashboards-rail");
+// RAIL : le moteur rend un rectangle PAR JOUEUR visible ; le conteneur
+// prend leur boîte englobante, et les joueurs restants sont atteints
+// par défilement.
+const rangees5 = Object.values(L5.zones).filter((z) => z && z.id && /^dash\d+$/.test(z.id));
+const hautEnglobante5 = Math.max(...rangees5.map((r) => r.y + r.h)) - Math.min(...rangees5.map((r) => r.y));
+console.log("La hauteur du conteneur correspond à la boîte englobante des rangées (attendu true) :",
+  Math.abs(parseFloat(dashViewport5.style.height) - hautEnglobante5) < 1);
+console.log("Au moins 2 dashboards sont placés par le moteur (attendu true) :", rangees5.length >= 2);
 // RÈGLE CLÉ : la mise en page dimensionne des CONTENEURS, jamais
 // l'élément transformé par Panzoom — c'est la confusion des deux qui
 // décalait le zoom après un redimensionnement.
 // La mise en page ne pose QUE le conteneur. La largeur du SVG
 // n'appartient qu'au zoom (voir setDashboardsZoom), sa hauteur découle
 // du rapport d'aspect — jamais de la mise en page.
-console.log("La mise en page ne fixe jamais la hauteur du SVG des dashboards (attendu true) :",
-  dashSvg5.style.height === "");
-console.log("La largeur du SVG n'est portée que par le zoom, à 100% au repos (attendu true) :",
-  dashSvg5.style.width === "100%");
+console.log("La mise en page ne fixe jamais les dimensions des rangées (attendu true) :",
+  [...dashSvg5.children].every((el) => el.style.width === "" && el.style.height === ""));
+console.log("Le zoom vit sur le rail, à x1 au repos (attendu true) :",
+  dashSvg5.style.getPropertyValue("--dash-zoom") === "1");
 
 section("Test 6 — Zone 3 : le zoom repose sur le défilement NATIF, sans bibliothèque");
 
@@ -186,9 +190,9 @@ section("Test 6 — Zone 3 : le zoom repose sur le défilement NATIF, sans bibli
 // du contenu, il n'y a plus rien à recalculer après un redimensionnement.
 console.log("Plus aucune dépendance Panzoom dans la page (attendu true) :", typeof win.Panzoom === "undefined");
 console.log("Le zoom démarre bien à x1 (attendu true) :", win.eval("getDashboardsZoom()") === 1);
-console.log("Le SVG porte sa largeur de repos, sans transform (attendu true) :",
-  dom.window.document.getElementById("dashboards").style.width === "100%" &&
-  dom.window.document.getElementById("dashboards").style.transform === "");
+console.log("Le rail porte le zoom au repos, sans transform (attendu true) :",
+  dom.window.document.getElementById("dashboards-rail").style.getPropertyValue("--dash-zoom") === "1" &&
+  dom.window.document.getElementById("dashboards-rail").style.transform === "");
 const dashCss6 = dom.window.getComputedStyle(dom.window.document.getElementById("dashboards-viewport"));
 console.log("Le conteneur défile nativement (attendu true) :", dashCss6.overflow === "auto");
 console.log("...avec le déplacement à un doigt laissé au navigateur, donc son inertie système (attendu true) :",
@@ -263,8 +267,9 @@ const clickPreset11 = (v) => presetBtns11.find((b) => b.dataset.zoomPreset === S
   .dispatchEvent(new win.Event("click", { bubbles: true }));
 [2, 4, 1].forEach((v) => {
   clickPreset11(v);
-  console.log("Cliquer sur x" + v + " règle le zoom à " + v + " et la largeur du SVG à " + v * 100 + "% (attendu true) :",
-    win.eval("getDashboardsZoom()") === v && doc11.getElementById("dashboards").style.width === (v * 100) + "%");
+  console.log("Cliquer sur x" + v + " règle le zoom à " + v + ", porté par le rail (attendu true) :",
+    win.eval("getDashboardsZoom()") === v &&
+    doc11.getElementById("dashboards-rail").style.getPropertyValue("--dash-zoom") === String(v));
 });
 clickPreset11(4);
 console.log("Le bouton actif est bien mis en évidence (attendu true) :",
@@ -314,7 +319,15 @@ const vp13 = doc13.getElementById("dashboards-viewport");
 vp13.scrollLeft = 120;
 vp13.scrollTop = 80;
 console.log("La position de lecture vit sur le conteneur, pas sur un transform (attendu true) :",
-  doc13.getElementById("dashboards").style.transform === "");
+  doc13.getElementById("dashboards-rail").style.transform === "");
+// Le rail place une rangée par joueur, et le joueur actif est ramené à
+// l'écran : sans pastille de couleur, c'est ce recentrage qui indique
+// seul à qui est le tour quand tout le monde ne tient pas.
+const rail13 = doc13.getElementById("dashboards-rail");
+console.log("Le rail contient bien une rangée par joueur (attendu true) :",
+  rail13.children.length === win.eval("currentDashboardRowOrder().length"));
+console.log("Chaque rangée est identifiée par son joueur (attendu true) :",
+  [...rail13.children].every((el) => !!el.dataset.dashRow));
 // Zoomer conserve le point visé : les défilements suivent le rapport
 // d'échelle, indépendamment de la taille du conteneur.
 win.eval("setDashboardsZoom(2, null)");
@@ -357,17 +370,17 @@ console.log("#log reste bien masqué (retour de Mayrik : c'était la vraie cause
   dom.window.getComputedStyle(dom.window.document.getElementById("log")).display === "none");
 
 // BUG CORRIGÉ (retour de Mayrik : marge indésirable sous le dernier
-// command board) : l'écart ne doit s'appliquer qu'ENTRE les rangées,
-// jamais après la dernière. Vérifie la formule exacte plutôt que la
-// seule valeur numérique, pour rester juste si le nombre de joueurs
-// ou les dimensions des rangées changent.
+// command board) : il fallait alors vérifier que l'écart ne
+// s'appliquait qu'ENTRE les rangées d'un SVG unique. Avec le rail, la
+// question ne se pose plus : chaque rangée est un SVG d'exactement une
+// rangée de haut, et l'écart est celui de la grille CSS, qui par
+// construction ne s'ajoute jamais après la dernière. On vérifie donc
+// la nouvelle propriété équivalente.
 const rowBBoxH14 = win.eval("ROW_BBOX.h");
-const rowGap14 = win.eval("PLAYER_ROW_GAP");
-const orderLength14 = win.eval("PLAYER_NAMES.length"); // nombre de rangées affichées (1 humain + IA)
-const expectedTotalH14 = orderLength14 * (rowBBoxH14 + rowGap14) - rowGap14;
-const actualViewBoxH14 = Number(dom.window.document.getElementById("dashboards").getAttribute("viewBox").split(" ")[3]);
-console.log("Le viewBox des dashboards a bien la hauteur exacte (N*(h+écart) - écart, jamais + écart) (attendu true) :",
-  Math.abs(actualViewBoxH14 - expectedTotalH14) < 0.01);
+const rangees14 = [...dom.window.document.getElementById("dashboards-rail").children];
+console.log("Chaque rangée fait exactement une rangée de haut, donc aucun écart parasite (attendu true) :",
+  rangees14.length > 0 && rangees14.every((el) =>
+    Math.abs(Number(el.getAttribute("viewBox").split(" ")[3]) - rowBBoxH14) < 0.01));
 
 console.log("Les marges de secours (retirées : colonne flexible pleine hauteur, plus de défilement de page à rattraper) restent bien absentes (attendu true) :",
   dom.window.document.querySelectorAll("#dashboards-margin").length === 0);

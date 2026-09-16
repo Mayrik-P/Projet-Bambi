@@ -14,7 +14,7 @@ const html = fs.readFileSync(path.join(__dirname, "tools", "prototype.html"), "u
 
 function section(title) { console.log("\n=== " + title + " ==="); }
 function makeDom() { return new JSDOM(html, { runScripts: "dangerously", resources: "usable" }); }
-function dashboardClickables(dom) { return [...dom.window.document.querySelectorAll("#dashboards .clickable")]; }
+function dashboardClickables(dom) { return [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")]; }
 function click(dom, el) { el.dispatchEvent(new dom.window.Event("click", { bubbles: true })); }
 
 section("Test 1 — Mode ASSIGN : clic sur un dé du diceboard puis sur le slot ANY d'un véhicule");
@@ -101,7 +101,7 @@ console.log("sel.car pointe vers le véhicule small (attendu true) :", sel.car =
 console.log("Coast -> jamais de Command -> commit AUTOMATIQUE, mouvement déjà démarré (attendu true) :", sel.step === "move-step" || sel.step === "entry-row");
 
 win.render();
-const dashboardsHtml = dom.window.document.getElementById("dashboards").innerHTML;
+const dashboardsHtml = dom.window.document.getElementById("dashboards-rail").innerHTML;
 console.log("Le dé posé sur le slot COAST est bien tourné à 45° (attendu true) :", dashboardsHtml.includes("rotate(45"));
 
 section("Test 3 — Non-régression : pendant le tour de l'IA, aucun élément du diceboard humain n'est cliquable");
@@ -182,7 +182,7 @@ twoDmg.damageTokens = ["dent", "shrapnel"];
 G.allCars.push(noDmg, oneDmg, twoDmg);
 win.render();
 
-const dashboardsEl = dom.window.document.getElementById("dashboards");
+const dashboardsEl = dom.window.document.getElementById("dashboards-rail");
 const dmgCount = [...dashboardsEl.querySelectorAll("image")].filter((img) => img.getAttribute("href").includes("damage-front.webp")).length;
 console.log("Exactement 3 images damage-front.webp au total (0 pour SMALL + 1 pour MEDIUM + 2 pour LARGE) (attendu true) :", dmgCount === 3);
 console.log("Aucun type de dégât révélé dans le rendu (dent/shrapnel) (attendu true) :", !dashboardsEl.innerHTML.includes("damage-dent") && !dashboardsEl.innerHTML.includes("damage-shrapnel"));
@@ -229,7 +229,7 @@ console.log("Drift n'a pas de sous-étape -> commit AUTOMATIQUE, mouvement déj�
 console.log("sel.command bien construit (attendu true) :", sel.command && sel.command.type === "drift" && sel.command.dieValue === 3);
 
 win.render();
-const dashHtml7 = dom.window.document.getElementById("dashboards").innerHTML;
+const dashHtml7 = dom.window.document.getElementById("dashboards-rail").innerHTML;
 console.log("Le dé de Command (tourné 45°) est visible sur le command board (attendu true) :", dashHtml7.includes("rotate(45"));
 
 section("Test 8 — Command board : Repair (die 6) — clic sur un jeton dégât visible");
@@ -268,9 +268,9 @@ sel = win.eval("sel");
 console.log("Étape passée à 'repair-target' (attendu true) :", sel.step === "repair-target");
 
 win.render();
-const repairClickables = [...dom.window.document.querySelectorAll("#dashboards .clickable")].filter((el) => el.tagName === "image");
+const repairClickables = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")].filter((el) => el.tagName === "image");
 console.log("1 jeton dégât cliquable (celui du véhicule medium) (attendu true) :", repairClickables.length === 1);
-console.log("Un halo vert (#b0d458) est visible derrière le jeton réparable (attendu true) :", dom.window.document.getElementById("dashboards").innerHTML.includes('fill="#b0d458"'));
+console.log("Un halo vert (#b0d458) est visible derrière le jeton réparable (attendu true) :", dom.window.document.getElementById("dashboards-rail").innerHTML.includes('fill="#b0d458"'));
 
 click(dom, repairClickables[0]);
 sel = win.eval("sel");
@@ -314,7 +314,7 @@ sel = win.eval("sel");
 console.log("Étape passée à 'repair-target' (attendu true) :", sel.step === "repair-target");
 
 win.render();
-const repairImgs = [...dom.window.document.querySelectorAll("#dashboards image.clickable")];
+const repairImgs = [...dom.window.document.querySelectorAll("#dashboards-rail image.clickable")];
 console.log("2 jetons cliquables (gauche + droite) (attendu true) :", repairImgs.length === 2);
 
 // Clique le 2e (droite, "shrapnel" d'après les positions initiales).
@@ -494,7 +494,7 @@ G.roundState.dicePool[HUMAN] = [4, 3, 3, 1];
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.resetSelection();
 win.render();
-const dashHtml14 = dom.window.document.getElementById("dashboards").innerHTML;
+const dashHtml14 = dom.window.document.getElementById("dashboards-rail").innerHTML;
 console.log("Un halo vert (#b0d458) est présent sur le diceboard (attendu true) :", dashHtml14.includes('stroke="#b0d458"'));
 
 section("Test 15 — Bug réel trouvé par Mayrik : un dé cliquable ne doit JAMAIS avoir pointer-events=none sur ses images internes");
@@ -509,12 +509,12 @@ G.roundState.dicePool[HUMAN] = [4, 3, 3, 1];
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.resetSelection();
 win.render();
-const clickableDieGroup = [...dom.window.document.querySelectorAll("#dashboards g.clickable")][0];
+const clickableDieGroup = [...dom.window.document.querySelectorAll("#dashboards-rail g.clickable")][0];
 const innerImgsWithPE = [...clickableDieGroup.querySelectorAll("image")].filter((img) => img.getAttribute("pointer-events") === "none");
 console.log("Aucune image interne du dé cliquable n'a pointer-events=none (attendu true) :", innerImgsWithPE.length === 0);
 console.log("Le halo vert du diceboard fait EXACTEMENT la taille d'un dé, même style que les autres surbrillances (bordure + remplissage) (attendu true) :",
   (() => {
-    const halo = [...dom.window.document.querySelectorAll("#dashboards rect")].find((r) => r.getAttribute("stroke") === "#b0d458" && r.getAttribute("fill") === "#b0d458" && parseFloat(r.getAttribute("width")).toFixed(1) === win.eval("DIE_DISPLAY_SIZE").toFixed(1));
+    const halo = [...dom.window.document.querySelectorAll("#dashboards-rail rect")].find((r) => r.getAttribute("stroke") === "#b0d458" && r.getAttribute("fill") === "#b0d458" && parseFloat(r.getAttribute("width")).toFixed(1) === win.eval("DIE_DISPLAY_SIZE").toFixed(1));
     return !!halo;
   })());
 
@@ -543,7 +543,7 @@ G = win.eval("G");
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
 win.render();
 const panelHtml17 = dom.window.document.getElementById("panel").innerHTML;
-const dashHtml17 = dom.window.document.getElementById("dashboards").innerHTML;
+const dashHtml17 = dom.window.document.getElementById("dashboards-rail").innerHTML;
 console.log("Le panneau texte ne contient plus le bouton (attendu true) :", !panelHtml17.includes("Play the AI's turn"));
 console.log("Le bouton est bien présent sur les dashboards, dans un foreignObject (attendu true) :",
   dashHtml17.includes("Play the AI's turn") && dashHtml17.includes("foreignObject"));
@@ -609,7 +609,7 @@ const opt19 = win.getMovementStepOptions(win.board(), s19, 1, G.allCars)[0];
 win.pickMoveStep(opt19);
 win.render();
 console.log("Le tour est bien terminé (sel réinitialisé) (attendu true) :", win.eval("sel").car === undefined);
-const dashHtml19 = dom.window.document.getElementById("dashboards").innerHTML;
+const dashHtml19 = dom.window.document.getElementById("dashboards-rail").innerHTML;
 const etSlots = win.eval("endTurnDieState");
 console.log("endTurnDieState contient bien une entrée pour ce véhicule (attendu true) :", !!etSlots[s19.id] && etSlots[s19.id].dieValue === 1);
 console.log("Un dé est bien rendu sur le dashboard (die-move visible) (attendu true) :", dashHtml19.includes("die-move-"));
@@ -678,10 +678,10 @@ G.roundState.roundNumber = 1;
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.resetSelection();
 win.render();
-let clickables22 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+let clickables22 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
 clickables22[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
 win.render();
-clickables22 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables22 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
 clickables22[0].dispatchEvent(new win.Event("click", { bubbles: true })); // coast slot
 sel = win.eval("sel");
 const opt22 = win.getMovementStepOptions(win.board(), sel.car, sel.remaining, G.allCars)[0];
@@ -691,7 +691,7 @@ sel = win.eval("sel");
 console.log("Le tour est bien terminé (sel réinitialisé) (attendu true) :", sel.car === undefined);
 const cdState = win.eval("coastDieState");
 console.log("coastDieState contient bien une entrée pour ce véhicule, stockée sur coast2 (prioritaire, retour de Mayrik) (attendu true) :", !!cdState[s22.id] && cdState[s22.id].slots[1] === 4);
-const dashHtml22 = dom.window.document.getElementById("dashboards").innerHTML;
+const dashHtml22 = dom.window.document.getElementById("dashboards-rail").innerHTML;
 console.log("Un dé est bien rendu sur le dashboard après la fin du tour (attendu true) :", dashHtml22.includes("die-move-"));
 
 section("Test 23 — Marqueurs dégât/inopérable : 75% de la taille, centrés verticalement, calés contre le bord gauche du véhicule");
@@ -750,10 +750,10 @@ win.resetSelection();
 win.render();
 
 // --- 1er Coast complet sur s25 ---
-let clickables25 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+let clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
 clickables25[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
 win.render();
-clickables25 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
 const s25Rect = clickables25[0]; // small en 1er dans l'ordre de rendu
 s25Rect.dispatchEvent(new win.Event("click", { bubbles: true }));
 sel = win.eval("sel");
@@ -769,14 +769,14 @@ sel = win.eval("sel");
 console.log("Bien de retour à l'étape 'die' pour le tour suivant (attendu true) :", sel.step === "die");
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN); // on saute le tour de l'IA, hors-sujet ici
 win.render();
-clickables25 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
 clickables25[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie (dernier dé)
 win.render();
 const ctx25 = win.eval("currentTurnContext()");
 console.log("Mode bien 'coast', s25 toujours éligible (coastCount=1 < 2) (attendu true) :",
   ctx25.mode === "coast" && ctx25.coastableCars.includes(s25));
 
-clickables25 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
 const s25Rect2 = clickables25.find((r) => true); // s25 est le seul restant possible ici selon le setup
 s25Rect2.dispatchEvent(new win.Event("click", { bubbles: true }));
 sel = win.eval("sel");
@@ -850,9 +850,16 @@ G = win.eval("G");
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
 win.eval("G.aiAnimating = true;");
 win.render();
-const dashSvg28 = dom.window.document.getElementById("dashboards");
-const lastChild28 = dashSvg28.lastElementChild;
-console.log("Le bouton (foreignObject) est bien le DERNIER élément du SVG (au-dessus de tout) (attendu true) :", lastChild28.tagName.toLowerCase() === "foreignobject");
+// STRUCTURE CHANGÉE (rail) : le bouton appartient au SVG de la rangée
+// du joueur concerné, pas à un SVG unique. Il doit être le dernier
+// élément DE CETTE rangée — c'est ce qui le garde au-dessus de tout.
+const rail28 = dom.window.document.getElementById("dashboards-rail");
+const rowAvecBouton28 = [...rail28.children].find((el) => el.querySelector("foreignObject"));
+const lastChild28 = rowAvecBouton28.lastElementChild;
+console.log("Le bouton (foreignObject) est bien le DERNIER élément de sa rangée (au-dessus de tout) (attendu true) :",
+  lastChild28.tagName.toLowerCase() === "foreignobject");
+console.log("Le bouton est bien dans la rangée du joueur qui doit jouer (attendu true) :",
+  rowAvecBouton28.dataset.dashRow === OPPONENT);
 const btn28 = lastChild28.querySelector("button");
 console.log("border-radius appliqué explicitement en inline (4 coins identiques) (attendu true) :", (btn28.getAttribute("style") || "").includes("border-radius:6px"));
 console.log("opacity:1 explicite malgré disabled (plus de grisage pendant que l'IA joue) (attendu true) :", (btn28.getAttribute("style") || "").includes("opacity:1"));
@@ -877,10 +884,10 @@ G.roundState.dicePool[HUMAN] = [4];
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.resetSelection();
 win.render();
-let clickables29 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+let clickables29 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
 clickables29[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
 win.render();
-clickables29 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+clickables29 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
 clickables29[0].dispatchEvent(new win.Event("click", { bubbles: true })); // slot coast1 de s29 (toujours coast1, retour de Mayrik)
 win.render();
 
@@ -892,9 +899,9 @@ const DIE29 = win.eval("DIE_DISPLAY_SIZE");
 const coast1X29 = dimX29 + frac29.coast1.x * box29.w - DIE29 / 2;
 const coast1Y29 = dimY29 + frac29.coast1.y * box29.h - DIE29 / 2;
 
-const dashHtml29 = dom.window.document.getElementById("dashboards").innerHTML;
+const dashHtml29 = dom.window.document.getElementById("dashboards-rail").innerHTML;
 console.log("Un dé est bien rendu quelque part sur le dashboard (attendu true) :", dashHtml29.includes("die-move-"));
-const postDieEl29 = [...dom.window.document.querySelectorAll("#dashboards g")].find((g) => {
+const postDieEl29 = [...dom.window.document.querySelectorAll("#dashboards-rail g")].find((g) => {
   const img = g.querySelector("image");
   return img && Math.abs(parseFloat(img.getAttribute("x")) - coast1X29) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - coast1Y29) < 1;
 });
@@ -959,8 +966,8 @@ const roundStartPlayer32 = G.roundState.playerOrder[G.roundState.roundStartIndex
 console.log("1er joueur de ce round (pour référence) :", roundStartPlayer32);
 win.render();
 
-const dashHtml32 = dom.window.document.getElementById("dashboards").innerHTML;
-const roadDieImgs32 = [...dom.window.document.querySelectorAll("#dashboards image")].filter((el) => el.getAttribute("href").includes("die-fx-road-2.webp"));
+const dashHtml32 = dom.window.document.getElementById("dashboards-rail").innerHTML;
+const roadDieImgs32 = [...dom.window.document.querySelectorAll("#dashboards-rail image")].filter((el) => el.getAttribute("href").includes("die-fx-road-2.webp"));
 console.log("Le dé Road (die-fx-road-2) est bien affiché (attendu true) :", roadDieImgs32.length === 1);
 console.log("...UNE SEULE FOIS (retour de Mayrik : plus sur les deux lignes) (attendu true) :", roadDieImgs32.length === 1);
 console.log("...à la taille normale des autres dés (DIE_DISPLAY_SIZE, pas MARKER_ICON_SIZE) (attendu true) :",
@@ -969,7 +976,7 @@ console.log("...à la taille normale des autres dés (DIE_DISPLAY_SIZE, pas MARK
 // Retrouve dynamiquement la position réelle du dashboard SMALL du 1er
 // joueur du round (plutôt que de supposer qu'il est en ligne 0).
 const roundStartColor32 = win.eval(`PLAYER_CAR_COLOR["${roundStartPlayer32}"]`);
-const smallImg32 = [...dom.window.document.querySelectorAll("#dashboards image")].find((el) => (el.getAttribute("href") || "").includes(`dashboard-${roundStartColor32}-small`));
+const smallImg32 = [...dom.window.document.querySelectorAll("#dashboards-rail image")].find((el) => (el.getAttribute("href") || "").includes(`dashboard-${roundStartColor32}-small`));
 const smallX32 = parseFloat(smallImg32.getAttribute("x")), smallY32 = parseFloat(smallImg32.getAttribute("y"));
 const smallW32 = parseFloat(smallImg32.getAttribute("width")), smallH32 = parseFloat(smallImg32.getAttribute("height"));
 const frac32 = win.eval("ROAD_DIE_FRACTION");
@@ -987,7 +994,7 @@ win.newGame();
 G = win.eval("G");
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(OPPONENT);
 win.render();
-const btn33 = [...dom.window.document.querySelectorAll("#dashboards button")][0];
+const btn33 = [...dom.window.document.querySelectorAll("#dashboards-rail button")][0];
 console.log("Le bouton n'a plus de margin-top parasite (centrage vertical correct) (attendu true) :", !(btn33.getAttribute("style") || "").includes("margin-top"));
 console.log("La classe .primary n'ajoute plus de margin (vérifié en CSS) (attendu true) :", dom.window.getComputedStyle(btn33).marginTop === "0px");
 
@@ -1020,10 +1027,10 @@ win.resetSelection();
 win.render();
 
 // --- 1er Coast complet sur s34 ---
-let clickables34 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+let clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
 clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
 win.render();
-clickables34 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
 clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // coast1 (toujours, s34 en 1er)
 sel = win.eval("sel");
 const opts34a = win.getMovementStepOptions(win.board(), sel.car, sel.remaining, G.allCars);
@@ -1038,10 +1045,10 @@ console.log("Après le 1er Coast : coast1 vide, coast2 contient le dé (bascule,
 // --- 2e Coast, même véhicule (on force le retour à HUMAN, le tour de l'IA n'est pas le sujet ici) ---
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.render();
-clickables34 = [...dom.window.document.querySelectorAll("#dashboards .clickable")];
+clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
 clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie (dernier dé, 3)
 win.render();
-clickables34 = [...dom.window.document.querySelectorAll("#dashboards rect.clickable")];
+clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
 clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // coast1 à nouveau (toujours proposé)
 sel = win.eval("sel");
 console.log("Le 2e clic cible bien s34 à nouveau (attendu true) :", sel.car === s34);
@@ -1083,7 +1090,7 @@ win.driveAiTurnGenerator(gen35, "Test — tour IA ASSIGN", decision35);
 const etState35 = win.eval("endTurnDieState");
 console.log("endTurnDieState contient bien une entrée pour le véhicule IA (ASSIGN) (attendu true) :", !!etState35[aiCar35.id] && etState35[aiCar35.id].dieValue === 1);
 win.render();
-const dashHtml35a = dom.window.document.getElementById("dashboards").innerHTML;
+const dashHtml35a = dom.window.document.getElementById("dashboards-rail").innerHTML;
 console.log("Un dé est bien rendu sur le dashboard de l'IA après son tour (attendu true) :", dashHtml35a.includes("die-move-"));
 
 // --- Coast côté IA ---
@@ -1155,7 +1162,7 @@ win.render();
 // dans le DOM (plutôt que de supposer qu'il reste en ligne 0 — une
 // fois le tour terminé, le joueur actif bascule vers l'IA, qui peut
 // désormais occuper la ligne du haut).
-const dashSvg36 = dom.window.document.getElementById("dashboards");
+const dashSvg36 = dom.window.document.getElementById("dashboards-rail");
 const humanCmdImg36 = [...dashSvg36.querySelectorAll("image")].find((img) => (img.getAttribute("href") || "").includes("command-blue"));
 const cmdX36 = parseFloat(humanCmdImg36.getAttribute("x")), cmdY36 = parseFloat(humanCmdImg36.getAttribute("y"));
 const cmdW36 = parseFloat(humanCmdImg36.getAttribute("width")), cmdH36 = parseFloat(humanCmdImg36.getAttribute("height"));
@@ -1197,7 +1204,7 @@ win.driveAiTurnGenerator(gen37, "Test — tour IA avec Command", decision37);
 const cdStateCmd37 = win.eval("commandDieState");
 console.log("commandDieState contient bien une entrée pour l'IA (attendu true) :", !!cdStateCmd37[OPPONENT] && cdStateCmd37[OPPONENT].commandType === "drift" && cdStateCmd37[OPPONENT].dieValue === 3);
 win.render();
-const dashHtml37 = dom.window.document.getElementById("dashboards").innerHTML;
+const dashHtml37 = dom.window.document.getElementById("dashboards-rail").innerHTML;
 console.log("Le dé de Command de l'IA est bien rendu sur son command board (attendu true) :", dashHtml37.includes("die-move-"));
 
 section("Test 38 — BUG CORRIGÉ : le dé de l'IA doit s'effacer à la fin du round même quand SON tour termine le round");
@@ -1238,14 +1245,14 @@ const etState38 = win.eval("endTurnDieState");
 console.log("Le dé est bien estampillé sur le round PENDANT LEQUEL il a été joué, pas le suivant (bug corrigé, attendu true) :",
   etState38[aiCar38.id] && etState38[aiCar38.id].round === roundBeforeThisTurn38);
 win.render();
-const smallImg38 = [...dom.window.document.querySelectorAll("#dashboards image")].find((el) => (el.getAttribute("href") || "").includes("dashboard-orange-small") || (el.getAttribute("href") || "").includes(`dashboard-${win.eval('PLAYER_CAR_COLOR[OPPONENT]')}-small`));
+const smallImg38 = [...dom.window.document.querySelectorAll("#dashboards-rail image")].find((el) => (el.getAttribute("href") || "").includes("dashboard-orange-small") || (el.getAttribute("href") || "").includes(`dashboard-${win.eval('PLAYER_CAR_COLOR[OPPONENT]')}-small`));
 const smallX38 = parseFloat(smallImg38.getAttribute("x")), smallY38 = parseFloat(smallImg38.getAttribute("y"));
 const smallW38 = parseFloat(smallImg38.getAttribute("width")), smallH38 = parseFloat(smallImg38.getAttribute("height"));
 const fracEndTurn38 = win.eval("VEHICLE_SLOT_FRACTION.small.endTurn");
 const DIE38 = win.eval("DIE_DISPLAY_SIZE");
 const expectedEndTurnX38 = smallX38 + fracEndTurn38.x * smallW38 - DIE38 / 2;
 const expectedEndTurnY38 = smallY38 + fracEndTurn38.y * smallH38 - DIE38 / 2;
-const staleDie38 = [...dom.window.document.querySelectorAll("#dashboards g")].find((g) => {
+const staleDie38 = [...dom.window.document.querySelectorAll("#dashboards-rail g")].find((g) => {
   const img = g.querySelector("image");
   return img && Math.abs(parseFloat(img.getAttribute("x")) - expectedEndTurnX38) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - expectedEndTurnY38) < 1;
 });
@@ -1285,24 +1292,24 @@ console.log("L'animation est bien en cours (pas encore terminée) (attendu true)
 win.render();
 const boxAny39 = { small: win.eval('boardBox("small")') };
 const rowBBox39 = win.eval("ROW_BBOX");
-const smallImg39 = [...dom.window.document.querySelectorAll("#dashboards image")].find((el) => (el.getAttribute("href") || "").includes(`dashboard-${win.eval("PLAYER_CAR_COLOR[OPPONENT]")}-small`));
+const smallImg39 = [...dom.window.document.querySelectorAll("#dashboards-rail image")].find((el) => (el.getAttribute("href") || "").includes(`dashboard-${win.eval("PLAYER_CAR_COLOR[OPPONENT]")}-small`));
 const smallX39 = parseFloat(smallImg39.getAttribute("x")), smallY39 = parseFloat(smallImg39.getAttribute("y"));
 const smallW39 = parseFloat(smallImg39.getAttribute("width")), smallH39 = parseFloat(smallImg39.getAttribute("height"));
 const fracAny39 = win.eval("VEHICLE_SLOT_FRACTION.small.any");
 const DIE39 = win.eval("DIE_DISPLAY_SIZE");
 const expectedAnyX39 = smallX39 + fracAny39.x * smallW39 - DIE39 / 2, expectedAnyY39 = smallY39 + fracAny39.y * smallH39 - DIE39 / 2;
-const liveAnyDie39 = [...dom.window.document.querySelectorAll("#dashboards g")].find((g) => {
+const liveAnyDie39 = [...dom.window.document.querySelectorAll("#dashboards-rail g")].find((g) => {
   const img = g.querySelector("image");
   return img && Math.abs(parseFloat(img.getAttribute("x")) - expectedAnyX39) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - expectedAnyY39) < 1;
 });
 console.log("Le dé ANY (3) est déjà visible sur le dashboard PENDANT le mouvement (attendu true) :", !!liveAnyDie39);
 
-const cmdImg39 = [...dom.window.document.querySelectorAll("#dashboards image")].find((el) => (el.getAttribute("href") || "").includes(`command-${win.eval("PLAYER_CAR_COLOR[OPPONENT]")}`));
+const cmdImg39 = [...dom.window.document.querySelectorAll("#dashboards-rail image")].find((el) => (el.getAttribute("href") || "").includes(`command-${win.eval("PLAYER_CAR_COLOR[OPPONENT]")}`));
 const cmdX39 = parseFloat(cmdImg39.getAttribute("x")), cmdY39 = parseFloat(cmdImg39.getAttribute("y"));
 const cmdW39 = parseFloat(cmdImg39.getAttribute("width")), cmdH39 = parseFloat(cmdImg39.getAttribute("height"));
 const fracNitro39 = win.eval("COMMAND_SLOT_FRACTION.nitro");
 const expectedNitroX39 = cmdX39 + fracNitro39.x * cmdW39 - DIE39 / 2, expectedNitroY39 = cmdY39 + fracNitro39.y * cmdH39 - DIE39 / 2;
-const liveNitroDie39 = [...dom.window.document.querySelectorAll("#dashboards g")].find((g) => {
+const liveNitroDie39 = [...dom.window.document.querySelectorAll("#dashboards-rail g")].find((g) => {
   const img = g.querySelector("image");
   return img && Math.abs(parseFloat(img.getAttribute("x")) - expectedNitroX39) < 1 && Math.abs(parseFloat(img.getAttribute("y")) - expectedNitroY39) < 1;
 });

@@ -75,7 +75,7 @@ console.log("3 véhicules par joueur, aucun manquant (attendu true) :",
 section("Test 4 — Rendu des dashboards : 4 command boards distincts, bonne couleur, bon nombre de lignes empilées");
 
 win.render();
-const dashSvg4 = dom.window.document.getElementById("dashboards");
+const dashSvg4 = dom.window.document.getElementById("dashboards-rail");
 const cmdImgs4 = [...dashSvg4.querySelectorAll("image")].filter((img) => (img.getAttribute("href") || "").includes("command-"));
 console.log("4 command boards dessinés (attendu true) :", cmdImgs4.length === 4);
 const colorsSeen4 = cmdImgs4.map((img) => img.getAttribute("href").match(/command-(\w+)\.webp/)[1]).sort();
@@ -190,8 +190,8 @@ console.log("PLAYER_NAMES bien reconstruit à 4 joueurs depuis la SAUVEGARDE, pa
 const G10 = win.eval("G");
 console.log("La partie restaurée contient bien les 12 véhicules d'origine (attendu true) :", G10.allCars.length === 12);
 win.render();
-const dashHtml10 = dom.window.document.getElementById("dashboards").innerHTML;
-const cmdImgs10 = [...dom.window.document.querySelectorAll("#dashboards image")].filter((img) => (img.getAttribute("href") || "").includes("command-"));
+const dashHtml10 = dom.window.document.getElementById("dashboards-rail").innerHTML;
+const cmdImgs10 = [...dom.window.document.querySelectorAll("#dashboards-rail image")].filter((img) => (img.getAttribute("href") || "").includes("command-"));
 console.log("Le rendu affiche bien les 4 command boards après restauration (attendu true) :", cmdImgs10.length === 4);
 
 section("Test 11 — BUG CORRIGÉ : l'ordre des lignes suit la vraie rotation du tour, pas juste \"joueur actif en tête\"");
@@ -207,13 +207,14 @@ G = win.eval("G");
 // (ancien bug : green en tête, puis le reste dans l'ordre fixe).
 G.roundState.currentPlayerIndex = G.roundState.playerOrder.indexOf("green");
 win.render();
-const dashSvg11 = dom.window.document.getElementById("dashboards");
-function rowYFor11(color) {
-  const img = [...dashSvg11.querySelectorAll("image")].find((el) => (el.getAttribute("href") || "").includes(`dashboard-${color}-small`));
-  return parseFloat(img.getAttribute("y"));
-}
-const yGreen = rowYFor11("green"), yPurple = rowYFor11("purple"), yBlue = rowYFor11("blue"), yOrange = rowYFor11("orange");
+// STRUCTURE CHANGÉE (rail) : chaque joueur a désormais son propre SVG,
+// dessiné à l'origine de celui-ci. L'ordre des rangées ne se lit donc
+// plus dans des coordonnées Y — qui valent la même chose pour tout le
+// monde — mais dans l'ordre des éléments du rail, qui est aussi celui
+// que la grille CSS respecte, en une comme en deux colonnes.
+const rail11 = dom.window.document.getElementById("dashboards-rail");
+const ordreRangees11 = [...rail11.children].map((el) => el.dataset.dashRow);
 console.log("Ordre des lignes = rotation complète de playerOrder (green, purple, blue, orange) (attendu true) :",
-  yGreen < yPurple && yPurple < yBlue && yBlue < yOrange);
+  JSON.stringify(ordreRangees11) === JSON.stringify(["green", "purple", "blue", "orange"]));
 
 console.log("\n=== Fin des tests dédiés (support multi-IA) ===");

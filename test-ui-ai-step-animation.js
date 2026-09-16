@@ -15,7 +15,7 @@ const html = fs.readFileSync(path.join(__dirname, "tools", "prototype.html"), "u
 function section(title) { console.log("\n=== " + title + " ==="); }
 function makeDom() { return new JSDOM(html, { runScripts: "dangerously", resources: "usable", pretendToBeVisual: true }); }
 function panelText(dom) { return dom.window.document.getElementById("panel").textContent; }
-function dashboardsText(dom) { return dom.window.document.getElementById("dashboards").textContent; }
+function dashboardsText(dom) { return dom.window.document.getElementById("dashboards-rail").textContent; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function clearHazardsAround(win, board, cells) {
