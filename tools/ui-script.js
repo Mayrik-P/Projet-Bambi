@@ -702,9 +702,8 @@ function currentDashboardRowOrder() {
 }
 
 function renderDashboards() {
-  const svg = document.getElementById("dashboards");
-  if (!svg) return; // anciens tests jsdom sans ce conteneur : ne casse rien
-  svg.innerHTML = "";
+  const rail = document.getElementById("dashboards-rail");
+  if (!rail) return; // anciens tests jsdom sans ce conteneur : ne casse rien
 
   const cp = getCurrentPlayer(G.roundState);
   const ctx = (cp === HUMAN && !gameOver) ? currentTurnContext() : null;
@@ -739,6 +738,21 @@ function renderDashboards() {
   // place dans la rotation.
   const order = currentDashboardRowOrder();
 
+  // RAIL (étape 5b) : un SVG par joueur au lieu d'un seul grand SVG.
+  // Le dessin d'une rangée était déjà entièrement paramétré par son
+  // origine, donc chaque rangée se dessine simplement à l'origine 0 de
+  // son propre SVG. Ce qu'on y gagne : les rangées deviennent des
+  // éléments que la mise en page peut répartir (2 colonnes en paysage
+  // et sur ordinateur), que le défilement peut accrocher, et que l'on
+  // peut ramener à l'écran individuellement pour le joueur actif.
+  while (rail.children.length > order.length) rail.lastElementChild.remove();
+  while (rail.children.length < order.length) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    el.setAttribute("class", "dash-row");
+    rail.appendChild(el);
+  }
+
+  let svg = null;              // SVG de la rangée en cours de dessin
   let maxRight = 0;
   let pendingAiButton = null;
   order.forEach((playerName, rowIndex) => {
@@ -747,8 +761,13 @@ function renderDashboards() {
     // bonne place (0 pour la 1ère ligne, empilé ensuite) — général,
     // fonctionne même si un board calé déborde légèrement au-dessus
     // ou à gauche du command board.
+    // Chaque rangée a désormais son propre SVG : son origine ne dépend
+    // plus de son rang, elle est toujours en haut de SON SVG.
+    svg = rail.children[rowIndex];
+    svg.innerHTML = "";
+    svg.dataset.dashRow = playerName;
     const rowOriginX = -ROW_BBOX.minX;
-    const rowOriginY = rowIndex * (ROW_BBOX.h + PLAYER_ROW_GAP) - ROW_BBOX.minY;
+    const rowOriginY = -ROW_BBOX.minY;
     const at = (kind) => { const b = boardBox(kind); return { x: rowOriginX + b.x, y: rowOriginY + b.y, w: b.w, h: b.h }; };
     const atDamage = (size, slotKey) => { const b = damageTokenBox(size, slotKey); return { x: rowOriginX + b.x, y: rowOriginY + b.y, w: b.w, h: b.h }; };
 
@@ -767,7 +786,7 @@ function renderDashboards() {
     // de Slam (marqueurs reroll/no) ou une fois la partie terminée.
     if (playerName !== HUMAN && cp === playerName && !gameOver && !G.aiPending) {
       const btnW = cmd.w * 0.88, btnH = cmd.h * 0.22;
-      pendingAiButton = {
+      pendingAiButton = { svg,
         bx: cmd.x + cmd.w / 2 - btnW / 2,
         by: cmd.y + cmd.h / 2 - btnH / 2,
         btnW, btnH
@@ -1003,8 +1022,11 @@ function renderDashboards() {
   // rowOriginY = rowIndex*(h+gap) - ROW_BBOX.minY, qui annule tout
   // écart de tête), donc la hauteur correcte est purement
   // N*(h+gap) - gap (équivalent à N*h + (N-1)*gap), jamais +gap.
-  const totalH = order.length * (ROW_BBOX.h + PLAYER_ROW_GAP) - PLAYER_ROW_GAP;
-  svg.setAttribute("viewBox", `0 0 ${maxRight} ${totalH}`);
+  // Chaque rangée porte le même viewBox : une seule rangée de haut.
+  // (L'ancien calcul de hauteur totale N*(h+écart)-écart n'a plus lieu
+  // d'être : l'écart entre rangées est maintenant celui de la grille
+  // CSS du rail, plus un décalage dessiné dans le SVG.)
+  for (const el of rail.children) el.setAttribute("viewBox", `0 0 ${maxRight} ${ROW_BBOX.h}`);
 
   // Bouton IA dessiné en tout dernier (retour de Mayrik : doit rester
   // au-dessus de tout, quelle que soit la ligne joueur où il se
@@ -1016,6 +1038,7 @@ function renderDashboards() {
   // l'IA joue).
   if (pendingAiButton) {
     const { bx, by, btnW, btnH } = pendingAiButton;
+    svg = pendingAiButton.svg; // le bouton appartient à la rangée du joueur concerné
     const label = G.aiAnimating ? "AI is playing…" : "Play the AI's turn ▶";
     svg.insertAdjacentHTML("beforeend", `<foreignObject x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${btnW.toFixed(1)}" height="${btnH.toFixed(1)}" style="overflow:visible;">
       <button xmlns="http://www.w3.org/1999/xhtml" class="primary" style="width:100%;height:100%;font-size:${(btnH * 0.26).toFixed(1)}px;line-height:1.15;white-space:normal;box-sizing:border-box;padding:2px;border-radius:6px;overflow:hidden;opacity:1;" ${G.aiAnimating ? "disabled" : ""}>${label}</button>
@@ -2608,7 +2631,7 @@ function setupBoardScroll() {
 // l'instant ; le passage au rail (un SVG par joueur) viendra avec sa
 // propre étape.
 // -------------------------------------------------------------------
-const LAYOUT_PRESENT = { illu: false, dice: false, roaddie: false, round: true, dashMode: "block" };
+const LAYOUT_PRESENT = { illu: false, dice: false, roaddie: false, round: true, dashMode: "rail" };
 let lastLayout = null;
 
 function applyBoardSizing() { applyLayout(); }
@@ -2672,13 +2695,37 @@ function applyLayout() {
   // --- Dashboards : on ne pose QUE le conteneur. Le SVG à l'intérieur
   //     est dimensionné par son seul zoom (largeur en %), et le
   //     défilement natif se recale tout seul. ---
-  const dashRect = L.zones.dash0;
+  // Le moteur rend un rectangle PAR JOUEUR visible. Le conteneur
+  // défilant prend leur boîte englobante ; la grille du rail reproduit
+  // leur répartition (1 colonne en portrait, 2 en paysage et sur
+  // ordinateur), et les joueurs qui ne tiennent pas sont atteignables
+  // par défilement.
+  const rows = Object.values(L.zones).filter((z) => z && z.id && /^dash\d+$/.test(z.id));
+  const dashRect = rows.length ? {
+    x: Math.min(...rows.map((r) => r.x)), y: Math.min(...rows.map((r) => r.y)),
+    w: Math.max(...rows.map((r) => r.x + r.w)) - Math.min(...rows.map((r) => r.x)),
+    h: Math.max(...rows.map((r) => r.y + r.h)) - Math.min(...rows.map((r) => r.y))
+  } : null;
   place(document.getElementById("dashboards-viewport"), dashRect);
+  const rail = document.getElementById("dashboards-rail");
+  if (rail && dashRect) {
+    const top = Math.min(...rows.map((r) => r.y));
+    const cols = rows.filter((r) => r.y === top).length;
+    rail.style.setProperty("--dash-cols", String(cols));
+    rail.style.setProperty("--dash-col-w", rows[0].w + "px");
+    rail.style.setProperty("--dash-gap", L.gap + "px");
+  }
   // Les boutons de zoom sont sortis du conteneur défilant : dedans, ils
   // auraient défilé avec le contenu. On les pose sur son coin haut-droit.
   const presets = document.getElementById("dashboards-zoom-presets");
   if (presets && dashRect) {
-    presets.style.left = (dashRect.x + dashRect.w - presets.offsetWidth) + "px";
+    // À droite du rail quand la largeur le permet (cas du paysage, où
+    // le rail n'occupe pas toute la largeur), sinon en surimpression sur
+    // son coin haut-droit : sans ça, ils masquaient la fin du dashboard
+    // du 2e joueur.
+    const bw = presets.offsetWidth || 96;
+    const dehors = dashRect.x + dashRect.w + L.gap + bw <= W;
+    presets.style.left = (dehors ? dashRect.x + dashRect.w + L.gap : dashRect.x + dashRect.w - bw) + "px";
     presets.style.top = dashRect.y + "px";
   }
 }
@@ -2717,6 +2764,20 @@ function updateInfoBand(cp) {
 // manche), séparée de la bande d'info réécrite à chaque action — c'est
 // ce qui permettra plus tard à une animation d'y vivre sans être
 // détruite à chaque changement de contexte.
+// Sans pastille de couleur du joueur actif (choix de Mayrik), c'est ce
+// recentrage qui indique SEUL à qui est le tour quand tous les joueurs
+// ne tiennent pas à l'écran. Contrainte dure du profil, pas un confort.
+function scrollActivePlayerIntoView() {
+  const rail = document.getElementById("dashboards-rail");
+  if (!rail || !G || gameOver) return;
+  const cp = getCurrentPlayer(G.roundState);
+  if (!cp) return;
+  const row = rail.querySelector(`[data-dash-row="${cp}"]`);
+  if (row && typeof row.scrollIntoView === "function") {
+    row.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+}
+
 function updateRoundModule() {
   const el = document.getElementById("round-module");
   if (!el) return;
@@ -2761,15 +2822,18 @@ function getDashboardsZoom() { return dashZoom; }
 // taille du conteneur ni de l'apparition d'une barre de défilement.
 function setDashboardsZoom(next, anchor) {
   const vp = document.getElementById("dashboards-viewport");
-  const svg = document.getElementById("dashboards");
-  if (!vp || !svg) return;
+  const rail = document.getElementById("dashboards-rail");
+  if (!vp || !rail) return;
   const target = Math.min(DASH_ZOOM_MAX, Math.max(DASH_ZOOM_MIN, next));
   const rect = vp.getBoundingClientRect();
   const ax = anchor ? anchor.clientX - rect.left : rect.width / 2;
   const ay = anchor ? anchor.clientY - rect.top : rect.height / 2;
   const k = target / dashZoom;
   dashZoom = target;
-  svg.style.width = (target * 100) + "%";
+  // Le zoom élargit les COLONNES du rail ; chaque rangée occupe 100% de
+  // sa colonne et sa hauteur suit son rapport d'aspect. La zone
+  // défilable grandit donc d'elle-même, sans rien à recalculer.
+  rail.style.setProperty("--dash-zoom", String(target));
   vp.scrollLeft = (vp.scrollLeft + ax) * k - ax;
   vp.scrollTop = (vp.scrollTop + ay) * k - ay;
   updateDashboardsZoomButtons();
@@ -2783,9 +2847,9 @@ function updateDashboardsZoomButtons() {
 
 function initDashboardsZoom() {
   const vp = document.getElementById("dashboards-viewport");
-  const svg = document.getElementById("dashboards");
-  if (!vp || !svg) return;
-  svg.style.width = "100%";
+  const rail = document.getElementById("dashboards-rail");
+  if (!vp || !rail) return;
+  rail.style.setProperty("--dash-zoom", "1");
 
   document.querySelectorAll("#dashboards-zoom-presets button").forEach((btn) => {
     btn.addEventListener("click", (e) => {
@@ -2897,7 +2961,7 @@ function initDashboardsZoom() {
 // de la zone dashboards est désormais calculée par le moteur, en même
 // temps que celle de tous les autres modules — il n'y a plus de calcul
 // séparé qui puisse entrer en contradiction avec les autres.
-function updateDashboardsViewportHeight() { applyLayout(); }
+function updateDashboardsViewportHeight() { applyLayout(); scrollActivePlayerIntoView(); }
 
 // ===================================================================
 // ANIMATION DE LANCER DE DÉS — début de round (dés de MOUVEMENT du
@@ -3072,8 +3136,8 @@ function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs) {
 // G.roundState.dicePool) sont connues à l'avance, cette fonction ne
 // fait que les mettre en scène visuellement.
 function playRoundDiceRollAnimation() {
-  const svg = document.getElementById("dashboards");
-  if (!svg) return;
+  const rail = document.getElementById("dashboards-rail");
+  if (!rail) return;
 
   const order = currentDashboardRowOrder();
   const allDicePromises = [];
@@ -3084,7 +3148,7 @@ function playRoundDiceRollAnimation() {
 
     values.forEach((value, i) => {
       if (value === null) return;
-      const targetEl = svg.querySelector(`[data-diceboard-die="${playerName}:${i}"]`);
+      const targetEl = rail.querySelector(`[data-diceboard-die="${playerName}:${i}"]`);
       if (!targetEl) return; // safety net (ex. test/rendu partiel)
       allDicePromises.push(animateOneMovingDie(targetEl, value, color, rowIndex * 90 + i * 70, 1300));
     });

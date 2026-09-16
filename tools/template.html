@@ -171,8 +171,16 @@
      zone ne déborde pas sur la page.
      -------------------------------------------------------------- */
   #dashboards-viewport { overflow: auto; overscroll-behavior: contain;
-    touch-action: pan-x pan-y; background: #26262e; }
-  #dashboards-viewport svg { display: block; width: 100%; height: auto; }
+    touch-action: pan-x pan-y; background: #26262e;
+    scroll-snap-type: y proximity; }
+  /* Le rail répartit les rangées ; le zoom élargit les COLONNES, et la
+     hauteur de chaque rangée suit son rapport d'aspect. La zone
+     défilable grandit donc toute seule. */
+  #dashboards-rail { display: grid; align-content: start; gap: var(--dash-gap, 6px);
+    grid-template-columns: repeat(var(--dash-cols, 1),
+      calc(var(--dash-col-w, 100%) * var(--dash-zoom, 1))); }
+  #dashboards-rail svg.dash-row { display: block; width: 100%; height: auto;
+    scroll-snap-align: start; }
   /* Sortis du conteneur défilant : à l'intérieur, ils défileraient avec
      le contenu. Posés sur le coin haut-droit de la zone par
      applyLayout(). */
@@ -285,7 +293,11 @@
        (retour de Mayrik) donnent en plus un accès direct à chaque
        palier. Position et taille posées par applyLayout(). -->
   <div id="dashboards-viewport">
-    <svg id="dashboards" viewBox="0 0 900 300"></svg>
+    <!-- RAIL : un <svg class="dash-row"> par joueur, créés par
+         renderDashboards(). Répartis en 1 ou 2 colonnes selon le profil
+         d'écran ; les joueurs qui ne tiennent pas sont atteignables par
+         défilement, avec accrochage. -->
+    <div id="dashboards-rail"></div>
   </div>
   <!-- Les préréglages de zoom sont SORTIS du conteneur : celui-ci
        défile désormais nativement, et des boutons placés dedans

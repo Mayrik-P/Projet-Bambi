@@ -3612,7 +3612,7 @@ function computeLayout(W, H, players, forced, present){
   }
 
   const scale = boardScale(z.board.h);
-  return { profile, zones:z, steps, ratio, dashMode, chrome, sliderOverlay: chrome === 0,
+  return { profile, zones:z, steps, ratio, dashMode, gap: G, chrome, sliderOverlay: chrome === 0,
     cell: SPEC.board.cellW * scale,
     tiles: (z.board.w / scale) / SPEC.board.tileW,
     visible: z._visible, players };
