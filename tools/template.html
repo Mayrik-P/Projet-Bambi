@@ -72,7 +72,7 @@
      overflow maîtrisé évitent qu'un contenu trop grand repousse sa
      propre boîte. */
   #board-viewport, #info-band, #dashboards-viewport, #round-module,
-  #roaddie-module, #board-position-slider {
+  #roaddie-module, #dicetrack-module, #board-position-slider {
     position: absolute; min-height: 0; box-sizing: border-box; }
   /* Module ROUND (retour de Mayrik) : indépendant de la bande d'info,
      dont le contenu est réécrit à chaque action. Contenu réduit à
@@ -90,6 +90,16 @@
     padding: 3px; pointer-events: none; }
   #roaddie-module.over-board { background: rgba(13,13,16,0.82); z-index: 5; }
   #roaddie-module img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  /* Module DICETRACK : 1 ou 2 faces, côte à côte ou superposées selon
+     la forme que la mise en page lui a donnée. */
+  #dicetrack-module { display: flex; align-items: center; justify-content: center;
+    gap: 6px; background: #0d0d10; border: 1px solid #3a3a46; border-radius: 6px;
+    padding: 4px; pointer-events: none; }
+  #dicetrack-module.vertical { flex-direction: column; }
+  #dicetrack-module.over-board { background: rgba(13,13,16,0.82); z-index: 5; }
+  #dicetrack-module img.dicetrack-face { height: 100%; width: auto; aspect-ratio: 1 / 1;
+    object-fit: contain; display: block; }
+  #dicetrack-module.vertical img.dicetrack-face { width: 100%; height: auto; }
   /* Le curseur de position fait partie du module plateau : il occupe sa
      propre bande sous la fenêtre de jeu, et passe en surimpression sur
      celle-ci quand la hauteur manque (premier échelon de dégradation,
@@ -298,6 +308,11 @@
        permanence. Le petit dé du dashboard du premier joueur reste en
        place (il dit QUI commence) mais il est illisible au zoom x1. -->
   <div id="roaddie-module"><img id="roaddie-face" alt=""></div>
+
+  <!-- Module DICETRACK : les dés spéciaux du dernier lancer (Slam,
+       direction, cascade, tir), affichés en grand jusqu'au lancer
+       suivant. Rempli par showDiceTrack(). -->
+  <div id="dicetrack-module"></div>
 
   <!-- Zone 3 : dashboards des joueurs — librement zoomables/déplaçables
        (Panzoom), contenus à cette seule zone. Le double-tap/double-clic

@@ -2631,7 +2631,7 @@ function setupBoardScroll() {
 // l'instant ; le passage au rail (un SVG par joueur) viendra avec sa
 // propre étape.
 // -------------------------------------------------------------------
-const LAYOUT_PRESENT = { illu: false, dice: false, roaddie: true, round: true, dashMode: "rail" };
+const LAYOUT_PRESENT = { illu: false, dice: true, roaddie: true, round: true, dashMode: "rail" };
 let lastLayout = null;
 
 function applyBoardSizing() { applyLayout(); }
@@ -2684,6 +2684,16 @@ function applyLayout() {
 
   // --- Bande d'info et module round ---
   place(document.getElementById("info-band"), L.zones.info);
+  const diceEl = document.getElementById("dicetrack-module");
+  if (diceEl) {
+    if (L.zones.dice) {
+      place(diceEl, L.zones.dice);
+      diceEl.classList.toggle("over-board", !!L.zones.dice.overlay);
+      // Deux dés côte à côte si la boîte est plutôt large, l'un au-dessus
+      // de l'autre si elle est plutôt haute.
+      diceEl.classList.toggle("vertical", L.zones.dice.h > L.zones.dice.w);
+    } else diceEl.style.display = "none";
+  }
   const roadEl = document.getElementById("roaddie-module");
   if (roadEl) {
     if (L.zones.roaddie) {
@@ -2812,6 +2822,77 @@ function updateRoadDieModule() {
     face.style.visibility = "";
   } else {
     face.style.visibility = "hidden";
+  }
+}
+
+// ===================================================================
+// MODULE DICETRACK — les dés spéciaux du tour, lisibles en grand.
+//
+// Ce que Mayrik a demandé : tous les dés spéciaux tirés pendant le
+// tour, chaque face restant affichée jusqu'au lancer suivant, avec la
+// même animation de vol que le dé de round.
+//
+// COMMENT ON SAIT QU'UN DÉ EST TIRÉ : le moteur prévient via
+// setDiceObserver (crochet de présentation, voir engine.js). On ne lit
+// donc jamais les textes de journal, qui auraient été à analyser.
+//
+// REGROUPEMENT D'UN LANCER : certains lancers produisent deux dés d'un
+// coup (un Slam tire slam + direction ; un Blast Off tire direction +
+// stunt). Tous les dés notifiés dans la MÊME salve synchrone forment
+// donc un seul lancer, et on vide la file à la microtâche suivante.
+// Un enchaînement de slams, lui, passe par des reprises successives du
+// générateur : ses dés arrivent en salves distinctes, donc remplacent
+// bien l'affichage l'un après l'autre.
+// Le module ne montre que 2 dés (sa taille minimale a été calculée
+// pour ça). Une salve plus longue existe — un jeton Dazed tire un
+// stunt puis une direction par case — et on garde alors les deux
+// PREMIERS : à confirmer à l'usage avec Mayrik.
+// ===================================================================
+const DICE_TRACK_CAPACITY = 2;
+const DICE_ART = {
+  slam:      { file: (v) => `die-fx-slam-${v}`,  faces: ["top", "top", "bottom", "bottom", "bottom", "bottom"] },
+  direction: { file: (v) => `die-fx-direction-${String(v).replace("-", "")}`,
+               faces: ["front", "front-left", "front-right", "rear", "rear-left", "rear-right"] },
+  stunt:     { file: (v) => `die-fx-stunt-${v}`, faces: [1, 2, 2, 3, 3, 4] },
+  shooting:  { file: (v) => `die-fx-shooting-${String(v).replace("-", "")}`,
+               faces: ["large", "large", "large", "medium", "small-medium", "any"] }
+};
+function diceArtPath(kind, value) {
+  const art = DICE_ART[kind];
+  return art ? `../images/dice/${art.file(value)}.webp` : null;
+}
+
+let diceTrackBurst = [];     // dés de la salve en cours d'accumulation
+let diceTrackFlush = null;   // microtâche de vidage programmée
+
+function noteSpecialDie(kind, value) {
+  if (!DICE_ART[kind]) return; // le dé de round a son propre module
+  diceTrackBurst.push({ kind, value });
+  if (diceTrackFlush) return;
+  diceTrackFlush = Promise.resolve().then(() => {
+    const lancer = diceTrackBurst.slice(0, DICE_TRACK_CAPACITY);
+    diceTrackBurst = [];
+    diceTrackFlush = null;
+    showDiceTrack(lancer);
+  });
+}
+
+function showDiceTrack(dice) {
+  const box = document.getElementById("dicetrack-module");
+  if (!box || !dice.length) return;
+  box.innerHTML = dice.map((d, i) =>
+    `<img class="dicetrack-face" data-dicetrack-slot="${i}" src="${diceArtPath(d.kind, d.value)}" alt="">`).join("");
+  // Même vol que le dé de round : chaque face part de l'extérieur et
+  // roule en chemin, en piochant dans la VRAIE table de son dé.
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    [...box.children].forEach((face, i) => {
+      const d = dice[i];
+      const art = DICE_ART[d.kind];
+      animateOneMovingDie(face, d.value, null, i * 160, 900, {
+        faceHTML: (v, size) => `<img src="${diceArtPath(d.kind, v)}" style="position:absolute;left:0;top:0;width:${size}px;height:${size}px;">`,
+        randomFace: () => art.faces[Math.floor(Math.random() * art.faces.length)]
+      });
+    });
   }
 }
 
@@ -3275,6 +3356,7 @@ function render() {
 // setupBoardScroll()/updateDashboardsViewportHeight(), rappelées à
 // chaque rendu — voir leurs commentaires respectifs).
 initDashboardsZoom();
+if (typeof setDiceObserver === "function") setDiceObserver(noteSpecialDie);
 
 // Bouton plein écran (retour de Mayrik : voir le rendu réel sans la
 // barre d'adresse du navigateur, en attendant une vraie installation

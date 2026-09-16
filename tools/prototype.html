@@ -72,7 +72,7 @@
      overflow maîtrisé évitent qu'un contenu trop grand repousse sa
      propre boîte. */
   #board-viewport, #info-band, #dashboards-viewport, #round-module,
-  #roaddie-module, #board-position-slider {
+  #roaddie-module, #dicetrack-module, #board-position-slider {
     position: absolute; min-height: 0; box-sizing: border-box; }
   /* Module ROUND (retour de Mayrik) : indépendant de la bande d'info,
      dont le contenu est réécrit à chaque action. Contenu réduit à
@@ -90,6 +90,16 @@
     padding: 3px; pointer-events: none; }
   #roaddie-module.over-board { background: rgba(13,13,16,0.82); z-index: 5; }
   #roaddie-module img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  /* Module DICETRACK : 1 ou 2 faces, côte à côte ou superposées selon
+     la forme que la mise en page lui a donnée. */
+  #dicetrack-module { display: flex; align-items: center; justify-content: center;
+    gap: 6px; background: #0d0d10; border: 1px solid #3a3a46; border-radius: 6px;
+    padding: 4px; pointer-events: none; }
+  #dicetrack-module.vertical { flex-direction: column; }
+  #dicetrack-module.over-board { background: rgba(13,13,16,0.82); z-index: 5; }
+  #dicetrack-module img.dicetrack-face { height: 100%; width: auto; aspect-ratio: 1 / 1;
+    object-fit: contain; display: block; }
+  #dicetrack-module.vertical img.dicetrack-face { width: 100%; height: auto; }
   /* Le curseur de position fait partie du module plateau : il occupe sa
      propre bande sous la fenêtre de jeu, et passe en surimpression sur
      celle-ci quand la hauteur manque (premier échelon de dégradation,
@@ -298,6 +308,11 @@
        permanence. Le petit dé du dashboard du premier joueur reste en
        place (il dit QUI commence) mais il est illisible au zoom x1. -->
   <div id="roaddie-module"><img id="roaddie-face" alt=""></div>
+
+  <!-- Module DICETRACK : les dés spéciaux du dernier lancer (Slam,
+       direction, cascade, tir), affichés en grand jusqu'au lancer
+       suivant. Rempli par showDiceTrack(). -->
+  <div id="dicetrack-module"></div>
 
   <!-- Zone 3 : dashboards des joueurs — librement zoomables/déplaçables
        (Panzoom), contenus à cette seule zone. Le double-tap/double-clic
@@ -1502,31 +1517,51 @@ function findFrontmostCar(cars) {
 
 // Dé de slam à 6 faces : 2 faces "top", 4 faces "bottom" (p.10).
 // injectedValue permet de forcer un résultat précis pour les tests.
+// -----------------------------------------------------------------
+// OBSERVATEUR DE DÉS — crochet de PRÉSENTATION, jamais de règle.
+// Le moteur tire ses dés spéciaux en interne et n'en rendait compte
+// que dans ses textes de journal, impossibles à exploiter sans les
+// analyser. Cet observateur, désactivé par défaut, prévient
+// l'interface de chaque tirage réel. Il ne change aucun résultat, ne
+// lit aucun état, et une exception dans l'observateur ne peut pas
+// interrompre une partie.
+// Sûr par construction : l'IA n'appelle aucune fonction de tirage
+// (elle évalue de façon déterministe), donc l'observateur ne voit
+// jamais un dé « imaginé » pendant une réflexion.
+// -----------------------------------------------------------------
+let diceObserver = null;
+function setDiceObserver(fn) { diceObserver = (typeof fn === "function") ? fn : null; }
+function notifyDieRolled(kind, value) {
+  if (!diceObserver) return value;
+  try { diceObserver(kind, value); } catch (e) { /* la présentation ne bloque jamais le jeu */ }
+  return value;
+}
+
 function rollSlamDie(injectedValue = null) {
-  if (injectedValue) return injectedValue; // "top" | "bottom"
-  return DICE_FACES.SLAM[Math.floor(Math.random() * DICE_FACES.SLAM.length)];
+  if (injectedValue) return notifyDieRolled("slam", injectedValue); // "top" | "bottom"
+  return notifyDieRolled("slam", DICE_FACES.SLAM[Math.floor(Math.random() * DICE_FACES.SLAM.length)]);
 }
 
 // Dé de direction à 6 faces, une par direction (p.10).
 // injectedValue permet de forcer une direction précise pour les tests.
 function rollDirectionDie(injectedValue = null) {
-  if (injectedValue) return injectedValue;
+  if (injectedValue) return notifyDieRolled("direction", injectedValue);
   const faces = Object.keys(DIRECTIONS);
-  return faces[Math.floor(Math.random() * faces.length)];
+  return notifyDieRolled("direction", faces[Math.floor(Math.random() * faces.length)]);
 }
 
 // Dé de cascade (Stunt) à 6 faces : 1-2-2-3-3-4 (confirmé par Mayrik).
 // Utilisé par les jetons Dazed et Blast Off.
 function rollStuntDie(injectedValue = null) {
-  if (injectedValue) return injectedValue;
-  return DICE_FACES.STUNT[Math.floor(Math.random() * DICE_FACES.STUNT.length)];
+  if (injectedValue) return notifyDieRolled("stunt", injectedValue);
+  return notifyDieRolled("stunt", DICE_FACES.STUNT[Math.floor(Math.random() * DICE_FACES.STUNT.length)]);
 }
 
 // Dé de tir à 6 faces : large×3, medium×1, small-medium×1, any×1
 // (confirmé par Mayrik, correspond à DICE_FACES.SHOOTING).
 function rollShootingDie(injectedValue = null) {
-  if (injectedValue) return injectedValue;
-  return DICE_FACES.SHOOTING[Math.floor(Math.random() * DICE_FACES.SHOOTING.length)];
+  if (injectedValue) return notifyDieRolled("shooting", injectedValue);
+  return notifyDieRolled("shooting", DICE_FACES.SHOOTING[Math.floor(Math.random() * DICE_FACES.SHOOTING.length)]);
 }
 
 // Dé Road à 6 faces : 1-1-1-2-2-3 (confirmé par Mayrik). Tiré une
@@ -1539,8 +1574,8 @@ function rollShootingDie(injectedValue = null) {
 // (options.roadDieValue + options.roadBonusPath, jamais ici — ce dé
 // n'est que le TIRAGE, pas son application).
 function rollRoadDie(injectedValue = null) {
-  if (injectedValue) return injectedValue;
-  return DICE_FACES.ROAD[Math.floor(Math.random() * DICE_FACES.ROAD.length)];
+  if (injectedValue) return notifyDieRolled("road", injectedValue);
+  return notifyDieRolled("road", DICE_FACES.ROAD[Math.floor(Math.random() * DICE_FACES.ROAD.length)]);
 }
 
 
@@ -3464,6 +3499,7 @@ function rollMovementDie(injectedValue = null) {
 
 if (typeof module !== "undefined" && module.exports) {
 module.exports = {
+  setDiceObserver,
 
   driveSync,
   TERRAIN,
@@ -9702,7 +9738,7 @@ function setupBoardScroll() {
 // l'instant ; le passage au rail (un SVG par joueur) viendra avec sa
 // propre étape.
 // -------------------------------------------------------------------
-const LAYOUT_PRESENT = { illu: false, dice: false, roaddie: true, round: true, dashMode: "rail" };
+const LAYOUT_PRESENT = { illu: false, dice: true, roaddie: true, round: true, dashMode: "rail" };
 let lastLayout = null;
 
 function applyBoardSizing() { applyLayout(); }
@@ -9755,6 +9791,16 @@ function applyLayout() {
 
   // --- Bande d'info et module round ---
   place(document.getElementById("info-band"), L.zones.info);
+  const diceEl = document.getElementById("dicetrack-module");
+  if (diceEl) {
+    if (L.zones.dice) {
+      place(diceEl, L.zones.dice);
+      diceEl.classList.toggle("over-board", !!L.zones.dice.overlay);
+      // Deux dés côte à côte si la boîte est plutôt large, l'un au-dessus
+      // de l'autre si elle est plutôt haute.
+      diceEl.classList.toggle("vertical", L.zones.dice.h > L.zones.dice.w);
+    } else diceEl.style.display = "none";
+  }
   const roadEl = document.getElementById("roaddie-module");
   if (roadEl) {
     if (L.zones.roaddie) {
@@ -9883,6 +9929,77 @@ function updateRoadDieModule() {
     face.style.visibility = "";
   } else {
     face.style.visibility = "hidden";
+  }
+}
+
+// ===================================================================
+// MODULE DICETRACK — les dés spéciaux du tour, lisibles en grand.
+//
+// Ce que Mayrik a demandé : tous les dés spéciaux tirés pendant le
+// tour, chaque face restant affichée jusqu'au lancer suivant, avec la
+// même animation de vol que le dé de round.
+//
+// COMMENT ON SAIT QU'UN DÉ EST TIRÉ : le moteur prévient via
+// setDiceObserver (crochet de présentation, voir engine.js). On ne lit
+// donc jamais les textes de journal, qui auraient été à analyser.
+//
+// REGROUPEMENT D'UN LANCER : certains lancers produisent deux dés d'un
+// coup (un Slam tire slam + direction ; un Blast Off tire direction +
+// stunt). Tous les dés notifiés dans la MÊME salve synchrone forment
+// donc un seul lancer, et on vide la file à la microtâche suivante.
+// Un enchaînement de slams, lui, passe par des reprises successives du
+// générateur : ses dés arrivent en salves distinctes, donc remplacent
+// bien l'affichage l'un après l'autre.
+// Le module ne montre que 2 dés (sa taille minimale a été calculée
+// pour ça). Une salve plus longue existe — un jeton Dazed tire un
+// stunt puis une direction par case — et on garde alors les deux
+// PREMIERS : à confirmer à l'usage avec Mayrik.
+// ===================================================================
+const DICE_TRACK_CAPACITY = 2;
+const DICE_ART = {
+  slam:      { file: (v) => `die-fx-slam-${v}`,  faces: ["top", "top", "bottom", "bottom", "bottom", "bottom"] },
+  direction: { file: (v) => `die-fx-direction-${String(v).replace("-", "")}`,
+               faces: ["front", "front-left", "front-right", "rear", "rear-left", "rear-right"] },
+  stunt:     { file: (v) => `die-fx-stunt-${v}`, faces: [1, 2, 2, 3, 3, 4] },
+  shooting:  { file: (v) => `die-fx-shooting-${String(v).replace("-", "")}`,
+               faces: ["large", "large", "large", "medium", "small-medium", "any"] }
+};
+function diceArtPath(kind, value) {
+  const art = DICE_ART[kind];
+  return art ? `../images/dice/${art.file(value)}.webp` : null;
+}
+
+let diceTrackBurst = [];     // dés de la salve en cours d'accumulation
+let diceTrackFlush = null;   // microtâche de vidage programmée
+
+function noteSpecialDie(kind, value) {
+  if (!DICE_ART[kind]) return; // le dé de round a son propre module
+  diceTrackBurst.push({ kind, value });
+  if (diceTrackFlush) return;
+  diceTrackFlush = Promise.resolve().then(() => {
+    const lancer = diceTrackBurst.slice(0, DICE_TRACK_CAPACITY);
+    diceTrackBurst = [];
+    diceTrackFlush = null;
+    showDiceTrack(lancer);
+  });
+}
+
+function showDiceTrack(dice) {
+  const box = document.getElementById("dicetrack-module");
+  if (!box || !dice.length) return;
+  box.innerHTML = dice.map((d, i) =>
+    `<img class="dicetrack-face" data-dicetrack-slot="${i}" src="${diceArtPath(d.kind, d.value)}" alt="">`).join("");
+  // Même vol que le dé de round : chaque face part de l'extérieur et
+  // roule en chemin, en piochant dans la VRAIE table de son dé.
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    [...box.children].forEach((face, i) => {
+      const d = dice[i];
+      const art = DICE_ART[d.kind];
+      animateOneMovingDie(face, d.value, null, i * 160, 900, {
+        faceHTML: (v, size) => `<img src="${diceArtPath(d.kind, v)}" style="position:absolute;left:0;top:0;width:${size}px;height:${size}px;">`,
+        randomFace: () => art.faces[Math.floor(Math.random() * art.faces.length)]
+      });
+    });
   }
 }
 
@@ -10346,6 +10463,7 @@ function render() {
 // setupBoardScroll()/updateDashboardsViewportHeight(), rappelées à
 // chaque rendu — voir leurs commentaires respectifs).
 initDashboardsZoom();
+if (typeof setDiceObserver === "function") setDiceObserver(noteSpecialDie);
 
 // Bouton plein écran (retour de Mayrik : voir le rendu réel sans la
 // barre d'adresse du navigateur, en attendant une vraie installation
