@@ -81,7 +81,7 @@ console.log("C'est bien un Slam (seule issue possible ici) (attendu true) :", re
 section("Bug 2 — Ligne d'arrivée (vraies tuiles) : atteinte normalement, classée Route pure");
 
 function loadRealTiles() {
-  const dir = "/home/claude/Projet-Bambi/tiles/data";
+  const dir = path.join(__dirname, "tiles", "data"); // chemin relatif au dépôt : un chemin absolu ne vaut que sur une machine
   return fs.readdirSync(dir).map((file) => {
     const code = fs.readFileSync(path.join(dir, file), "utf8");
     const varName = "TILE_VENDETTA_" + path.basename(file, ".js").replace("vendetta-", "").toUpperCase();
