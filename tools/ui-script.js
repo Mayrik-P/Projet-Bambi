@@ -1222,7 +1222,8 @@ function restoreGameState(payload) {
     allChoppers: payload.allChoppers,
     roundState: payload.roundState,
     aiPending: null,
-    aiAnimating: false
+    aiAnimating: false,
+    uiLocked: false // gel de rythme, voir gelerPendantLaScene
   };
   sel = {};
   fullLog = [{ sep: "🔄 Partie reprise (sauvegarde locale)" }];
@@ -1242,7 +1243,7 @@ function newGame() {
     allCars.push(createCarOffBoard(name, CAR_SIZE.LARGE));
   }
   const roundState = createRoundState(PLAYER_NAMES);
-  G = { progressionState, allCars, allChoppers, roundState, aiPending: null, aiAnimating: false };
+  G = { progressionState, allCars, allChoppers, roundState, aiPending: null, aiAnimating: false, uiLocked: false };
   sel = {};
   fullLog = [];
   gameOver = false;
@@ -1330,22 +1331,192 @@ function playAiTurn() {
   driveAiTurnGenerator(gen, `Round ${G.roundState.roundNumber} — ${cp}`, decision);
 }
 
-// Délai (ms) entre deux cases affichées pendant le mouvement de l'IA —
-// PUREMENT VISUEL, aucun effet sur les règles ni sur l'issue de la
-// partie (voir engine.js, `options.emitSteps`). Demandé par Mayrik le
-// 28/08 : lire le log à chaque tour pour repérer un mouvement suspect
-// est trop lent sur un grand nombre de parties ; un petit temps de
-// pause à chaque case permet de le voir directement au coup d'œil.
-// 0 = pas de pause du tout (utile pour l'automatisation/les tests —
-// voir test-ui-ai-step-pause.js). Pensé pour devenir un réglage de
-// vitesse choisi par le joueur dans le jeu définitif (Mayrik).
-let AI_STEP_DELAY_MS = 500;
+// ===================================================================
+// RYTHME DES ANIMATIONS (chantier 4a)
+//
+// Constat de Mayrik en jouant : tout s'enchaîne trop vite et, dès qu'un
+// lancer de dés déplace des véhicules, on ne comprend plus ce qui se
+// passe — les dés volent encore alors que la voiture a déjà bougé.
+//
+// Deux manques bien distincts, tous deux traités ici :
+//   1. AUCUNE VITESSE RÉGLABLE — une seule constante, appliquée aux
+//      seuls pas de l'IA. Elle devient une table de vitesses partagée
+//      par tous les temps morts du jeu, prête pour le futur menu
+//      Settings (lent / moyen / rapide).
+//   2. PERSONNE N'ATTENDAIT LES ANIMATIONS — chaque dé animé rendait
+//      pourtant déjà une promesse (voir animateOneMovingDie), mais elle
+//      était jetée. Elles sont désormais collectées dans un registre
+//      unique, et le jeu attend qu'il soit vide avant de poursuivre.
+//      C'est la cause principale du « on ne comprend pas ce qui se
+//      passe », et ce point ne coûte aucune ligne de moteur.
+//
+// CE QUI N'EST PAS FAIT ICI (chantier 4b) : enrichir les événements
+// rendus par les générateurs du moteur. Tant qu'il ne rend qu'un seul
+// {type:"step"} par case, on ne peut séparer que les pas existants —
+// pas le lancer de dés du déplacement qu'il provoque, les deux vivant
+// à l'intérieur du MÊME step. AUCUNE ligne du moteur n'est touchée par
+// 4a : uniquement les pilotes, ici même.
+// ===================================================================
+
+// Vitesses proposées, en ms entre deux étapes (valeurs demandées par
+// Mayrik). "medium" = 0,5 s, le réglage par défaut à juger à l'usage.
+const PACE_PRESETS = { slow: 900, medium: 500, fast: 200 };
+let paceSpeedName = "medium";
+let PACE_MS = PACE_PRESETS[paceSpeedName];
+
+// Point d'entrée du futur menu Settings. Renvoie false sur un nom
+// inconnu (l'appelant garde alors la vitesse en cours). 0 reste
+// possible en écrivant directement PACE_MS — utilisé par les tests
+// pour supprimer tout temps mort (voir test-ai-step-pause.js).
+function setPaceSpeed(name) {
+  if (!Object.prototype.hasOwnProperty.call(PACE_PRESETS, name)) return false;
+  paceSpeedName = name;
+  PACE_MS = PACE_PRESETS[name];
+  return true;
+}
+function currentPaceSpeed() { return paceSpeedName; }
+
+// Choix de la vitesse SANS console : trois boutons sur l'écran
+// d'accueil, à côté du choix du nombre d'IA (demande de Mayrik) — voir
+// leur câblage dans le bloc DÉMARRAGE. Le choix vaut pour la partie
+// lancée juste après et reste mémorisé d'une session à l'autre, si
+// bien que l'écran d'accueil s'ouvre toujours sur la dernière vitesse
+// utilisée. Le futur menu Settings n'aura rien à reprendre ici : il
+// appellera les deux mêmes fonctions, setPaceSpeed() puis
+// memoriserVitesse().
+const PACE_STORAGE_KEY = "trv_bambi_pace_v1";
+
+function memoriserVitesse() {
+  try { window.localStorage.setItem(PACE_STORAGE_KEY, paceSpeedName); } catch (e) { /* stockage refusé : sans conséquence */ }
+}
+
+function initPaceFromStorage() {
+  try {
+    const memorise = window.localStorage.getItem(PACE_STORAGE_KEY);
+    if (memorise) setPaceSpeed(memorise);
+  } catch (e) { /* stockage refusé : on garde la vitesse par défaut */ }
+}
+
+// --- REGISTRE DES ANIMATIONS EN VOL --------------------------------
+// Toute animation qui doit retarder la suite du jeu s'inscrit ici.
+// Aujourd'hui une seule source : animateOneMovingDie (dés de round,
+// road die, dicetrack). Une animation future — déplacement de
+// véhicule, illustration, pose d'un jeton de dégât (chantier 4c) —
+// n'aura qu'à s'inscrire de la même façon pour être attendue, sans
+// toucher une seule ligne des pilotes.
+let animationsEnVol = [];
+
+function suivreAnimation(promesse) {
+  animationsEnVol.push(promesse);
+  const retirer = () => {
+    const i = animationsEnVol.indexOf(promesse);
+    if (i >= 0) animationsEnVol.splice(i, 1);
+  };
+  promesse.then(retirer, retirer);
+  return promesse;
+}
+
+// Le rythme est PUREMENT VISUEL : hors d'un vrai navigateur (tests
+// jsdom, self-play), aucune animation n'est jamais lancée — c'est la
+// même garde que dans renderDiceTrack et
+// maybeTriggerRoundDiceRollAnimation. Il n'y a donc rien à attendre, et
+// tous les chemins restent exactement aussi synchrones qu'avant ce
+// chantier : aucun test existant n'est affecté.
+function scenePeutAnimer() {
+  return typeof window !== "undefined" && typeof window.requestAnimationFrame === "function";
+}
+
+// Une salve de dés notifiée par le moteur (setDiceObserver) n'est
+// transformée en animations qu'à la microtâche suivante — voir
+// diceTrackFlush. Au moment où un pilote demande à attendre, l'animation
+// peut donc ne pas exister ENCORE : une salve en attente compte donc
+// autant qu'une animation déjà en vol, sinon on la manquerait à tous
+// les coups (c'est précisément le cas des dés d'un Slam).
+function animationsEnAttente() {
+  if (!scenePeutAnimer()) return false;
+  return animationsEnVol.length > 0 || diceTrackFlush !== null;
+}
+
+// Attend que plus rien ne vole. Renvoie null s'il n'y a rien à
+// attendre : c'est ce qui permet aux pilotes de rester STRICTEMENT
+// synchrones quand aucune animation n'est en cours (contrat vérifié
+// par les tests existants).
+function attendreAnimations() {
+  if (!animationsEnAttente()) return null;
+  return (async () => {
+    // Boucle, et non un simple Promise.all : une animation peut en
+    // faire naître une autre (salve de dés vidée pendant l'attente).
+    // Le garde-fou borne la boucle — un enchaînement d'animations ne
+    // doit jamais pouvoir bloquer la partie pour de bon.
+    for (let garde = 0; garde < 40 && animationsEnAttente(); garde++) {
+      if (diceTrackFlush) { await diceTrackFlush; continue; }
+      await Promise.all(animationsEnVol.slice());
+    }
+  })();
+}
+
+// Le battement lui-même : le temps mort volontaire entre deux étapes,
+// une fois l'écran stabilisé.
+function attendreBattement() {
+  return new Promise((r) => setTimeout(r, PACE_MS));
+}
+
+// Enchaîne `suite` APRÈS la fin des animations en vol, PUIS le
+// battement. Reste strictement synchrone si rien ne vole et que la
+// vitesse est à 0.
+function apresBattement(suite) {
+  const attente = attendreAnimations();
+  const battre = () => { if (PACE_MS > 0) setTimeout(suite, PACE_MS); else suite(); };
+  if (attente) attente.then(battre); else battre();
+}
+
+// --- GEL DE L'INTERFACE PENDANT UNE SCÈNE --------------------------
+// Sans lui, rien n'empêche un deuxième clic pendant que les dés volent :
+// le joueur enchaînerait un pas de plus avant même d'avoir vu le
+// résultat du précédent — exactement ce que ce chantier cherche à
+// supprimer. Deux protections complémentaires :
+//   - highlightedCells() ne propose plus aucune case (vérifiable en
+//     test, c'est le vrai danger : un pas de mouvement en trop) ;
+//   - un voile transparent plein écran avale tout le reste (boutons du
+//     panneau, marqueurs de tir, dashboards) sans avoir à modifier un
+//     par un leurs vingt points d'attache.
+function interfaceGelee() { return !!(G && G.uiLocked); }
+
+function appliquerVoileDeGel() {
+  if (typeof document === "undefined" || !document.body) return;
+  const voile = document.getElementById("input-shield");
+  if (!interfaceGelee()) { if (voile) voile.remove(); return; }
+  if (voile) return;
+  const neuf = document.createElement("div");
+  neuf.id = "input-shield";
+  Object.assign(neuf.style, {
+    position: "fixed", inset: "0", zIndex: "9998", background: "transparent"
+  });
+  document.body.appendChild(neuf);
+}
+
+// Gèle l'interface le temps que la scène en cours se termine (dés en
+// vol + battement), puis redessine. Ne fait rien — et ne rend donc pas
+// le chemin asynchrone — s'il n'y a rien à attendre. Renvoie vrai si
+// l'interface a réellement été gelée.
+function gelerPendantLaScene() {
+  const attente = attendreAnimations();
+  if (!attente) return false;
+  G.uiLocked = true;
+  appliquerVoileDeGel();
+  attente.then(attendreBattement).then(() => {
+    G.uiLocked = false;
+    render();
+  });
+  return true;
+}
 
 // Fait avancer le générateur du tour IA en cours jusqu'à sa fin OU
 // jusqu'à sa prochaine pause. DEUX types de pause bien distincts :
 //   - {type:"step", ...} : purement informative, aucune décision à
 //     prendre — on affiche juste la nouvelle position, on attend
-//     AI_STEP_DELAY_MS, puis on reprend automatiquement tout seul
+//     la fin des animations en vol PUIS le battement de rythme
+//     (voir apresBattement), puis on reprend automatiquement tout seul
 //     (gen.next() sans réponse : la valeur reprise n'est jamais lue,
 //     voir engine.js).
 //   - {type:"slam-reroll", ...} : demande une VRAIE décision du joueur
@@ -1377,15 +1548,19 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
         render();
         return;
       }
-      if (AI_STEP_DELAY_MS > 0) {
-        setTimeout(() => driveAiTurnGenerator(gen, turnLabel, decision), AI_STEP_DELAY_MS);
-      } else {
-        driveAiTurnGenerator(gen, turnLabel, decision);
-      }
+      // Chantier 4a : on n'enchaîne plus au bout d'un simple délai, on
+      // attend D'ABORD que les dés lancés par ce pas aient fini de
+      // tomber — sans quoi le véhicule bougeait déjà pendant qu'ils
+      // volaient encore.
+      apresBattement(() => driveAiTurnGenerator(gen, turnLabel, decision));
       return;
     }
     G.aiPending = { gen, ctx: outcome.pending, turnLabel, decision };
     render();
+    // Les dés du Slam finissent de tomber avant que la question de
+    // relance ne devienne cliquable : sinon le joueur répond à un
+    // résultat qu'il n'a pas encore vu.
+    gelerPendantLaScene();
     return;
   }
   G.aiPending = null;
@@ -1425,6 +1600,10 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
   checkEnd();
   resetSelection();
   render();
+  // Le tour se termine souvent sur un tir : ses dés volent encore au
+  // moment où la main revient au joueur. On la lui rend une fois la
+  // scène finie, pas avant.
+  gelerPendantLaScene();
 }
 
 // Réponse du joueur humain à la pause de relance déclenchée PENDANT
@@ -1605,16 +1784,17 @@ function commitAssignAndCommand() {
   // Airstrike (retour de Mayrik) : le chopper vient d'être placé
   // (déjà visible au prochain render(), juste après ce commit) — le
   // tir, lui, n'est résolu qu'après une courte pause PUREMENT VISUELLE
-  // (même principe que AI_STEP_DELAY_MS pour le mouvement de l'IA :
+  // (même rythme partagé que le mouvement de l'IA, voir apresBattement :
   // aucun effet sur les règles), pour que le joueur voie distinctement
   // le chopper atterrir avant de voir le résultat du tir.
   if (pendingAirstrikeShoot && !gameOver) {
-    setTimeout(() => {
+    apresBattement(() => {
       const shootOutcome = executeAirstrikeShoot(G.progressionState, G.allCars, G.allChoppers, pendingAirstrikeShoot.chopper, pendingAirstrikeShoot.target, G.roundState.roundNumber);
       logTurn(shootOutcome.log);
       checkEnd();
       render();
-    }, AI_STEP_DELAY_MS);
+      gelerPendantLaScene(); // les dés du tir du chopper
+    });
   }
 }
 
@@ -1754,15 +1934,26 @@ function resumeMovementLoopOrStop(remainingAfter) {
 // pas entièrement résolu (peut lui-même avoir traversé plusieurs
 // pauses d'affilée, ex. un Slam en chaîne impliquant deux voitures
 // humaines successives — géré nativement, sans code spécial).
+// Chantier 4a : c'est ici que le tour humain reçoit enfin le même
+// rythme que celui de l'IA. Point de passage UNIQUE des trois
+// générateurs humains (entrée, mouvement, tir), donc un seul appel
+// suffit à couvrir tous les cas — contrairement aux vingt gestionnaires
+// de clic qui, eux, ne sont pas touchés.
 function driveHumanStepGenerator(gen, onComplete, answer) {
   const outcome = driveInteractive(gen, answer);
   if (!outcome.done) {
     sel.pendingHumanSlam = { gen, ctx: outcome.pending, onComplete };
     sel.step = "slam-reroll-choice";
+    gelerPendantLaScene(); // voir la même attente côté IA : on répond après avoir vu les dés
     return;
   }
   sel.pendingHumanSlam = null;
   onComplete(outcome.result);
+  // La case suivante ne redevient cliquable qu'une fois les dés de ce
+  // pas posés et le battement écoulé. Sans animation en cours, rien
+  // n'est gelé et le clic suivant reste immédiat : c'est le joueur qui
+  // donne le tempo tant que le jeu ne fait rien tout seul.
+  gelerPendantLaScene();
 }
 
 // Réponse du joueur à la pause de relance déclenchée pendant SON
@@ -1974,6 +2165,10 @@ function offBoardOptionLabel(option) {
 }
 
 function highlightedCells() {
+  // Rythme (4a) : aucune case cliquable tant qu'une animation vole —
+  // c'est la protection la plus importante, un clic de trop ici joue un
+  // vrai pas de mouvement.
+  if (interfaceGelee()) return [];
   if (!sel.step) return [];
   const b = board();
   // Retour de Mayrik : dès qu'un dé est posé sur ANY (étape
@@ -3462,7 +3657,10 @@ function diceRollOverlayRoot() {
 function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs, opts) {
   const faceHTML = (opts && opts.faceHTML) || ((v, sz) => movingDieOverlayHTML(v, color, sz));
   const randomFace = (opts && opts.randomFace) || (() => 1 + Math.floor(Math.random() * 6));
-  return new Promise((resolve) => {
+  // Chantier 4a : la promesse n'est plus seulement rendue à l'appelant
+  // (qui la jetait), elle est inscrite au registre des animations en
+  // vol — c'est ce qui permet aux pilotes de l'attendre.
+  return suivreAnimation(new Promise((resolve) => {
     const rect = targetEl.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) { resolve(); return; } // élément non visible (safety net)
 
@@ -3543,7 +3741,7 @@ function animateOneMovingDie(targetEl, finalValue, color, delay, totalMs, opts) 
       }
       requestAnimationFrame(frame);
     }, delay);
-  });
+  }));
 }
 
 // Déclenche le lancer animé des 4 dés de mouvement de CHAQUE joueur,
@@ -3570,7 +3768,7 @@ function playRoundDiceRollAnimation() {
     });
   });
 
-  Promise.all(allDicePromises);
+  return Promise.all(allDicePromises);
 }
 
 // Gate de sécurité : ne déclenche l'animation que dans un vrai
@@ -3601,7 +3799,10 @@ function maybeTriggerRoundDiceRollAnimation() {
   if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return;
   if (G.roundState.roundNumber === lastRolledRoundNumber) return;
   lastRolledRoundNumber = G.roundState.roundNumber;
-  playRoadDieRollAnimation().then(() => playRoundDiceRollAnimation());
+  // Inscrite comme UNE seule animation : sans ça, le registre se
+  // retrouve vide entre l'atterrissage du road die et le départ des dés
+  // des joueurs, et un pilote en attente repartirait au milieu.
+  suivreAnimation(playRoadDieRollAnimation().then(() => playRoundDiceRollAnimation()));
 }
 
 function render() {
@@ -3635,6 +3836,7 @@ function render() {
   const logEl = document.getElementById("log");
   logEl.innerHTML = fullLog.slice().reverse().map((e) => e.sep ? `<div class="turn-sep">${e.sep}</div>` : `<div class="line">${e.line}</div>`).join("");
 
+  appliquerVoileDeGel();
   maybeTriggerRoundDiceRollAnimation();
 }
 
@@ -3645,6 +3847,7 @@ function render() {
 // une seule fois ici, jamais répété dans render() (contrairement à
 // setupBoardScroll()/updateDashboardsViewportHeight(), rappelées à
 // chaque rendu — voir leurs commentaires respectifs).
+initPaceFromStorage(); // vitesse de rythme : dernier choix mémorisé, modifiable sur l'écran d'accueil
 initDashboardsZoom();
 if (typeof setDiceObserver === "function") setDiceObserver(noteSpecialDie);
 if (typeof setMovesObserver === "function") setMovesObserver(noteMovesRemaining);
@@ -3719,6 +3922,26 @@ document.querySelectorAll(".opponent-btn").forEach((btn) => {
     startNewGameFromScreen(parseInt(btn.dataset.aiCount, 10));
   });
 });
+
+// Vitesse des animations (chantier rythme) : trois boutons sur le même
+// écran que le choix du nombre d'IA. Ils ne lancent rien — ils fixent
+// la vitesse de la partie lancée juste après, et la mémorisent. Le
+// bouton actif est celui de la vitesse en cours, donc l'écran s'ouvre
+// déjà sur le dernier réglage utilisé (voir initPaceFromStorage).
+function syncPaceButtons() {
+  document.querySelectorAll(".pace-btn").forEach((btn) => {
+    btn.classList.toggle("selected", btn.dataset.pace === currentPaceSpeed());
+  });
+}
+
+document.querySelectorAll(".pace-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (!setPaceSpeed(btn.dataset.pace)) return; // valeur inconnue : on ne touche à rien
+    memoriserVitesse();
+    syncPaceButtons();
+  });
+});
+syncPaceButtons();
 
 const savedGame = loadGameState();
 if (savedGame && confirm("Une partie sauvegardée a été trouvée. Reprendre cette partie ?")) {

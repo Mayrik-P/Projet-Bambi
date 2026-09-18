@@ -252,6 +252,24 @@
   .opponent-btn-title { font-weight: 700; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px; }
   .opponent-swatches { display: flex; gap: 5px; flex-shrink: 0; }
   .opponent-swatch { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(0,0,0,0.35); }
+
+  /* Vitesse des animations (chantier rythme) : même famille graphique
+     que les boutons d'adversaires, en plus petit et en segmenté — trois
+     choix exclusifs, le bouton actif prenant le doré plein. Ces boutons
+     ne lancent pas la partie : ils fixent la vitesse de celle qu'on
+     lance juste après (voir syncPaceButtons() dans ui-script.js).
+     Préfiguration volontaire du futur menu Settings. */
+  #pace-options { width: 100%; margin-top: 26px; }
+  #pace-heading { font-family: "Oswald", Arial, sans-serif; font-weight: 700; font-size: 13px;
+    color: #ececec; text-transform: uppercase; letter-spacing: 1px; text-align: center; margin: 0 0 10px; }
+  #pace-buttons { display: flex; gap: 8px; width: 100%; }
+  .pace-btn { flex: 1; background: #3f3e44; color: #ecd5a7; border: 2px solid #b0956e;
+    border-radius: 8px; padding: 10px 4px; cursor: pointer; font-family: "Oswald", Arial, sans-serif;
+    font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;
+    box-shadow: 0 2px 2px rgba(0,0,0,0.25); }
+  .pace-btn:hover { background: #4c4b53; }
+  .pace-btn.selected { background: #e8b459; color: #1e1e24;
+    box-shadow: inset 0 2px 3px rgba(0,0,0,0.35); }
 </style>
 </head>
 <body>
@@ -285,6 +303,14 @@
           <span class="opponent-swatch" style="background:#7a5aa3"></span>
         </span>
       </button>
+    </div>
+    <div id="pace-options">
+      <div id="pace-heading">Vitesse des animations</div>
+      <div id="pace-buttons">
+        <button class="pace-btn" data-pace="slow">Lent</button>
+        <button class="pace-btn" data-pace="medium">Moyen</button>
+        <button class="pace-btn" data-pace="fast">Rapide</button>
+      </div>
     </div>
   </div>
 </div>
