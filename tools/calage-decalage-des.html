@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calage — décalage des dés sur leurs emplacements</title>
+<style>
+  body { margin: 0; padding: 14px; background: #2b2b31; color: #ececec;
+         font-family: system-ui, Arial, sans-serif; }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  .sub { font-size: 13px; line-height: 1.45; color: #c8c8d0; margin: 0 0 14px; max-width: 760px; }
+  .sub code { background: #1e1e24; padding: 1px 4px; border-radius: 3px; }
+  #panneau { position: sticky; top: 0; z-index: 5; background: #24242a;
+             border: 1px solid #4a4a55; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+  .ligne { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .ligne label { width: 150px; font-size: 13px; }
+  input[type=range] { flex: 1; min-width: 180px; }
+  .valeur { font-family: ui-monospace, monospace; font-size: 14px; min-width: 62px; text-align: right; }
+  button { background: #3d6ba3; color: #fff; border: none; border-radius: 6px;
+           padding: 8px 14px; font-size: 13px; cursor: pointer; }
+  button.secondaire { background: #4a4a55; }
+  #sortie { font-family: ui-monospace, monospace; font-size: 13px; background: #1e1e24;
+            border: 1px solid #4a4a55; border-radius: 6px; padding: 10px; margin-top: 10px;
+            white-space: pre-wrap; }
+  .bloc { margin-bottom: 22px; }
+  .titre { font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
+           color: #d9a34a; margin-bottom: 6px; }
+  svg { display: block; background: #1e1e24; border-radius: 6px; max-width: 100%; }
+</style>
+</head>
+<body>
+<h1>Calage — décalage des dés sur leurs emplacements imprimés</h1>
+<p class="sub">
+  Le dé et le carré imprimé font presque exactement la même taille : sans décalage, le bord clair de
+  l'emplacement dépasse en bas à droite, pile du côté où le dé porte son ombrage en biseau. Pousse le dé
+  vers le bas et la droite jusqu'à ce que ce bord-là soit recouvert — celui qui réapparaît en haut à gauche
+  est voulu, il joue le biseau lumineux. Les valeurs sont en <b>pixels natifs</b> de l'image du dé
+  (189 px), donc valables à tous les zooms du jeu. Quand ça te plaît, recopie la ligne du bas dans
+  <code>DIE_SLOT_NUDGE</code> (tools/ui-script.js) et relance <code>npm run build</code>.
+  Le command board et le dé Road ne sont volontairement pas concernés — ils ne sont donc pas affichés ici.
+</p>
+
+<div id="panneau">
+  <div class="ligne">
+    <label for="dx">Décalage horizontal →</label>
+    <input type="range" id="dx" min="-16" max="16" step="0.5" value="6">
+    <span class="valeur" id="vdx">+6</span>
+  </div>
+  <div class="ligne">
+    <label for="dy">Décalage vertical ↓</label>
+    <input type="range" id="dy" min="-16" max="16" step="0.5" value="6">
+    <span class="valeur" id="vdy">+6</span>
+  </div>
+  <div class="ligne">
+    <label for="zoom">Zoom d'affichage</label>
+    <input type="range" id="zoom" min="0.16" max="1.2" step="0.02" value="0.6">
+    <span class="valeur" id="vzoom">0.60</span>
+  </div>
+  <div class="ligne">
+    <button id="reset" class="secondaire">Remettre à 0</button>
+    <button id="copier">Copier la ligne</button>
+  </div>
+  <div id="sortie"></div>
+</div>
+
+<div id="vue"></div>
+
+<script>
+// --- Constantes reprises de tools/ui-script.js (dupliquées ici car cet
+// outil est autonome, comme calage-dashboards.html avant lui). Si l'une
+// d'elles change là-bas, la recopier ici. ---
+const DICEBOARD_IMG_NATIVE_W = 913, DICEBOARD_IMG_NATIVE_H = 341;
+const VEHICLE_DASH_NATIVE = {
+  small: { w: 1409, h: 756 },
+  medium: { w: 1515, h: 756 },
+  large: { w: 1409, h: 756 }
+};
+const DIE_IMG_NATIVE = 189;
+const COLOR = "blue"; // même gabarit pour toutes les couleurs, seule la teinte change
+
+const DICEBOARD_SLOT_FRACTION = {
+  slot0: { x: 0.142, y: 0.607 },
+  slot1: { x: 0.380, y: 0.607 },
+  slot2: { x: 0.619, y: 0.607 },
+  slot3: { x: 0.857, y: 0.607 }
+};
+const VEHICLE_SLOT_FRACTION = {
+  small:  { any: { x: 0.498, y: 0.452 }, endTurn: { x: 0.499, y: 0.742 }, coast1: { x: 0.805, y: 0.513 }, coast2: { x: 0.694, y: 0.720 } },
+  medium: { any: { x: 0.498, y: 0.451 }, endTurn: { x: 0.498, y: 0.739 }, coast1: { x: 0.809, y: 0.512 }, coast2: { x: 0.707, y: 0.720 } },
+  large:  { any: { x: 0.499, y: 0.451 }, endTurn: { x: 0.499, y: 0.739 }, coast1: { x: 0.848, y: 0.511 }, coast2: { x: 0.735, y: 0.721 } }
+};
+const SLOT_ROTATION = { any: 0, endTurn: 0, coast1: 45, coast2: 45, slot0: 0, slot1: 0, slot2: 0, slot3: 0 };
+
+// Valeurs de dés purement décoratives : on veut voir les BORDS du dé,
+// pas lire un résultat.
+const VALEURS = [4, 2, 5, 3, 6, 1];
+
+function pipLayout(value) {
+  const TL = [0, 0], TR = [2, 0], ML = [0, 1], MR = [2, 1], BL = [0, 2], BR = [2, 2], C = [1, 1];
+  return ({ 1: [C], 2: [TL, BR], 3: [TL, C, BR], 4: [TL, TR, BL, BR],
+            5: [TL, TR, C, BL, BR], 6: [TL, TR, ML, MR, BL, BR] })[value] || [];
+}
+
+function dieMarkup(value, x, y, size, rotationDeg) {
+  const pipCell = size / 3;
+  const face = `../images/dice/die-move-${COLOR}.webp`;
+  const pip = `../images/dice/die-move-pip.webp`;
+  const pips = pipLayout(value).map(([c, r]) =>
+    `<image href="${pip}" x="${(x + c * pipCell).toFixed(2)}" y="${(y + r * pipCell).toFixed(2)}" width="${pipCell.toFixed(2)}" height="${pipCell.toFixed(2)}"/>`
+  ).join("");
+  const cx = x + size / 2, cy = y + size / 2;
+  const rot = rotationDeg ? ` transform="rotate(${rotationDeg} ${cx.toFixed(2)} ${cy.toFixed(2)})"` : "";
+  return `<g${rot}><image href="${face}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${size.toFixed(2)}" height="${size.toFixed(2)}"/>${pips}</g>`;
+}
+
+// Même calcul que slotDieOrigin() dans ui-script.js : le décalage est en
+// pixels natifs, donc multiplié par l'échelle d'affichage.
+function origine(boxW, boxH, fraction, taille, echelle, nudge) {
+  const cx = fraction.x * boxW + nudge.x * echelle;
+  const cy = fraction.y * boxH + nudge.y * echelle;
+  return { x: cx - taille / 2, y: cy - taille / 2 };
+}
+
+function planche(titre, image, nativeW, nativeH, slots, echelle, nudge) {
+  const w = nativeW * echelle, h = nativeH * echelle;
+  const taille = DIE_IMG_NATIVE * echelle;
+  let des = "";
+  slots.forEach(([cle, fraction], i) => {
+    const o = origine(w, h, fraction, taille, echelle, nudge);
+    des += dieMarkup(VALEURS[i % VALEURS.length], o.x, o.y, taille, SLOT_ROTATION[cle] || 0);
+  });
+  return `<div class="bloc"><div class="titre">${titre}</div>
+    <svg width="${w.toFixed(0)}" height="${h.toFixed(0)}" viewBox="0 0 ${w.toFixed(2)} ${h.toFixed(2)}" xmlns="http://www.w3.org/2000/svg">
+      <image href="${image}" x="0" y="0" width="${w.toFixed(2)}" height="${h.toFixed(2)}"/>
+      ${des}
+    </svg></div>`;
+}
+
+const elDx = document.getElementById("dx");
+const elDy = document.getElementById("dy");
+const elZoom = document.getElementById("zoom");
+
+function ligneConstante(nudge) {
+  return `const DIE_SLOT_NUDGE = { x: ${nudge.x}, y: ${nudge.y} };`;
+}
+
+function dessiner() {
+  const nudge = { x: parseFloat(elDx.value), y: parseFloat(elDy.value) };
+  const echelle = parseFloat(elZoom.value);
+  document.getElementById("vdx").textContent = (nudge.x >= 0 ? "+" : "") + nudge.x;
+  document.getElementById("vdy").textContent = (nudge.y >= 0 ? "+" : "") + nudge.y;
+  document.getElementById("vzoom").textContent = echelle.toFixed(2);
+  document.getElementById("sortie").textContent = ligneConstante(nudge);
+
+  let html = planche("Diceboard", "../images/dashboards/diceboard.webp",
+    DICEBOARD_IMG_NATIVE_W, DICEBOARD_IMG_NATIVE_H,
+    Object.entries(DICEBOARD_SLOT_FRACTION), echelle, nudge);
+  ["small", "medium", "large"].forEach((taille) => {
+    html += planche("Dashboard " + taille.toUpperCase(),
+      `../images/dashboards/dashboard-${COLOR}-${taille}.webp`,
+      VEHICLE_DASH_NATIVE[taille].w, VEHICLE_DASH_NATIVE[taille].h,
+      Object.entries(VEHICLE_SLOT_FRACTION[taille]), echelle, nudge);
+  });
+  document.getElementById("vue").innerHTML = html;
+}
+
+[elDx, elDy, elZoom].forEach((el) => el.addEventListener("input", dessiner));
+document.getElementById("reset").addEventListener("click", () => {
+  elDx.value = 0; elDy.value = 0; dessiner();
+});
+document.getElementById("copier").addEventListener("click", () => {
+  const texte = ligneConstante({ x: parseFloat(elDx.value), y: parseFloat(elDy.value) });
+  navigator.clipboard.writeText(texte).then(
+    () => { document.getElementById("copier").textContent = "Copié !"; setTimeout(() => { document.getElementById("copier").textContent = "Copier la ligne"; }, 1500); },
+    () => { /* presse-papiers refusé : la ligne reste lisible et sélectionnable juste en dessous */ }
+  );
+});
+dessiner();
+</script>
+</body>
+</html>

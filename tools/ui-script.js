@@ -466,8 +466,35 @@ function damageTokenBox(size, slotKey) {
 // renderDashboards (retour de Mayrik, revue de code). `cx`/`cy` (le
 // centre, avant recentrage) restent utiles à l'appelant pour la
 // rotation SVG (`transform="rotate(deg cx cy)"`), donc renvoyés aussi.
-function slotDieOrigin(box, fraction) {
-  const cx = box.x + fraction.x * box.w, cy = box.y + fraction.y * box.h;
+// Décalage du dé sur un emplacement IMPRIMÉ (retour de Mayrik) : le dé
+// et le carré imprimé font presque exactement la même taille, sans
+// aucune marge — le bord clair de l'emplacement dépassait donc en bas
+// à droite, et tombait pile du côté où le dé porte son ombrage en
+// biseau, ce qui cassait l'effet de relief. On pousse le dé vers le
+// bas et la droite pour qu'il recouvre ce bord-là ; le bord qui
+// réapparaît en haut à gauche est voulu, il joue le biseau lumineux
+// (retour de Mayrik).
+//
+// Exprimé en PIXELS NATIFS de l'image du dé (189 px), comme toutes les
+// autres mesures de cette zone : il suit donc automatiquement
+// DASH_SCALE et le zoom du rail, sans réglage séparé par niveau de
+// zoom. Calé par Mayrik dans son navigateur via
+// tools/calage-decalage-des.html.
+//
+// NE S'APPLIQUE QU'aux emplacements imprimés du diceboard et des
+// dashboards véhicule. Le command board en est exclu (son calage
+// convient tel quel, retour de Mayrik), et le dé Road aussi — il flotte
+// dans un espace libre, sans emplacement imprimé à recouvrir.
+const DIE_SLOT_NUDGE = { x: 6, y: 6 };
+
+// `nudge` (optionnel) : décalage en pixels natifs, voir DIE_SLOT_NUDGE.
+// Il déplace AUSSI le centre rendu (cx/cy), sans quoi un dé tourné
+// (slots COAST/Command en losange) pivoterait autour d'un point qui
+// n'est plus le sien.
+function slotDieOrigin(box, fraction, nudge) {
+  const nx = (nudge ? nudge.x : 0) * DASH_SCALE;
+  const ny = (nudge ? nudge.y : 0) * DASH_SCALE;
+  const cx = box.x + fraction.x * box.w + nx, cy = box.y + fraction.y * box.h + ny;
   return { x: cx - DIE_DISPLAY_SIZE / 2, y: cy - DIE_DISPLAY_SIZE / 2, cx, cy };
 }
 // Boîte englobante de TOUS les boards d'un même joueur, jetons dégât
@@ -871,7 +898,7 @@ function renderDashboards() {
     diceboardSlots(playerName).forEach((value, i) => {
       if (value === null) return;
       const slotKey = "slot" + i;
-      const { x: dx, y: dy } = slotDieOrigin(dice, DICEBOARD_SLOT_FRACTION[slotKey]);
+      const { x: dx, y: dy } = slotDieOrigin(dice, DICEBOARD_SLOT_FRACTION[slotKey], DIE_SLOT_NUDGE);
       // Dé choisi, en attente de destination : l'emplacement reste à sa
       // place, vidé et surligné. Un clic dessus annule le choix et rend
       // le dé (retour de Mayrik).
@@ -983,7 +1010,7 @@ function renderDashboards() {
         // tour terminé (voir finishHumanTurn), jamais pour la sélection
         // elle-même.
         const slotKey = ctx.mode === "coast" ? "coast1" : "any";
-        const { x: sx, y: sy, cx, cy } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
+        const { x: sx, y: sy, cx, cy } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey], DIE_SLOT_NUDGE);
         const rotAttr = SLOT_ROTATION[slotKey] ? ` transform="rotate(${SLOT_ROTATION[slotKey]} ${cx.toFixed(1)} ${cy.toFixed(1)})"` : "";
         svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5"${rotAttr}/>`);
         svg.lastElementChild.addEventListener("click", () => { pickCar(car); render(); });
@@ -1006,7 +1033,7 @@ function renderDashboards() {
         // bascule vers coast2 (stockage définitif) qu'une fois le tour
         // terminé, voir finishHumanTurn/coastDieState ci-dessous.
         const slotKey = sel.mode === "coast" ? "coast1" : "any";
-        const { x: dieX, y: dieY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
+        const { x: dieX, y: dieY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey], DIE_SLOT_NUDGE);
         const isCancelable = PRE_COMMIT_STEPS.has(sel.step) && sel.step !== "commit";
         svg.insertAdjacentHTML("beforeend", dieMarkup(sel.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, isCancelable ? 'class="clickable"' : "", SLOT_ROTATION[slotKey]));
         if (isCancelable) {
@@ -1019,7 +1046,7 @@ function renderDashboards() {
         // interaction possible sur la décision de l'IA), sinon même
         // convention coast1 que côté humain.
         const slotKey = currentAiDecision.isCoast ? "coast1" : "any";
-        const { x: dieX, y: dieY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
+        const { x: dieX, y: dieY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey], DIE_SLOT_NUDGE);
         svg.insertAdjacentHTML("beforeend", dieMarkup(currentAiDecision.dieValue, PLAYER_CAR_COLOR[playerName], dieX, dieY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[slotKey]));
       }
 
@@ -1031,7 +1058,7 @@ function renderDashboards() {
       if (car) {
         const et = endTurnDieState[car.id];
         if (et && et.round === G.roundState.roundNumber) {
-          const { x: etX, y: etY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size].endTurn);
+          const { x: etX, y: etY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size].endTurn, DIE_SLOT_NUDGE);
           svg.insertAdjacentHTML("beforeend", dieMarkup(et.dieValue, PLAYER_CAR_COLOR[playerName], etX, etY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION.endTurn));
         }
       }
@@ -1046,7 +1073,7 @@ function renderDashboards() {
           ["coast1", "coast2"].forEach((slotKey, idx) => {
             const dieValue = cd.slots[idx];
             if (dieValue === null || dieValue === undefined) return;
-            const { x: cdX, y: cdY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey]);
+            const { x: cdX, y: cdY } = slotDieOrigin(dim, VEHICLE_SLOT_FRACTION[size][slotKey], DIE_SLOT_NUDGE);
             svg.insertAdjacentHTML("beforeend", dieMarkup(dieValue, PLAYER_CAR_COLOR[playerName], cdX, cdY, DIE_DISPLAY_SIZE, "", SLOT_ROTATION[slotKey]));
           });
         }
