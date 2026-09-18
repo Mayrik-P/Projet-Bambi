@@ -139,8 +139,13 @@ let G = win.eval("G");
 win.render();
 const infoBand4 = dom.window.document.getElementById("info-band");
 const cp4 = win.getCurrentPlayer(G.roundState);
-console.log("Le module ROUND affiche bien le numéro de manche, séparément de la bande d'info (attendu true) :",
-  /ROUND\s*\d+/.test(dom.window.document.getElementById("round-module").textContent));
+// L'afficheur ROUND a été SUPPRIMÉ : Mayrik a constaté après de
+// nombreuses parties qu'aucune mécanique n'utilise le numéro de manche.
+// Le speedometer a pris sa place et son format.
+console.log("Le module SPEEDOMETER affiche bien un nombre de cases (attendu true) :",
+  /^\d+$/.test(dom.window.document.getElementById("speedometer-value").textContent));
+console.log("L'afficheur ROUND a bien disparu du DOM (attendu true) :",
+  dom.window.document.getElementById("round-module") === null);
 console.log("[règle changée : le round a quitté la bande d'info] la bande ne le répète plus (attendu false) :", infoBand4.textContent.includes("ROUND " + G.roundState.roundNumber));
 console.log("La bande d'info mentionne bien le joueur actif, en toutes lettres (attendu true) :", infoBand4.textContent.includes(win.eval(`playerLabel("${cp4}")`).toUpperCase()));
 
@@ -356,7 +361,7 @@ console.log("...avec 100dvh comme amorce avant la première mesure (attendu true
 console.log("...et plus aucune largeur maximale qui gâcherait l'écran d'un ordinateur (attendu true) :",
   wrapCss14.maxWidth === "" || wrapCss14.maxWidth === "none");
 
-const modulesAbsolus14 = ["board-viewport", "info-band", "dashboards-viewport", "round-module", "board-position-slider"]
+const modulesAbsolus14 = ["board-viewport", "info-band", "dashboards-viewport", "speedometer-module", "board-position-slider"]
   .every((id) => dom.window.getComputedStyle(dom.window.document.getElementById(id)).position === "absolute");
 console.log("Les modules sont bien positionnés en absolu par la couche d'application (attendu true) :", modulesAbsolus14);
 

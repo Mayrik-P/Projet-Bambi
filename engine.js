@@ -356,7 +356,7 @@ function advanceBoardOnFrontExit(state, allCars, allChoppers, options = {}) {
 function* moveCarWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, slamOptions = {}) {
   const log = [];
   let remainingPath = [...chosenPath];
-  let remainingDie = dieValue;
+  let remainingDie = notifyMovesRemaining(dieValue);
   // p.9 (bonus Road) : l'éligibilité doit tenir sur TOUTE la
   // trajectoire, pas seulement le dernier segment — bug corrigé
   // (détecté en câblant le bonus Road, jamais appliqué jusqu'ici) :
@@ -700,7 +700,7 @@ function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remain
 
   car.col = targetCol;
   car.row = targetRow;
-  let newRemaining = mudExceptionApplies ? 0 : remaining - cost;
+  let newRemaining = notifyMovesRemaining(mudExceptionApplies ? 0 : remaining - cost);
   log.push(`${car.id} avance vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
 
   // Ligne d'arrivée (p.11) : y entrer met fin à la partie IMMÉDIATEMENT
@@ -744,7 +744,7 @@ function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remain
   // l'occupant à considérer, et résout déjà son propre slam.
   const hazardResult = yield* resolveHazardGen(tile, allCars, car, newRemaining, slamOptions);
   log.push(...hazardResult.log);
-  newRemaining = hazardResult.remaining;
+  newRemaining = notifyMovesRemaining(hazardResult.remaining);
   if (hazardResult.stopped) {
     return {
       log,
@@ -1182,6 +1182,28 @@ function findFrontmostCar(cars) {
 // -----------------------------------------------------------------
 let diceObserver = null;
 function setDiceObserver(fn) { diceObserver = (typeof fn === "function") ? fn : null; }
+
+// Même principe pour le compteur de cases de mouvement restantes, que
+// le moteur ne gardait que dans une variable locale. Il est notifié à
+// chaque fois qu'il change : au départ (valeur du dé), puis à chaque
+// case entrée — y compris la boue, qui coûte 2 — et après tout effet de
+// terrain qui le modifie.
+// EXTENSION À VENIR (dé Fire) : un véhicule en feu tirera un dé en
+// début de phase de mouvement, ajoutant 1 ou 2 cases. Rien de nouveau à
+// prévoir ici : il suffira que ce bonus passe par la même variable, et
+// l'affichage suivra sans un seul changement.
+let movesObserver = null;
+let lastNotifiedMoves = null; // évite de notifier deux fois la même valeur
+function setMovesObserver(fn) {
+  movesObserver = (typeof fn === "function") ? fn : null;
+  lastNotifiedMoves = null;
+}
+function notifyMovesRemaining(n) {
+  if (!movesObserver || n === lastNotifiedMoves) return n;
+  lastNotifiedMoves = n;
+  try { movesObserver(n); } catch (e) { /* la présentation ne bloque jamais le jeu */ }
+  return n;
+}
 function notifyDieRolled(kind, value) {
   if (!diceObserver) return value;
   try { diceObserver(kind, value); } catch (e) { /* la présentation ne bloque jamais le jeu */ }
@@ -3151,6 +3173,7 @@ function rollMovementDie(injectedValue = null) {
 if (typeof module !== "undefined" && module.exports) {
 module.exports = {
   setDiceObserver,
+  setMovesObserver,
 
   driveSync,
   TERRAIN,

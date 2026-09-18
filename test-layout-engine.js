@@ -205,7 +205,7 @@ section("Modules déclarés absents");
 // road die n'existent pas encore dans le DOM. Un module absent ne doit
 // jamais être placé (pas de boîte vide) et sa place doit revenir aux
 // autres, sans casser aucun invariant.
-const OPTIONNELS = ["illu", "dice", "round", "roaddie"];
+const OPTIONNELS = ["illu", "dice", "roaddie", "speedo"];
 let combinaisonsModules = 0, fantomes = 0, debordementsM = 0, chevauchementsM = 0, contratM = 0;
 for (let masque = 0; masque < 16; masque++) {
   const present = {};
@@ -234,13 +234,13 @@ check("aucun chevauchement, quels que soient les modules présents", chevaucheme
 check("contrat respecté sur appareils réels, quels que soient les modules présents",
   contratM === 0, contratM + " cas");
 
-// Jeu d'aujourd'hui : plateau + info + round + dashboards seulement.
-const ETAPE3 = { illu: false, dice: false, roaddie: false, round: true };
+// Jeu d'aujourd'hui : plateau + info + dicetrack + road die + speedometer + dashboards.
+const ETAPE3 = { illu: false, dice: true, roaddie: true, speedo: true };
 [["Pixel portrait", 412, 915], ["Pixel paysage", 915, 412], ["Ordinateur", 1512, 850]].forEach(([nom, w, h]) => {
   const L = computeLayout(w, h, 4, "auto", ETAPE3);
   check(nom + " (modules d'aujourd'hui) : contrat respecté",
     allZones(L).every((z) => z.w >= z.minW - 0.5 && z.h >= z.minH - 0.5));
-  check(nom + " (modules d'aujourd'hui) : le round est bien placé", !!L.zones.round);
+  check(nom + " (modules d'aujourd'hui) : le speedometer est bien placé", !!L.zones.speedo);
 });
 // Avec moins de modules, il reste plus de place — jamais moins.
 const complet = computeLayout(412, 915, 4, "auto");
