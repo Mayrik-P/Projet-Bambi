@@ -2813,6 +2813,7 @@ function updateInfoBand(cp) {
   updateRoadDieModule();
   syncDiceTrackTurn();
   syncSpeedometer();
+  focusBoardOnActiveCar();
   el.textContent = gameOver
     ? "PARTIE TERMINÉE"
     : cp ? playerLabel(cp).toUpperCase() : "";
@@ -2961,6 +2962,54 @@ function clearDiceTrack() {
 
 // Vide le dicetrack quand on change de tour : borne la durée de vie
 // d'un dé verrouillé, qui ne doit jamais survivre au tour qui l'a tiré.
+// ===================================================================
+// RECENTRAGE DU PLATEAU SUR LE VÉHICULE ACTIF (retour de Mayrik)
+//
+// Deux occasions : quand un dé est posé sur le dashboard d'un véhicule
+// (il devient le véhicule actif) et quand ce véhicule arrive sur une
+// nouvelle case. Les deux se ramènent à UNE seule condition : l'identité
+// ou la position du véhicule actif a changé depuis le dernier rendu.
+// Un seul point d'accroche suffit donc, et il couvre aussi bien le tour
+// du joueur que celui de l'IA.
+//
+// POURQUOI PAS scrollIntoView({inline:"center"}) : c'est l'API standard
+// pour ça, mais elle ne fait rien tant que l'élément est visible — or on
+// veut recentrer même un véhicule déjà à l'écran mais mal placé. On pose
+// donc scrollLeft directement. Le bornage est gratuit : un navigateur
+// ramène toujours scrollLeft dans [0, scrollWidth - clientWidth], ce qui
+// donne exactement le comportement demandé — au bord, on fait au mieux
+// sans jamais créer de vide sur les côtés.
+//
+// On ne recentre QUE sur changement : si le joueur fait défiler le
+// plateau à la main pour regarder ailleurs, on ne lui reprend pas la
+// vue tant que rien ne bouge.
+// ===================================================================
+let lastBoardFocusKey = null;
+
+function activeCarForFocus() {
+  if (typeof sel !== "undefined" && sel && sel.car) return sel.car;
+  const ai = (typeof currentAiDecision !== "undefined") ? currentAiDecision : null;
+  return (ai && ai.car) ? ai.car : null;
+}
+
+function focusBoardOnActiveCar() {
+  const vp = document.getElementById("board-viewport");
+  const svg = document.getElementById("board");
+  if (!vp || !svg || typeof vp.scrollTo !== "function") return;
+  const car = activeCarForFocus();
+  if (!car || car.col === null || car.status === "eliminated") { lastBoardFocusKey = null; return; }
+  const key = `${car.id}|${car.col}|${car.row}`;
+  if (key === lastBoardFocusKey) return;
+  lastBoardFocusKey = key;
+
+  const vb = svg.viewBox && svg.viewBox.baseVal;
+  const largeurRendue = parseFloat(svg.style.width) || svg.getBoundingClientRect().width;
+  if (!vb || !vb.width || !largeurRendue || !vp.clientWidth) return;
+  const echelle = largeurRendue / vb.width;
+  const { cx } = cellCenter(car.col, car.row);
+  vp.scrollTo({ left: (cx - vb.x) * echelle - vp.clientWidth / 2, behavior: "smooth" });
+}
+
 function syncDiceTrackTurn() {
   if (!G || !G.roundState) return;
   const key = `${G.roundState.roundNumber}|${getCurrentPlayer(G.roundState)}|` +
