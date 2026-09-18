@@ -80,9 +80,13 @@
     background: #0d0d10 center/contain no-repeat url("../images/miscellaneous/speedometer.webp");
     border: 1px solid #3a3a46; border-radius: 6px; pointer-events: none; }
   #speedometer-module.over-board { background-color: rgba(13,13,16,0.82); z-index: 5; }
-  #speedometer-value { font-family: "Courier New", monospace; font-weight: bold;
-    color: #ffb347; /* taille posée par applyLayout, proportionnelle au cadran */
-    text-shadow: 0 0 6px rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,1); }
+  /* Le nombre est un afficheur à 7 segments dessiné en SVG (voir
+     sevenSegmentSVG dans ui-script.js) : pas de police à charger, net à
+     toute taille. Sa boîte est dimensionnée par applyLayout à 70% du
+     cadran ; la couleur est celle des cases candidates au mouvement. */
+  #speedometer-value { display: flex; align-items: center; justify-content: center;
+    filter: drop-shadow(0 0 4px rgba(0,0,0,0.9)); }
+  #speedometer-value svg { display: block; }
   /* Module ROAD DIE : carré, la face remplit la boîte. */
   #roaddie-module { display: flex; align-items: center; justify-content: center;
     background: #0d0d10; border: 1px solid #3a3a46; border-radius: 6px;

@@ -218,6 +218,11 @@ const CAR_IMG_H = CAR_IMG_W * (CAR_IMG_NATIVE_H / CAR_IMG_NATIVE_W);
 // gauche du chevron — sans ce décalage, le véhicule mordait trop sur
 // cet angle. Positif = vers la droite.
 const CAR_IMG_OFFSET_X = 1.50;
+// Marge transparente à gauche dans les webp de véhicules, en fraction
+// de la largeur du fichier (mesurée image par image, médiane par
+// taille). Sert à caler un élément sur le véhicule DESSINÉ plutôt que
+// sur le bord du fichier.
+const CAR_ART_LEFT_MARGIN = { small: 0.212, medium: 0.122, large: 0.095 };
 
 // Ombre portée sous chaque véhicule (retour de Mayrik) : donne une
 // impression de volume/hauteur au-dessus du plateau. Une ellipse
@@ -2172,7 +2177,14 @@ function renderBoard() {
     // plus haut, donc naturellement "attaché" au véhicule plutôt qu'à
     // la case — suivra un futur mouvement animé sans changement ici).
     const damageMarkerSize = MARKER_ICON_SIZE * 0.75;
-    const markerX = x;
+    // Le marqueur débordait à gauche du véhicule (retour de Mayrik).
+    // Cause : les webp des véhicules ont une marge TRANSPARENTE à
+    // gauche, différente selon la taille (mesurée sur les 15 images :
+    // 21% pour les small, 12% pour les medium, 9,5% pour les large).
+    // Aligner sur le bord du fichier revenait donc à aligner sur du
+    // vide. On décale de cette marge pour coller au bord du véhicule
+    // réellement dessiné.
+    const markerX = x + CAR_IMG_W * (CAR_ART_LEFT_MARGIN[car.size] || 0);
     const markerY = cy - damageMarkerSize / 2;
     // Voiture inopérable (2 dégâts) : le jeu physique se contente de
     // retourner le véhicule à 180° (il pointe vers l'arrière du
@@ -2725,9 +2737,13 @@ function applyLayout() {
     if (L.zones.speedo) {
       place(speedoEl, L.zones.speedo);
       speedoEl.classList.toggle("over-board", !!L.zones.speedo.overlay);
-      // Le chiffre suit la taille du cadran : lisible à 88 px comme à 64.
-      speedoEl.style.fontSize =
-        Math.round(Math.min(L.zones.speedo.w, L.zones.speedo.h) * 0.60) + "px";
+      // Les chiffres occupent 70% du cadran (retour de Mayrik).
+      const cote = Math.min(L.zones.speedo.w, L.zones.speedo.h);
+      const val = document.getElementById("speedometer-value");
+      if (val) {
+        val.style.height = Math.round(cote * 0.70) + "px";
+        val.style.width = Math.round(cote * 0.70) + "px";
+      }
     } else speedoEl.style.display = "none";
   }
 
@@ -2757,15 +2773,13 @@ function applyLayout() {
   // Les boutons de zoom sont sortis du conteneur défilant : dedans, ils
   // auraient défilé avec le contenu. On les pose sur son coin haut-droit.
   const presets = document.getElementById("dashboards-zoom-presets");
-  if (presets && dashRect) {
-    // À droite du rail quand la largeur le permet (cas du paysage, où
-    // le rail n'occupe pas toute la largeur), sinon en surimpression sur
-    // son coin haut-droit : sans ça, ils masquaient la fin du dashboard
-    // du 2e joueur.
-    const bw = presets.offsetWidth || 96;
-    const dehors = dashRect.x + dashRect.w + L.gap + bw <= W;
-    presets.style.left = (dehors ? dashRect.x + dashRect.w + L.gap : dashRect.x + dashRect.w - bw) + "px";
-    presets.style.top = dashRect.y + "px";
+  if (presets) {
+    // Calés en bas à droite de l'ÉCRAN (retour de Mayrik) : peu
+    // utilisés, ils n'ont pas de raison d'occuper la zone centrale, qui
+    // est la plus regardée.
+    const bw = presets.offsetWidth || 96, bh = presets.offsetHeight || 32;
+    presets.style.left = (W - bw - L.gap) + "px";
+    presets.style.top = (H - bh - L.gap) + "px";
   }
 }
 
@@ -3038,9 +3052,42 @@ function releaseSpeedometer() {
   renderSpeedometer();
 }
 
+// Afficheur à 7 segments dessiné en SVG plutôt qu'avec une police de
+// caractères : aucune police digitale n'est disponible sur les
+// hébergeurs de polices utilisés par le jeu, et une police ajoutée au
+// dépôt serait un fichier de plus à charger. Sept polygones biseautés
+// suffisent, et le rendu est net à n'importe quelle taille.
+const SEVEN_SEGMENT = {
+  "0":"abcdef", "1":"bc", "2":"abged", "3":"abgcd", "4":"fgbc",
+  "5":"afgcd", "6":"afgedc", "7":"abc", "8":"abcdefg", "9":"abcfgd"
+};
+const SEG_W = 12, SEG_H = 22, SEG_T = 3;
+function segPolygon(seg) {
+  const t = SEG_T / 2;
+  const h = (x0, L, yc) => `${x0},${yc} ${x0+t},${yc-t} ${x0+L-t},${yc-t} ${x0+L},${yc} ${x0+L-t},${yc+t} ${x0+t},${yc+t}`;
+  const v = (xc, y0, L) => `${xc},${y0} ${xc+t},${y0+t} ${xc+t},${y0+L-t} ${xc},${y0+L} ${xc-t},${y0+L-t} ${xc-t},${y0+t}`;
+  return { a: h(1.5, 9, 1.5), g: h(1.5, 9, 11), d: h(1.5, 9, 20.5),
+           f: v(1.5, 2, 8.5), b: v(10.5, 2, 8.5),
+           e: v(1.5, 11.5, 8.5), c: v(10.5, 11.5, 8.5) }[seg];
+}
+function sevenSegmentSVG(texte, couleur) {
+  const pas = SEG_W + 3;
+  const chiffres = [...texte].map((ch, i) => {
+    const allumes = SEVEN_SEGMENT[ch] || "";
+    const segs = "abcdefg".split("").map((seg) =>
+      `<polygon points="${segPolygon(seg)}" fill="${couleur}" opacity="${allumes.includes(seg) ? 1 : 0.12}"/>`).join("");
+    return `<g transform="translate(${i * pas},0)">${segs}</g>`;
+  }).join("");
+  const w = texte.length * pas - 3;
+  return `<svg viewBox="0 0 ${w} ${SEG_H}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${chiffres}</svg>`;
+}
+
+// Vert des cases candidates au mouvement (#b0d458), sans transparence.
+const SPEEDO_COLOR = "#b0d458";
+
 function renderSpeedometer() {
   const el = document.getElementById("speedometer-value");
-  if (el) el.textContent = String(speedoValue);
+  if (el) el.innerHTML = sevenSegmentSVG(String(speedoValue), SPEEDO_COLOR);
 }
 
 
@@ -3115,6 +3162,12 @@ function initDashboardsZoom() {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       setDashboardsZoom(Number(btn.dataset.zoomPreset), null);
+      // Retour de Mayrik : après un changement de palier, la vue revient
+      // en haut à gauche du rail. À x2, cela cadre pile un dashboard
+      // entier — et comme le rail commence par le joueur du tour, c'est
+      // son dashboard qui se présente.
+      vp.scrollLeft = 0;
+      vp.scrollTop = 0;
     });
   });
 
