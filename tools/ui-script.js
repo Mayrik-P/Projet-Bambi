@@ -2189,7 +2189,12 @@ function renderBoard() {
   carsInDrawOrder.forEach((car) => {
     if (car.col === null || car.status === "eliminated") return;
     const { cx, cy } = cellCenter(car.col, car.row);
-    const isActive = sel.car === car;
+    // Le halo vert marque le véhicule en cours d'action. Il ne
+    // s'affichait que pour le joueur humain ; il vaut aussi pendant que
+    // l'IA joue (retour de Mayrik), sinon on ne sait pas quel véhicule
+    // elle est en train de bouger.
+    const isActive = sel.car === car ||
+      (typeof currentAiDecision !== "undefined" && currentAiDecision && currentAiDecision.car === car);
     const imgPath = carImagePath(car);
     const x = cx + CAR_IMG_OFFSET_X - CAR_IMG_W / 2, y = cy - CAR_IMG_H / 2;
     // Sommet réel de la case (pas le haut de l'image du véhicule, plus
@@ -3026,7 +3031,19 @@ function focusBoardOnActiveCar() {
   const svg = document.getElementById("board");
   if (!vp || !svg || typeof vp.scrollTo !== "function") return;
   const car = activeCarForFocus();
-  if (!car || car.col === null || car.status === "eliminated") { lastBoardFocusKey = null; return; }
+  if (!car || car.status === "eliminated") { lastBoardFocusKey = null; return; }
+  // Véhicule encore hors plateau (premier tour) : il n'a pas de case sur
+  // laquelle centrer, mais il va entrer par la GAUCHE. On cale donc la
+  // vue à fond à gauche plutôt que de ne rien faire — sans ça, poser un
+  // dé au premier tour ne mettait rien en valeur et il fallait faire
+  // défiler à la main jusqu'au bord (retour de Mayrik).
+  if (car.col === null) {
+    const key = `${car.id}|hors-plateau`;
+    if (key === lastBoardFocusKey) return;
+    lastBoardFocusKey = key;
+    vp.scrollTo({ left: 0, behavior: "smooth" });
+    return;
+  }
   const key = `${car.id}|${car.col}|${car.row}`;
   if (key === lastBoardFocusKey) return;
   lastBoardFocusKey = key;
