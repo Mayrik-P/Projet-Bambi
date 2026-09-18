@@ -2737,14 +2737,15 @@ function applyLayout() {
     if (L.zones.speedo) {
       place(speedoEl, L.zones.speedo);
       speedoEl.classList.toggle("over-board", !!L.zones.speedo.overlay);
-      // Les chiffres occupent 65% du cadran : l'afficheur à 7 segments
-      // remplit mieux sa boîte qu'une police, et à 70% il mordait sur le
-      // graphisme de fond (retour de Mayrik).
+      // Les chiffres occupent 60% du cadran : l'afficheur à 7 segments
+      // remplit sa boîte bien plus qu'une police, qui laisse toujours du
+      // blanc autour des lettres. Au-delà, il mord sur le graphisme de
+      // fond (calé à l'œil par Mayrik : 70% puis 65% étaient encore trop).
       const cote = Math.min(L.zones.speedo.w, L.zones.speedo.h);
       const val = document.getElementById("speedometer-value");
       if (val) {
-        val.style.height = Math.round(cote * 0.65) + "px";
-        val.style.width = Math.round(cote * 0.65) + "px";
+        val.style.height = Math.round(cote * 0.60) + "px";
+        val.style.width = Math.round(cote * 0.60) + "px";
       }
     } else speedoEl.style.display = "none";
   }
