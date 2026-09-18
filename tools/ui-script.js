@@ -1804,6 +1804,12 @@ function acceptRoadBonus() {
     proceedToShootPhase();
     return;
   }
+  // Le speedometer doit refléter le bonus DÈS son acceptation (retour
+  // de Mayrik). Pour le joueur humain, le mouvement est piloté pas à
+  // pas par l'interface : accepter le bonus ne passe par aucun appel au
+  // moteur, donc aucune notification n'arrivait et le compteur restait
+  // à zéro jusqu'au premier déplacement.
+  noteMovesRemaining(sel.remaining);
   sel.step = "road-bonus-step";
 }
 
@@ -2721,7 +2727,7 @@ function applyLayout() {
       speedoEl.classList.toggle("over-board", !!L.zones.speedo.overlay);
       // Le chiffre suit la taille du cadran : lisible à 88 px comme à 64.
       speedoEl.style.fontSize =
-        Math.round(Math.min(L.zones.speedo.w, L.zones.speedo.h) * 0.40) + "px";
+        Math.round(Math.min(L.zones.speedo.w, L.zones.speedo.h) * 0.60) + "px";
     } else speedoEl.style.display = "none";
   }
 
