@@ -3748,9 +3748,10 @@ function computeLayout(W, H, players, forced, present){
     let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
     let drawer = false, illuOver = false, clusterOver = false;
     const diceH = SPEC.dice.minH + 16;
-    // Les cadrans carrés (road die, speedometer) forment une rangée sous
-    // le dicetrack, dans la colonne de droite.
-    const carres = [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean);
+    // Les cadrans carrés forment une rangée sous le dicetrack, dans la
+    // colonne de droite. Ordre voulu par Mayrik : speedometer à gauche,
+    // road die à droite.
+    const carres = [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean);
     const carresMinW = carres.length
       ? carres.length*SPEC.roaddie.min + (carres.length - 1)*G : 0;
     const stackMinW = Math.max(has.dice ? SPEC.dice.minW : 0, carresMinW);
@@ -3899,7 +3900,7 @@ function computeLayout(W, H, players, forced, present){
     // Les cadrans carrés se logent dans la largeur laissée libre par les
     // dashboards — c'est exactement l'espace que Mayrik avait repéré à
     // l'œil pour le road die, et il en tient deux.
-    const carres = [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean);
+    const carres = [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean);
     if (carres.length) {
       const freeW = w - (cols*colW + (cols-1)*G) - G;
       const besoin = carres.length*SPEC.roaddie.min + (carres.length - 1)*G;
@@ -3952,7 +3953,7 @@ function computeLayout(W, H, players, forced, present){
       // Colonne latérale : illustration, dicetrack, road die, round — chacun son budget.
       const sx = W - sideW - G;
       const diceH = Math.max(SPEC.dice.minH, Math.min(140, sideW*SPEC.dice.minH/SPEC.dice.minW));
-      const carres = [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean);
+      const carres = [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean);
       const need = (has.dice ? diceH + G : 0) + (carres.length ? SPEC.roaddie.target + G : 0) + G;
       let sy = G, ill = Math.min(sideW, 400, H - G - need);
       if (ill >= SPEC.illu.min) { put("illu", sx, sy, sideW, ill, SPEC.illu.min, SPEC.illu.min); sy += ill + G; }
@@ -3977,7 +3978,7 @@ function computeLayout(W, H, players, forced, present){
     } else {
       if (has.dice) put("dice", G+8, boardTop+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
                         SPEC.dice.minW, SPEC.dice.minH, true);
-      [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean).forEach((id, i) =>
+      [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean).forEach((id, i) =>
         put(id, W-G-8-(i+1)*SPEC[id].min - i*G, boardTop+8, SPEC[id].min, SPEC[id].min,
             SPEC[id].min, SPEC[id].min, true));
     }
@@ -7706,7 +7707,16 @@ function dieMarkup(value, color, x, y, size, extraAttrs, rotationDeg) {
 // fois sur le diceboard ET sur le dashboard où il vient d'être posé.
 function visualDicePool(playerName) {
   const pool = [...(G.roundState.dicePool[playerName] || [])];
-  if (playerName === HUMAN) {
+  // BUG CORRIGÉ (signalé par Mayrik, capture à l'appui) : cette
+  // compensation ne vaut QUE tant que les dés choisis n'ont pas encore
+  // été retirés du vrai pool. Au commit, le moteur les retire pour de
+  // bon, mais sel.dieValue / sel.commandDieValue restent renseignés
+  // pendant toute la phase de mouvement — on retranchait donc une
+  // seconde fois ces valeurs, ce qui faisait disparaître un dé
+  // légitime portant la même valeur. Intermittent par nature : sans
+  // doublon de valeur dans le pool, indexOf échouait et rien ne
+  // bougeait.
+  if (playerName === HUMAN && !sel.diceCommitted) {
     if (sel.car) {
       const i = pool.indexOf(sel.dieValue);
       if (i !== -1) pool.splice(i, 1);
@@ -8656,6 +8666,10 @@ function declineAirstrikeShoot() {
 // directement le premier pas de l'arc avant.
 // ===================================================================
 function commitAssignAndCommand() {
+  // À partir d'ici le moteur retire lui-même les dés du pool : la
+  // compensation visuelle de visualDicePool doit cesser (voir le
+  // commentaire là-bas).
+  sel.diceCommitted = true;
   sel.turnLabel = `Round ${G.roundState.roundNumber} — ${HUMAN}`;
   sel.turnStarted = false;
 

@@ -582,7 +582,16 @@ function dieMarkup(value, color, x, y, size, extraAttrs, rotationDeg) {
 // fois sur le diceboard ET sur le dashboard où il vient d'être posé.
 function visualDicePool(playerName) {
   const pool = [...(G.roundState.dicePool[playerName] || [])];
-  if (playerName === HUMAN) {
+  // BUG CORRIGÉ (signalé par Mayrik, capture à l'appui) : cette
+  // compensation ne vaut QUE tant que les dés choisis n'ont pas encore
+  // été retirés du vrai pool. Au commit, le moteur les retire pour de
+  // bon, mais sel.dieValue / sel.commandDieValue restent renseignés
+  // pendant toute la phase de mouvement — on retranchait donc une
+  // seconde fois ces valeurs, ce qui faisait disparaître un dé
+  // légitime portant la même valeur. Intermittent par nature : sans
+  // doublon de valeur dans le pool, indexOf échouait et rien ne
+  // bougeait.
+  if (playerName === HUMAN && !sel.diceCommitted) {
     if (sel.car) {
       const i = pool.indexOf(sel.dieValue);
       if (i !== -1) pool.splice(i, 1);
@@ -1532,6 +1541,10 @@ function declineAirstrikeShoot() {
 // directement le premier pas de l'arc avant.
 // ===================================================================
 function commitAssignAndCommand() {
+  // À partir d'ici le moteur retire lui-même les dés du pool : la
+  // compensation visuelle de visualDicePool doit cesser (voir le
+  // commentaire là-bas).
+  sel.diceCommitted = true;
   sel.turnLabel = `Round ${G.roundState.roundNumber} — ${HUMAN}`;
   sel.turnStarted = false;
 

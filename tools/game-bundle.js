@@ -3402,9 +3402,10 @@ function computeLayout(W, H, players, forced, present){
     let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
     let drawer = false, illuOver = false, clusterOver = false;
     const diceH = SPEC.dice.minH + 16;
-    // Les cadrans carrés (road die, speedometer) forment une rangée sous
-    // le dicetrack, dans la colonne de droite.
-    const carres = [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean);
+    // Les cadrans carrés forment une rangée sous le dicetrack, dans la
+    // colonne de droite. Ordre voulu par Mayrik : speedometer à gauche,
+    // road die à droite.
+    const carres = [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean);
     const carresMinW = carres.length
       ? carres.length*SPEC.roaddie.min + (carres.length - 1)*G : 0;
     const stackMinW = Math.max(has.dice ? SPEC.dice.minW : 0, carresMinW);
@@ -3553,7 +3554,7 @@ function computeLayout(W, H, players, forced, present){
     // Les cadrans carrés se logent dans la largeur laissée libre par les
     // dashboards — c'est exactement l'espace que Mayrik avait repéré à
     // l'œil pour le road die, et il en tient deux.
-    const carres = [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean);
+    const carres = [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean);
     if (carres.length) {
       const freeW = w - (cols*colW + (cols-1)*G) - G;
       const besoin = carres.length*SPEC.roaddie.min + (carres.length - 1)*G;
@@ -3606,7 +3607,7 @@ function computeLayout(W, H, players, forced, present){
       // Colonne latérale : illustration, dicetrack, road die, round — chacun son budget.
       const sx = W - sideW - G;
       const diceH = Math.max(SPEC.dice.minH, Math.min(140, sideW*SPEC.dice.minH/SPEC.dice.minW));
-      const carres = [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean);
+      const carres = [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean);
       const need = (has.dice ? diceH + G : 0) + (carres.length ? SPEC.roaddie.target + G : 0) + G;
       let sy = G, ill = Math.min(sideW, 400, H - G - need);
       if (ill >= SPEC.illu.min) { put("illu", sx, sy, sideW, ill, SPEC.illu.min, SPEC.illu.min); sy += ill + G; }
@@ -3631,7 +3632,7 @@ function computeLayout(W, H, players, forced, present){
     } else {
       if (has.dice) put("dice", G+8, boardTop+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
                         SPEC.dice.minW, SPEC.dice.minH, true);
-      [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean).forEach((id, i) =>
+      [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean).forEach((id, i) =>
         put(id, W-G-8-(i+1)*SPEC[id].min - i*G, boardTop+8, SPEC[id].min, SPEC[id].min,
             SPEC[id].min, SPEC[id].min, true));
     }
