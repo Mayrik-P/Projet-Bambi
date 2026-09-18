@@ -142,8 +142,15 @@ const cp4 = win.getCurrentPlayer(G.roundState);
 // L'afficheur ROUND a été SUPPRIMÉ : Mayrik a constaté après de
 // nombreuses parties qu'aucune mécanique n'utilise le numéro de manche.
 // Le speedometer a pris sa place et son format.
-console.log("Le module SPEEDOMETER affiche bien un nombre de cases (attendu true) :",
-  /^\d+$/.test(dom.window.document.getElementById("speedometer-value").textContent));
+// Le nombre est un afficheur à 7 segments dessiné en SVG (retour de
+// Mayrik : style digital), pas du texte : aucune police à charger, et
+// un rendu net à toute taille.
+const speedoSvg = dom.window.document.querySelector("#speedometer-value svg");
+console.log("Le module SPEEDOMETER dessine bien un afficheur à 7 segments (attendu true) :",
+  !!speedoSvg && speedoSvg.querySelectorAll("polygon").length % 7 === 0 &&
+  speedoSvg.querySelectorAll("polygon").length >= 7);
+console.log("...dans le vert des cases candidates au mouvement (attendu true) :",
+  !!speedoSvg && speedoSvg.querySelector("polygon").getAttribute("fill") === "#b0d458");
 console.log("L'afficheur ROUND a bien disparu du DOM (attendu true) :",
   dom.window.document.getElementById("round-module") === null);
 console.log("[règle changée : le round a quitté la bande d'info] la bande ne le répète plus (attendu false) :", infoBand4.textContent.includes("ROUND " + G.roundState.roundNumber));

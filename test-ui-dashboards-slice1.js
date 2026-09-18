@@ -709,11 +709,17 @@ const MARKER_ICON_SIZE23 = win.eval("MARKER_ICON_SIZE");
 const damageMarkerSize23 = MARKER_ICON_SIZE23 * 0.75;
 const cellC23 = win.cellCenter(4, 3);
 const vehicleLeftX23 = cellC23.cx + win.eval("CAR_IMG_OFFSET_X") - win.eval("CAR_IMG_W") / 2;
-const expectedX23 = vehicleLeftX23; // bord gauche EXACT du marqueur = bord gauche EXACT du véhicule, retour de Mayrik
+// RÈGLE AFFINÉE (retour de Mayrik : le marqueur débordait à gauche) :
+// les webp de véhicules ont une marge TRANSPARENTE à gauche, propre à
+// chaque taille (21% small, 12% medium, 9,5% large). Se caler sur le
+// bord du fichier revenait à se caler sur du vide. La référence est
+// désormais le bord gauche du véhicule DESSINÉ.
+const margeArt23 = win.eval("CAR_ART_LEFT_MARGIN")[dmgCar23.size] || 0;
+const expectedX23 = vehicleLeftX23 + win.eval("CAR_IMG_W") * margeArt23;
 const expectedY23 = cellC23.cy - damageMarkerSize23 / 2;
 console.log("Taille réduite à 75% (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("width")) - damageMarkerSize23) < 0.5);
 console.log("Centré verticalement sur le véhicule (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("y")) - expectedY23) < 0.5);
-console.log("Calé horizontalement, bord gauche exact contre bord gauche du véhicule (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("x")) - expectedX23) < 0.5);
+console.log("Calé horizontalement sur le bord gauche du véhicule DESSINÉ, marge transparente déduite (attendu true) :", Math.abs(parseFloat(boardEl23.getAttribute("x")) - expectedX23) < 0.5);
 
 const parentGroup23 = boardEl23.closest("g");
 const childrenOrder23 = [...parentGroup23.children];
