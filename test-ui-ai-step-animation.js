@@ -1,8 +1,9 @@
 /**
  * Test jsdom dédié — pause visuelle case par case pendant le tour de
  * l'IA (demande de Mayrik, 28/08), sur le vrai bundle navigateur, avec
- * de vrais délais (setTimeout réel, AI_STEP_DELAY_MS réduit pour la
- * rapidité du test plutôt que désactivé, afin d'exercer le VRAI
+ * de vrais délais (setTimeout réel, PACE_MS — la vitesse de rythme
+ * partagée, voir la section RYTHME de ui-script.js — réduite pour la
+ * rapidité du test plutôt que désactivée, afin d'exercer le VRAI
  * chemin setTimeout, pas un raccourci synchrone).
  * À lancer avec : node test-ui-ai-step-animation.js
  */
@@ -31,7 +32,7 @@ async function main() {
   const dom = makeDom();
   const win = dom.window;
   win.newGame();
-  win.eval("AI_STEP_DELAY_MS = 30"); // réduit pour la vitesse du test, mais RÉEL (pas 0) — exerce le vrai chemin setTimeout
+  win.eval("PACE_MS = 30"); // réduit pour la vitesse du test, mais RÉEL (pas 0) — exerce le vrai chemin setTimeout
 
   const HUMAN = win.eval("HUMAN");
   const OPPONENT = win.eval("OPPONENT");
