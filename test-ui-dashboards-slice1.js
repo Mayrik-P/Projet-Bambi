@@ -1315,4 +1315,34 @@ const liveNitroDie39 = [...dom.window.document.querySelectorAll("#dashboards-rai
 });
 console.log("Le dé de Command (NITRO, 2) est déjà visible PENDANT le mouvement (attendu true) :", !!liveNitroDie39);
 
+section("Test 40 — BUG CORRIGÉ (signalé par Mayrik) : un dé restant disparaissait du diceboard");
+
+// Le pool affiché retranchait les dés choisis pour compenser le fait
+// que le moteur ne les retire qu'au commit. Mais sel.dieValue et
+// sel.commandDieValue restent renseignés pendant TOUTE la phase de
+// mouvement : après le commit, la compensation s'appliquait une
+// seconde fois et emportait un dé légitime de même valeur.
+// Intermittent par nature — sans doublon de valeur dans le pool, la
+// recherche échouait et rien ne disparaissait. D'où un pool forcé avec
+// un doublon ici.
+dom = makeDom();
+win = dom.window;
+win.newGame();
+win.eval("G.roundState.dicePool[HUMAN] = [3, 3, 5, 2];");
+win.render();
+const poolAffiche40 = () => win.eval("JSON.stringify(visualDicePool(HUMAN))");
+const poolReel40 = () => win.eval("JSON.stringify(G.roundState.dicePool[HUMAN])");
+
+win.eval("pickDie(3); sel.car = G.allCars.find((c) => c.owner === HUMAN); sel.mode = 'assign';");
+console.log("Avant commit, le dé choisi est retiré de l'affichage (attendu true) :",
+  poolAffiche40() === JSON.stringify([3, 5, 2]));
+win.eval("sel.commandDieValue = 5; sel.commandType = 'nitro'; sel.command = { type: 'nitro', dieValue: 5 };");
+console.log("...et le dé de Command aussi (attendu true) :", poolAffiche40() === JSON.stringify([3, 2]));
+
+win.eval("sel.car.col = 2; sel.car.row = 2; commitAssignAndCommand();");
+console.log("APRÈS commit, l'affichage colle exactement au pool réel (attendu true) :",
+  poolAffiche40() === poolReel40());
+console.log("...et le second dé de valeur 3 est toujours là (attendu true) :",
+  JSON.parse(poolAffiche40()).filter((v) => v === 3).length === 1);
+
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
