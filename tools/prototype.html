@@ -9879,6 +9879,7 @@ function updateInfoBand(cp) {
   const el = document.getElementById("info-band");
   if (!el) return;
   updateRoadDieModule();
+  syncDiceTrackTurn();
   el.textContent = gameOver
     ? "PARTIE TERMINÉE"
     : cp ? playerLabel(cp).toUpperCase() : "";
@@ -9955,7 +9956,21 @@ function updateRoadDieModule() {
 // stunt puis une direction par case — et on garde alors les deux
 // PREMIERS : à confirmer à l'usage avec Mayrik.
 // ===================================================================
-const DICE_TRACK_CAPACITY = 2;
+// DEUX EMPLACEMENTS, PAS UNE FILE DE DEUX DÉS. C'est la conséquence
+// d'un cas relevé par Mayrik : le jeton Dazed tire une cascade ET une
+// direction, puis RELANCE la seule direction à chaque case parcourue,
+// la cascade restant verrouillée sur sa valeur. Le dicetrack avait
+// besoin d'une notion qu'il n'avait pas : un dé qui reste.
+//   - emplacement GAUCHE : le dé qui qualifie l'action (slam, cascade,
+//     tir). Il ouvre une séquence et efface la droite ;
+//   - emplacement DROITE : le dé de direction, qui peut être relancé.
+// Un lancer ne contenant qu'une direction ne touche donc pas la
+// gauche : le verrouillage du Dazed en découle sans qu'aucune ligne ne
+// connaisse l'existence du Dazed.
+// LIMITE CONNUE, à trancher à l'usage : un éclat de Shrapnel tire une
+// direction seule. S'il survient après un slam dans le MÊME tour, la
+// gauche montrera encore le dé de slam. Le dicetrack est donc vidé à
+// chaque changement de tour pour borner la casse.
 const DICE_ART = {
   slam:      { file: (v) => `die-fx-slam-${v}`,  faces: ["top", "top", "bottom", "bottom", "bottom", "bottom"] },
   direction: { file: (v) => `die-fx-direction-${String(v).replace("-", "")}`,
@@ -9969,38 +9984,80 @@ function diceArtPath(kind, value) {
   return art ? `../images/dice/${art.file(value)}.webp` : null;
 }
 
+let diceTrackSlots = { master: null, direction: null };
 let diceTrackBurst = [];     // dés de la salve en cours d'accumulation
 let diceTrackFlush = null;   // microtâche de vidage programmée
+let diceTrackTurnKey = null; // tour auquel appartient l'affichage courant
 
+// REGROUPEMENT D'UN LANCER : un Slam tire slam + direction d'un seul
+// coup. Tous les dés notifiés dans la MÊME salve synchrone forment donc
+// un lancer, et on vide la file à la microtâche suivante. Les relances
+// successives (chaîne de slams, cases d'un Dazed) passent par des
+// reprises du générateur : elles arrivent en salves distinctes.
 function noteSpecialDie(kind, value) {
   if (!DICE_ART[kind]) return; // le dé de round a son propre module
   diceTrackBurst.push({ kind, value });
   if (diceTrackFlush) return;
   diceTrackFlush = Promise.resolve().then(() => {
-    const lancer = diceTrackBurst.slice(0, DICE_TRACK_CAPACITY);
+    const lancer = diceTrackBurst;
     diceTrackBurst = [];
     diceTrackFlush = null;
-    showDiceTrack(lancer);
+    applyDiceTrackRoll(lancer);
   });
 }
 
-function showDiceTrack(dice) {
-  const box = document.getElementById("dicetrack-module");
-  if (!box || !dice.length) return;
-  box.innerHTML = dice.map((d, i) =>
-    `<img class="dicetrack-face" data-dicetrack-slot="${i}" src="${diceArtPath(d.kind, d.value)}" alt="">`).join("");
-  // Même vol que le dé de round : chaque face part de l'extérieur et
-  // roule en chemin, en piochant dans la VRAIE table de son dé.
-  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-    [...box.children].forEach((face, i) => {
-      const d = dice[i];
-      const art = DICE_ART[d.kind];
-      animateOneMovingDie(face, d.value, null, i * 160, 900, {
-        faceHTML: (v, size) => `<img src="${diceArtPath(d.kind, v)}" style="position:absolute;left:0;top:0;width:${size}px;height:${size}px;">`,
-        randomFace: () => art.faces[Math.floor(Math.random() * art.faces.length)]
-      });
-    });
+function applyDiceTrackRoll(dice) {
+  const master = dice.find((d) => d.kind !== "direction");
+  const direction = dice.find((d) => d.kind === "direction");
+  const anime = [];
+  if (master) {
+    diceTrackSlots.master = master;      // nouvelle action : la droite repart de zéro
+    diceTrackSlots.direction = null;
+    anime.push("master");
   }
+  if (direction) {
+    diceTrackSlots.direction = direction;
+    anime.push("direction");
+  }
+  renderDiceTrack(anime);
+}
+
+function clearDiceTrack() {
+  diceTrackSlots = { master: null, direction: null };
+  renderDiceTrack([]);
+}
+
+// Vide le dicetrack quand on change de tour : borne la durée de vie
+// d'un dé verrouillé, qui ne doit jamais survivre au tour qui l'a tiré.
+function syncDiceTrackTurn() {
+  if (!G || !G.roundState) return;
+  const key = `${G.roundState.roundNumber}|${getCurrentPlayer(G.roundState)}|` +
+              `${G.roundState.turnsThisRound[getCurrentPlayer(G.roundState)]}`;
+  if (key === diceTrackTurnKey) return;
+  diceTrackTurnKey = key;
+  clearDiceTrack();
+}
+
+function renderDiceTrack(aAnimer) {
+  const box = document.getElementById("dicetrack-module");
+  if (!box) return;
+  const slots = [["master", diceTrackSlots.master], ["direction", diceTrackSlots.direction]];
+  box.innerHTML = slots.map(([nom, d]) => d
+    ? `<img class="dicetrack-face" data-dicetrack-slot="${nom}" src="${diceArtPath(d.kind, d.value)}" alt="">`
+    : "").join("");
+  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return;
+  // Seuls les dés que CE lancer a changés volent : un dé verrouillé
+  // reste simplement en place, sans rejouer son animation.
+  let rang = 0;
+  slots.forEach(([nom, d]) => {
+    if (!d || !aAnimer.includes(nom)) return;
+    const face = box.querySelector(`[data-dicetrack-slot="${nom}"]`);
+    const art = DICE_ART[d.kind];
+    animateOneMovingDie(face, d.value, null, (rang++) * 160, 900, {
+      faceHTML: (v, size) => `<img src="${diceArtPath(d.kind, v)}" style="position:absolute;left:0;top:0;width:${size}px;height:${size}px;">`,
+      randomFace: () => art.faces[Math.floor(Math.random() * art.faces.length)]
+    });
+  });
 }
 
 function updateRoundModule() {
