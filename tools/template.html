@@ -71,19 +71,18 @@
   /* Les modules sont positionnés par applyLayout() ; min-height:0 et
      overflow maîtrisé évitent qu'un contenu trop grand repousse sa
      propre boîte. */
-  #board-viewport, #info-band, #dashboards-viewport, #round-module,
+  #board-viewport, #info-band, #dashboards-viewport, #speedometer-module,
   #roaddie-module, #dicetrack-module, #board-position-slider {
     position: absolute; min-height: 0; box-sizing: border-box; }
-  /* Module ROUND (retour de Mayrik) : indépendant de la bande d'info,
-     dont le contenu est réécrit à chaque action. Contenu réduit à
-     « ROUND X ». Se place soit dans la grille, soit en surimpression
-     dans le coin haut-gauche du plateau quand la place manque. */
-  #round-module { display: flex; align-items: center; justify-content: center;
-    background: #0d0d10; border: 1px solid #3a3a46; border-radius: 4px;
-    font-family: "Courier New", monospace; font-weight: bold; font-size: 13px;
-    letter-spacing: 1px; color: #ffb347; text-shadow: 0 0 6px rgba(255,179,71,0.55);
-    pointer-events: none; }
-  #round-module.over-board { background: rgba(13,13,16,0.82); z-index: 5; }
+  /* Module SPEEDOMETER : cadran carré au format du road die, avec le
+     nombre de cases restantes écrit par-dessus. */
+  #speedometer-module { display: flex; align-items: center; justify-content: center;
+    background: #0d0d10 center/contain no-repeat url("../images/miscellaneous/speedometer.webp");
+    border: 1px solid #3a3a46; border-radius: 6px; pointer-events: none; }
+  #speedometer-module.over-board { background-color: rgba(13,13,16,0.82); z-index: 5; }
+  #speedometer-value { font-family: "Courier New", monospace; font-weight: bold;
+    color: #ffb347; /* taille posée par applyLayout, proportionnelle au cadran */
+    text-shadow: 0 0 6px rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,1); }
   /* Module ROAD DIE : carré, la face remplit la boîte. */
   #roaddie-module { display: flex; align-items: center; justify-content: center;
     background: #0d0d10; border: 1px solid #3a3a46; border-radius: 6px;
@@ -301,8 +300,10 @@
   <!-- Zone 2 : bande d'info (structure posée, contenu à venir). -->
   <div id="info-band"></div>
 
-  <!-- Module ROUND : indépendant de la bande d'info. -->
-  <div id="round-module"></div>
+  <!-- Module SPEEDOMETER : cases de mouvement restantes, en chiffres
+       par-dessus le cadran. Remplace l'afficheur ROUND, supprimé faute
+       d'utilité en jeu. -->
+  <div id="speedometer-module"><span id="speedometer-value">0</span></div>
 
   <!-- Module ROAD DIE : face active du dé de round, en grand et en
        permanence. Le petit dé du dashboard du premier joueur reste en

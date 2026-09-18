@@ -2631,7 +2631,7 @@ function setupBoardScroll() {
 // l'instant ; le passage au rail (un SVG par joueur) viendra avec sa
 // propre étape.
 // -------------------------------------------------------------------
-const LAYOUT_PRESENT = { illu: false, dice: true, roaddie: true, round: true, dashMode: "rail" };
+const LAYOUT_PRESENT = { illu: false, dice: true, roaddie: true, speedo: true, dashMode: "rail" };
 let lastLayout = null;
 
 function applyBoardSizing() { applyLayout(); }
@@ -2701,12 +2701,15 @@ function applyLayout() {
       roadEl.classList.toggle("over-board", !!L.zones.roaddie.overlay);
     } else roadEl.style.display = "none";
   }
-  const roundEl = document.getElementById("round-module");
-  if (roundEl) {
-    if (L.zones.round) {
-      place(roundEl, L.zones.round);
-      roundEl.classList.toggle("over-board", !!L.zones.round.overlay);
-    } else roundEl.style.display = "none";
+  const speedoEl = document.getElementById("speedometer-module");
+  if (speedoEl) {
+    if (L.zones.speedo) {
+      place(speedoEl, L.zones.speedo);
+      speedoEl.classList.toggle("over-board", !!L.zones.speedo.overlay);
+      // Le chiffre suit la taille du cadran : lisible à 88 px comme à 64.
+      speedoEl.style.fontSize =
+        Math.round(Math.min(L.zones.speedo.w, L.zones.speedo.h) * 0.40) + "px";
+    } else speedoEl.style.display = "none";
   }
 
   // --- Dashboards : on ne pose QUE le conteneur. Le SVG à l'intérieur
@@ -2773,10 +2776,10 @@ function updateInfoBand(cp) {
   if (!el) return;
   updateRoadDieModule();
   syncDiceTrackTurn();
+  syncSpeedometer();
   el.textContent = gameOver
     ? "PARTIE TERMINÉE"
     : cp ? playerLabel(cp).toUpperCase() : "";
-  updateRoundModule();
 }
 
 // Module ROUND : cadence de rafraîchissement propre (une fois par
@@ -2929,6 +2932,7 @@ function syncDiceTrackTurn() {
   if (key === diceTrackTurnKey) return;
   diceTrackTurnKey = key;
   clearDiceTrack();
+  releaseSpeedometer(); // le déplacement du tour précédent est fini
 }
 
 function renderDiceTrack(aAnimer) {
@@ -2953,11 +2957,73 @@ function renderDiceTrack(aAnimer) {
   });
 }
 
-function updateRoundModule() {
-  const el = document.getElementById("round-module");
-  if (!el) return;
-  el.textContent = (G && G.roundState && !gameOver) ? `ROUND ${G.roundState.roundNumber}` : "";
+// ===================================================================
+// MODULE SPEEDOMETER — cases de mouvement encore disponibles.
+//
+// Remplace l'afficheur ROUND, supprimé : Mayrik a constaté après de
+// nombreuses parties qu'aucune mécanique n'utilise le numéro de manche,
+// alors que le nombre de cases restantes manque en permanence pendant
+// la phase de mouvement. Le speedometer réclamait exactement le format
+// du road die, il a donc simplement pris sa place.
+//
+// D'OÙ VIENT LA VALEUR, dans l'ordre de priorité :
+//   1. pendant un déplacement : le moteur notifie le compteur réel à
+//      chaque case entrée (voir setMovesObserver dans engine.js). C'est
+//      lui qui fait foi, et il compte juste la boue, qui coûte 2 cases ;
+//   2. avant le déplacement : la valeur du dé posé sur le dashboard,
+//      plus celle du dé de Nitro s'il y en a un ;
+//   3. sinon : 0.
+// Le compteur retombe à 0 en fin de phase de mouvement et y reste
+// jusqu'à ce que le joueur suivant pose un dé.
+//
+// EXTENSION À VENIR (dé Fire) : un véhicule en feu tirera un dé
+// ajoutant 1 ou 2 cases au début de sa phase de mouvement. Comme le
+// moteur notifie la variable de compteur elle-même et non le dé,
+// l'affichage suivra sans modification ici.
+// ===================================================================
+let speedoValue = 0;
+let speedoLive = false;   // vrai tant qu'un déplacement est en cours
+
+function noteMovesRemaining(n) {
+  speedoValue = Math.max(0, Number(n) || 0);
+  speedoLive = true;
+  renderSpeedometer();
 }
+
+// Valeur annoncée par les dés posés, tant que rien ne bouge encore.
+function speedoFromAssignment() {
+  if (typeof sel !== "undefined" && sel && sel.car && typeof sel.dieValue === "number") {
+    const nitro = (sel.commandType === "nitro" && typeof sel.commandDieValue === "number")
+      ? sel.commandDieValue : 0;
+    return sel.dieValue + nitro;
+  }
+  const ai = (typeof currentAiDecision !== "undefined") ? currentAiDecision : null;
+  if (ai && ai.car && typeof ai.dieValue === "number" && !ai.isCoast) {
+    const nitro = (ai.command && ai.command.type === "nitro" && typeof ai.command.dieValue === "number")
+      ? ai.command.dieValue : 0;
+    return ai.dieValue + nitro;
+  }
+  return 0;
+}
+
+function syncSpeedometer() {
+  if (speedoLive) return;              // un déplacement en cours fait foi
+  const v = speedoFromAssignment();
+  if (v !== speedoValue) { speedoValue = v; renderSpeedometer(); }
+}
+
+// Le déplacement est terminé : on repasse en lecture des dés posés.
+function releaseSpeedometer() {
+  speedoLive = false;
+  speedoValue = speedoFromAssignment();
+  renderSpeedometer();
+}
+
+function renderSpeedometer() {
+  const el = document.getElementById("speedometer-value");
+  if (el) el.textContent = String(speedoValue);
+}
+
 
 // ===================================================================
 // ZONE 3 — Dashboards : zoom et déplacement
@@ -3355,12 +3421,9 @@ function playRoadDieRollAnimation() {
 }
 
 // SÉQUENCE DE DÉBUT DE ROUND (ordre demandé par Mayrik) :
-//   1. l'afficheur ROUND porte déjà le nouveau numéro — updateRoundModule()
-//      a tourné plus tôt dans ce même render(), donc avant tout le reste
-//      (une mise en scène de ce changement viendra plus tard) ;
-//   2. le dé de round part seul vers son module ;
-//   3. sa face y reste affichée jusqu'à la fin du round ;
-//   4. seulement ensuite les 4 dés de mouvement de chaque joueur
+//   1. le dé de round part seul vers son module ;
+//   2. sa face y reste affichée jusqu'à la fin du round ;
+//   3. seulement ensuite les 4 dés de mouvement de chaque joueur
 //      s'envolent vers les diceboards.
 // Le chaînage garantit l'ordre : les dés des joueurs ne partent qu'une
 // fois le dé de round posé, jamais en même temps.
@@ -3414,6 +3477,7 @@ function render() {
 // chaque rendu — voir leurs commentaires respectifs).
 initDashboardsZoom();
 if (typeof setDiceObserver === "function") setDiceObserver(noteSpecialDie);
+if (typeof setMovesObserver === "function") setMovesObserver(noteMovesRemaining);
 
 // Bouton plein écran (retour de Mayrik : voir le rendu réel sans la
 // barre d'adresse du navigateur, en attendant une vraie installation

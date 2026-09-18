@@ -360,7 +360,7 @@ function advanceBoardOnFrontExit(state, allCars, allChoppers, options = {}) {
 function* moveCarWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, slamOptions = {}) {
   const log = [];
   let remainingPath = [...chosenPath];
-  let remainingDie = dieValue;
+  let remainingDie = notifyMovesRemaining(dieValue);
   // p.9 (bonus Road) : l'éligibilité doit tenir sur TOUTE la
   // trajectoire, pas seulement le dernier segment — bug corrigé
   // (détecté en câblant le bonus Road, jamais appliqué jusqu'ici) :
@@ -704,7 +704,7 @@ function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remain
 
   car.col = targetCol;
   car.row = targetRow;
-  let newRemaining = mudExceptionApplies ? 0 : remaining - cost;
+  let newRemaining = notifyMovesRemaining(mudExceptionApplies ? 0 : remaining - cost);
   log.push(`${car.id} avance vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
 
   // Ligne d'arrivée (p.11) : y entrer met fin à la partie IMMÉDIATEMENT
@@ -748,7 +748,7 @@ function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remain
   // l'occupant à considérer, et résout déjà son propre slam.
   const hazardResult = yield* resolveHazardGen(tile, allCars, car, newRemaining, slamOptions);
   log.push(...hazardResult.log);
-  newRemaining = hazardResult.remaining;
+  newRemaining = notifyMovesRemaining(hazardResult.remaining);
   if (hazardResult.stopped) {
     return {
       log,
@@ -1186,6 +1186,28 @@ function findFrontmostCar(cars) {
 // -----------------------------------------------------------------
 let diceObserver = null;
 function setDiceObserver(fn) { diceObserver = (typeof fn === "function") ? fn : null; }
+
+// Même principe pour le compteur de cases de mouvement restantes, que
+// le moteur ne gardait que dans une variable locale. Il est notifié à
+// chaque fois qu'il change : au départ (valeur du dé), puis à chaque
+// case entrée — y compris la boue, qui coûte 2 — et après tout effet de
+// terrain qui le modifie.
+// EXTENSION À VENIR (dé Fire) : un véhicule en feu tirera un dé en
+// début de phase de mouvement, ajoutant 1 ou 2 cases. Rien de nouveau à
+// prévoir ici : il suffira que ce bonus passe par la même variable, et
+// l'affichage suivra sans un seul changement.
+let movesObserver = null;
+let lastNotifiedMoves = null; // évite de notifier deux fois la même valeur
+function setMovesObserver(fn) {
+  movesObserver = (typeof fn === "function") ? fn : null;
+  lastNotifiedMoves = null;
+}
+function notifyMovesRemaining(n) {
+  if (!movesObserver || n === lastNotifiedMoves) return n;
+  lastNotifiedMoves = n;
+  try { movesObserver(n); } catch (e) { /* la présentation ne bloque jamais le jeu */ }
+  return n;
+}
 function notifyDieRolled(kind, value) {
   if (!diceObserver) return value;
   try { diceObserver(kind, value); } catch (e) { /* la présentation ne bloque jamais le jeu */ }
@@ -3155,6 +3177,7 @@ function rollMovementDie(injectedValue = null) {
 if (typeof module !== "undefined" && module.exports) {
 module.exports = {
   setDiceObserver,
+  setMovesObserver,
 
   driveSync,
   TERRAIN,
@@ -3323,8 +3346,13 @@ const SPEC = {
   info:  { hTwoLines:48, hOneLine:32, minW:340, oneLineFrom:800 },
   illu:  { min:160, target:200 },
   dice:  { minW:140, minH:72 },
-  round: { minW:80,  minH:28 },
+  // Deux cadrans carrés de même taille, côte à côte : le dé de round et
+  // le compteur de mouvement. L'afficheur ROUND a été supprimé — Mayrik
+  // a constaté à l'usage qu'aucune mécanique n'utilise le numéro de
+  // manche — et le speedometer a pris sa place, ce qui tombe bien : il
+  // réclamait exactement le format du road die.
   roaddie:{ min:64, target:88 },
+  speedo: { min:64, target:88 },
   gap: 6
 };
 // Hauteurs de la FENÊTRE de jeu du plateau (hors curseur de position).
@@ -3341,7 +3369,7 @@ const boardMaxH = SPEC.board.vbH * (SPEC.board.cellMax / SPEC.board.cellW);
 function computeLayout(W, H, players, forced, present){
   // Plateau, info et dashboards sont toujours là : ce sont eux qui
   // portent le jeu. Les quatre autres sont déclarables absents.
-  const has = Object.assign({ illu:true, dice:true, round:true, roaddie:true }, present || {});
+  const has = Object.assign({ illu:true, dice:true, roaddie:true, speedo:true }, present || {});
   // dashMode "rail" : un rectangle par joueur (cible).
   // dashMode "block" : un seul rectangle englobant, pour le SVG unique
   // d'aujourd'hui — étape intermédiaire, pas une variante durable.
@@ -3374,12 +3402,13 @@ function computeLayout(W, H, players, forced, present){
     let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
     let drawer = false, illuOver = false, clusterOver = false;
     const diceH = SPEC.dice.minH + 16;
-    // Largeur minimale réclamée par la pile de droite, selon ce qui existe.
-    const pairW = (has.roaddie && has.round) ? SPEC.roaddie.min + G + SPEC.round.minW
-                : has.roaddie ? SPEC.roaddie.min
-                : has.round   ? SPEC.round.minW : 0;
-    const stackMinW = Math.max(has.dice ? SPEC.dice.minW : 0, pairW);
-    let illu = 0, stackW = 0, rdSide = 0, rdBeside = false, stackH = 0;
+    // Les cadrans carrés (road die, speedometer) forment une rangée sous
+    // le dicetrack, dans la colonne de droite.
+    const carres = [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean);
+    const carresMinW = carres.length
+      ? carres.length*SPEC.roaddie.min + (carres.length - 1)*G : 0;
+    const stackMinW = Math.max(has.dice ? SPEC.dice.minW : 0, carresMinW);
+    let illu = 0, stackW = 0, sqSide = 0, stackH = 0;
     let illuFlow = false, clusterFlow = false;
 
     function layoutMedia(){
@@ -3389,19 +3418,16 @@ function computeLayout(W, H, players, forced, present){
         illu = clusterFlow ? Math.min(SPEC.illu.target, w - G - stackMinW) : Math.min(SPEC.illu.target, w);
         if (clusterFlow && illu < SPEC.illu.min) {
           clusterOver = true; clusterFlow = false; illu = Math.min(SPEC.illu.target, w);
-          steps.push("dicetrack, road die et round en surimpression : largeur insuffisante à côté de l'illustration");
+          steps.push("dicetrack et cadrans en surimpression : largeur insuffisante à côté de l'illustration");
         }
         stackW = clusterFlow ? w - illu - G : 0;
       } else { illu = 0; stackW = clusterFlow ? w : 0; }
       if (clusterFlow) {
-        rdSide = has.roaddie
-          ? Math.min(SPEC.roaddie.target, has.round ? stackW - SPEC.round.minW - G : stackW) : 0;
-        rdBeside = has.roaddie && has.round && rdSide >= SPEC.roaddie.min;
-        if (has.roaddie && !rdBeside) rdSide = Math.min(SPEC.roaddie.target, stackW);
+        sqSide = carres.length
+          ? Math.min(SPEC.roaddie.target, (stackW - (carres.length - 1)*G) / carres.length) : 0;
         stackH = (has.dice ? diceH : 0)
-               + (has.roaddie ? (has.dice ? G : 0) + rdSide : 0)
-               + (has.round && !rdBeside ? ((has.dice || has.roaddie) ? G : 0) + SPEC.round.minH : 0);
-      } else stackH = 0;
+               + (carres.length ? (has.dice ? G : 0) + sqSide : 0);
+      } else { sqSide = 0; stackH = 0; }
       return Math.max(illuFlow ? illu : 0, clusterFlow ? stackH : 0);
     }
     let mediaH = layoutMedia();
@@ -3414,7 +3440,7 @@ function computeLayout(W, H, players, forced, present){
       if (chrome) { chrome = 0;
         steps.push("curseur de position en surimpression sur le plateau"); }
       else if (clusterFlow) { clusterOver = true;
-        steps.push("dicetrack, road die et round en surimpression pour préserver les 6 rangées"); }
+        steps.push("dicetrack et cadrans en surimpression pour préserver les 6 rangées"); }
       else if (illuFlow) { illuOver = true;
         steps.push("illustration en surimpression pour préserver les 6 rangées"); }
       else if (infoH > SPEC.info.hOneLine) { infoH = SPEC.info.hOneLine;
@@ -3444,13 +3470,8 @@ function computeLayout(W, H, players, forced, present){
       const sx = G + (illuFlow ? illu + G : 0);
       let sy = y;
       if (has.dice) { put("dice", sx, sy, stackW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
-      if (has.roaddie) {
-        put("roaddie", sx, sy, rdSide, rdSide, SPEC.roaddie.min, SPEC.roaddie.min);
-        if (rdBeside) put("round", sx+rdSide+G, sy+(rdSide-SPEC.round.minH)/2, stackW-rdSide-G,
-                          SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
-        sy += rdSide + G;
-      }
-      if (has.round && !rdBeside) put("round", sx, sy, stackW, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
+      carres.forEach((id, i) => put(id, sx + i*(sqSide + G), sy, sqSide, sqSide,
+        SPEC[id].min, SPEC[id].min));
     }
     if (mediaH) y += mediaH + G;
 
@@ -3458,16 +3479,14 @@ function computeLayout(W, H, players, forced, present){
     if (has.illu && !illuFlow)
       put("illu", W-G-8-SPEC.illu.min, boardTop+8, SPEC.illu.min, SPEC.illu.min,
           SPEC.illu.min, SPEC.illu.min, true);
-    if (has.dice && !clusterFlow)
-      put("dice", G+8, boardBottom-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
-          SPEC.dice.minW, SPEC.dice.minH, true);
-    if (has.roaddie && !clusterFlow)
-      put("roaddie", W-G-8-SPEC.roaddie.min, boardBottom-SPEC.roaddie.min-8,
-          SPEC.roaddie.min, SPEC.roaddie.min, SPEC.roaddie.min, SPEC.roaddie.min, true);
-    // Le round garde toujours son second emplacement : coin haut-gauche du plateau.
-    if (has.round && !clusterFlow)
-      put("round", G+8, boardTop+8, SPEC.round.minW, SPEC.round.minH,
-          SPEC.round.minW, SPEC.round.minH, true);
+    if (!clusterFlow) {
+      if (has.dice)
+        put("dice", G+8, boardBottom-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
+            SPEC.dice.minW, SPEC.dice.minH, true);
+      carres.forEach((id, i) =>
+        put(id, W-G-8-(i+1)*SPEC[id].min - i*G, boardTop+8, SPEC[id].min, SPEC[id].min,
+            SPEC[id].min, SPEC[id].min, true));
+    }
 
     for (let i=0;i<visible;i++) put("dash"+i, G, drawer ? H-G-rowH : y+i*(rowH+G), w, rowH,
       SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect, drawer);
@@ -3512,37 +3531,41 @@ function computeLayout(W, H, players, forced, present){
     put("board", G, y, boardW, boardH, Math.round(SPEC.board.tileW*boardScale(boardH)), boardMin(boardW));
     // La colonne droite s'étend sur la hauteur du plateau ET de la bande d'info.
     const colH = boardH + G + infoH, sx = G + boardW + G;
-    const colNeed = SPEC.illu.min + (has.dice ? SPEC.dice.minH + G : 0)
-                                  + (has.round ? SPEC.round.minH + G : 0);
+    const colNeed = SPEC.illu.min + (has.dice ? SPEC.dice.minH + G : 0);
     const colOk = sideFlow && colH >= colNeed;
     if (colOk) {
       const ill = Math.min(side, colH - (colNeed - SPEC.illu.min));
       put("illu", sx, y, side, ill, SPEC.illu.min, SPEC.illu.min);
       let sy = y + ill + G;
       if (has.dice) { put("dice", sx, sy, side, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH); sy += SPEC.dice.minH + G; }
-      if (has.round) put("round", sx, sy, side, SPEC.round.minH, SPEC.round.minW, SPEC.round.minH);
     } else {
       if (has.illu) put("illu", W-G-8-SPEC.illu.min, y+8, SPEC.illu.min, SPEC.illu.min,
                         SPEC.illu.min, SPEC.illu.min, true);
       if (has.dice) put("dice", G+8, y+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
                         SPEC.dice.minW, SPEC.dice.minH, true);
-      if (has.round) put("round", G+8, y+8, SPEC.round.minW, SPEC.round.minH,
-                        SPEC.round.minW, SPEC.round.minH, true);
-      if (has.illu) steps.push("illustration, dicetrack et round en surimpression sur le plateau");
+      if (has.illu) steps.push("illustration et dicetrack en surimpression sur le plateau");
     }
     y += boardH + G;
     put("info", G, y, boardW, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
     const dy = drawer ? H - G - rowH : y;
     for (let i=0;i<cols;i++) put("dash"+i, G+i*(colW+G), dy, colW, rowH,
       SPEC.dash.minW, SPEC.dash.minW/SPEC.dash.aspect, drawer);
-    // Le road die se loge dans la largeur laissée libre par les dashboards.
-    if (has.roaddie) {
+    // Les cadrans carrés se logent dans la largeur laissée libre par les
+    // dashboards — c'est exactement l'espace que Mayrik avait repéré à
+    // l'œil pour le road die, et il en tient deux.
+    const carres = [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean);
+    if (carres.length) {
       const freeW = w - (cols*colW + (cols-1)*G) - G;
-      if (freeW >= SPEC.roaddie.min && !drawer) {
-        const rd = Math.min(SPEC.roaddie.target, freeW, rowH);
-        put("roaddie", W-G-rd, dy+(rowH-rd)/2, rd, rd, SPEC.roaddie.min, SPEC.roaddie.min);
-      } else put("roaddie", W-G-8-SPEC.roaddie.min, G+8, SPEC.roaddie.min, SPEC.roaddie.min,
-                 SPEC.roaddie.min, SPEC.roaddie.min, true);
+      const besoin = carres.length*SPEC.roaddie.min + (carres.length - 1)*G;
+      if (freeW >= besoin && !drawer) {
+        const sq = Math.min(SPEC.roaddie.target, (freeW - (carres.length - 1)*G) / carres.length, rowH);
+        const total = carres.length*sq + (carres.length - 1)*G;
+        carres.forEach((id, i) => put(id, W - G - total + i*(sq + G), dy + (rowH - sq)/2, sq, sq,
+          SPEC[id].min, SPEC[id].min));
+      } else {
+        carres.forEach((id, i) => put(id, W-G-8-(i+1)*SPEC[id].min - i*G, G+8,
+          SPEC[id].min, SPEC[id].min, SPEC[id].min, SPEC[id].min, true));
+      }
     }
     z._visible = cols;
   }
@@ -3583,8 +3606,8 @@ function computeLayout(W, H, players, forced, present){
       // Colonne latérale : illustration, dicetrack, road die, round — chacun son budget.
       const sx = W - sideW - G;
       const diceH = Math.max(SPEC.dice.minH, Math.min(140, sideW*SPEC.dice.minH/SPEC.dice.minW));
-      const need = (has.dice ? diceH + G : 0) + (has.roaddie ? SPEC.roaddie.target + G : 0)
-                 + (has.round ? SPEC.round.minH + G : 0) + G;
+      const carres = [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean);
+      const need = (has.dice ? diceH + G : 0) + (carres.length ? SPEC.roaddie.target + G : 0) + G;
       let sy = G, ill = Math.min(sideW, 400, H - G - need);
       if (ill >= SPEC.illu.min) { put("illu", sx, sy, sideW, ill, SPEC.illu.min, SPEC.illu.min); sy += ill + G; }
       else { put("illu", W-sideW, H-G-8-SPEC.illu.min, SPEC.illu.min, SPEC.illu.min,
@@ -3595,29 +3618,22 @@ function computeLayout(W, H, players, forced, present){
         else { put("dice", sx+8, H-G-8-SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH,
                     SPEC.dice.minW, SPEC.dice.minH, true); steps.push("dicetrack en surimpression"); }
       }
-      const rd = SPEC.roaddie.target;
-      const rdOk = has.roaddie && H - sy - G >= rd;
-      if (rdOk) {
-        put("roaddie", sx, sy, rd, rd, SPEC.roaddie.min, SPEC.roaddie.min);
-        if (has.round) put("round", sx+rd+G, sy+(rd-SPEC.round.minH)/2, sideW-rd-G, SPEC.round.minH,
-                           SPEC.round.minW, SPEC.round.minH);
-      } else {
-        if (has.roaddie) put("roaddie", sx, H-G-SPEC.roaddie.min, SPEC.roaddie.min, SPEC.roaddie.min,
-                             SPEC.roaddie.min, SPEC.roaddie.min, true);
-        if (has.round) {
-          if (H - sy - G >= SPEC.round.minH) put("round", sx, sy, sideW, SPEC.round.minH,
-                                                 SPEC.round.minW, SPEC.round.minH);
-          else put("round", G+8, boardTop+8, SPEC.round.minW, SPEC.round.minH,
-                   SPEC.round.minW, SPEC.round.minH, true);
+      // Les cadrans carrés terminent la colonne, côte à côte.
+      if (carres.length) {
+        const sq = Math.min(SPEC.roaddie.target, (sideW - (carres.length - 1)*G) / carres.length);
+        if (H - sy - G >= sq) {
+          carres.forEach((id, i) => put(id, sx + i*(sq + G), sy, sq, sq, SPEC[id].min, SPEC[id].min));
+        } else {
+          carres.forEach((id, i) => put(id, sx + i*(SPEC[id].min + G), H-G-SPEC[id].min,
+            SPEC[id].min, SPEC[id].min, SPEC[id].min, SPEC[id].min, true));
         }
       }
     } else {
       if (has.dice) put("dice", G+8, boardTop+boardH-SPEC.dice.minH-8, SPEC.dice.minW, SPEC.dice.minH,
                         SPEC.dice.minW, SPEC.dice.minH, true);
-      if (has.roaddie) put("roaddie", W-G-8-SPEC.roaddie.min, boardTop+8, SPEC.roaddie.min, SPEC.roaddie.min,
-                           SPEC.roaddie.min, SPEC.roaddie.min, true);
-      if (has.round) put("round", G+8, boardTop+8, SPEC.round.minW, SPEC.round.minH,
-                        SPEC.round.minW, SPEC.round.minH, true);
+      [has.roaddie && "roaddie", has.speedo && "speedo"].filter(Boolean).forEach((id, i) =>
+        put(id, W-G-8-(i+1)*SPEC[id].min - i*G, boardTop+8, SPEC[id].min, SPEC[id].min,
+            SPEC[id].min, SPEC[id].min, true));
     }
   }
 
