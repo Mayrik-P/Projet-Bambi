@@ -14,7 +14,7 @@ const html = fs.readFileSync(path.join(__dirname, "tools", "prototype.html"), "u
 
 function section(title) { console.log("\n=== " + title + " ==="); }
 function makeDom() { return new JSDOM(html, { runScripts: "dangerously", resources: "usable" }); }
-function dashboardClickables(dom) { return [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")]; }
+function dashboardClickables(dom) { return [...dom.window.document.querySelectorAll("#dashboards-rail .clickable:not([data-diceboard-pending])")]; }
 function click(dom, el) { el.dispatchEvent(new dom.window.Event("click", { bubbles: true })); }
 
 section("Test 1 — Mode ASSIGN : clic sur un dé du diceboard puis sur le slot ANY d'un véhicule");
@@ -268,7 +268,7 @@ sel = win.eval("sel");
 console.log("Étape passée à 'repair-target' (attendu true) :", sel.step === "repair-target");
 
 win.render();
-const repairClickables = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")].filter((el) => el.tagName === "image");
+const repairClickables = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable:not([data-diceboard-pending])")].filter((el) => el.tagName === "image");
 console.log("1 jeton dégât cliquable (celui du véhicule medium) (attendu true) :", repairClickables.length === 1);
 console.log("Un halo vert (#b0d458) est visible derrière le jeton réparable (attendu true) :", dom.window.document.getElementById("dashboards-rail").innerHTML.includes('fill="#b0d458"'));
 
@@ -678,10 +678,10 @@ G.roundState.roundNumber = 1;
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.resetSelection();
 win.render();
-let clickables22 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
+let clickables22 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable:not([data-diceboard-pending])")];
 clickables22[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
 win.render();
-clickables22 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
+clickables22 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable:not([data-diceboard-pending])")];
 clickables22[0].dispatchEvent(new win.Event("click", { bubbles: true })); // coast slot
 sel = win.eval("sel");
 const opt22 = win.getMovementStepOptions(win.board(), sel.car, sel.remaining, G.allCars)[0];
@@ -756,10 +756,10 @@ win.resetSelection();
 win.render();
 
 // --- 1er Coast complet sur s25 ---
-let clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
+let clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable:not([data-diceboard-pending])")];
 clickables25[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
 win.render();
-clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
+clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable:not([data-diceboard-pending])")];
 const s25Rect = clickables25[0]; // small en 1er dans l'ordre de rendu
 s25Rect.dispatchEvent(new win.Event("click", { bubbles: true }));
 sel = win.eval("sel");
@@ -775,14 +775,14 @@ sel = win.eval("sel");
 console.log("Bien de retour à l'étape 'die' pour le tour suivant (attendu true) :", sel.step === "die");
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN); // on saute le tour de l'IA, hors-sujet ici
 win.render();
-clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
+clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable:not([data-diceboard-pending])")];
 clickables25[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie (dernier dé)
 win.render();
 const ctx25 = win.eval("currentTurnContext()");
 console.log("Mode bien 'coast', s25 toujours éligible (coastCount=1 < 2) (attendu true) :",
   ctx25.mode === "coast" && ctx25.coastableCars.includes(s25));
 
-clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
+clickables25 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable:not([data-diceboard-pending])")];
 const s25Rect2 = clickables25.find((r) => true); // s25 est le seul restant possible ici selon le setup
 s25Rect2.dispatchEvent(new win.Event("click", { bubbles: true }));
 sel = win.eval("sel");
@@ -890,10 +890,10 @@ G.roundState.dicePool[HUMAN] = [4];
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.resetSelection();
 win.render();
-let clickables29 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
+let clickables29 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable:not([data-diceboard-pending])")];
 clickables29[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
 win.render();
-clickables29 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
+clickables29 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable:not([data-diceboard-pending])")];
 clickables29[0].dispatchEvent(new win.Event("click", { bubbles: true })); // slot coast1 de s29 (toujours coast1, retour de Mayrik)
 win.render();
 
@@ -1033,10 +1033,10 @@ win.resetSelection();
 win.render();
 
 // --- 1er Coast complet sur s34 ---
-let clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
+let clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable:not([data-diceboard-pending])")];
 clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie
 win.render();
-clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
+clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable:not([data-diceboard-pending])")];
 clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // coast1 (toujours, s34 en 1er)
 sel = win.eval("sel");
 const opts34a = win.getMovementStepOptions(win.board(), sel.car, sel.remaining, G.allCars);
@@ -1051,10 +1051,10 @@ console.log("Après le 1er Coast : coast1 vide, coast2 contient le dé (bascule,
 // --- 2e Coast, même véhicule (on force le retour à HUMAN, le tour de l'IA n'est pas le sujet ici) ---
 G.roundState.currentPlayerIndex = win.eval("PLAYER_NAMES").indexOf(HUMAN);
 win.render();
-clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable")];
+clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail .clickable:not([data-diceboard-pending])")];
 clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // pickDie (dernier dé, 3)
 win.render();
-clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable")];
+clickables34 = [...dom.window.document.querySelectorAll("#dashboards-rail rect.clickable:not([data-diceboard-pending])")];
 clickables34[0].dispatchEvent(new win.Event("click", { bubbles: true })); // coast1 à nouveau (toujours proposé)
 sel = win.eval("sel");
 console.log("Le 2e clic cible bien s34 à nouveau (attendu true) :", sel.car === s34);
@@ -1321,34 +1321,48 @@ const liveNitroDie39 = [...dom.window.document.querySelectorAll("#dashboards-rai
 });
 console.log("Le dé de Command (NITRO, 2) est déjà visible PENDANT le mouvement (attendu true) :", !!liveNitroDie39);
 
-section("Test 40 — BUG CORRIGÉ (signalé par Mayrik) : un dé restant disparaissait du diceboard");
+section("Test 40 — Un dé choisi quitte le diceboard immédiatement, et son emplacement sert de bouton d'annulation");
 
-// Le pool affiché retranchait les dés choisis pour compenser le fait
-// que le moteur ne les retire qu'au commit. Mais sel.dieValue et
-// sel.commandDieValue restent renseignés pendant TOUTE la phase de
-// mouvement : après le commit, la compensation s'appliquait une
-// seconde fois et emportait un dé légitime de même valeur.
-// Intermittent par nature — sans doublon de valeur dans le pool, la
-// recherche échouait et rien ne disparaissait. D'où un pool forcé avec
-// un doublon ici.
+// RÈGLE UNIFIÉE (retour de Mayrik) : l'affichage différait selon
+// l'ordre de sélection — le dé du véhicule restait visible jusqu'au
+// clic sur le dashboard, alors que le dé de Command disparaissait dès
+// son choix. Désormais tout dé choisi disparaît immédiatement, et son
+// emplacement RESTE À SA PLACE, vidé et surligné : il sert de bouton
+// pour rendre le dé.
+// Au passage, la compensation qui retranchait les dés choisis du pool
+// affiché n'existe plus du tout — c'était elle qui faisait disparaître
+// un dé légitime portant la même valeur. Le pool affiché EST celui du
+// moteur ; seul le dessin change. D'où un pool avec doublon ici.
 dom = makeDom();
 win = dom.window;
 win.newGame();
 win.eval("G.roundState.dicePool[HUMAN] = [3, 3, 5, 2];");
 win.render();
-const poolAffiche40 = () => win.eval("JSON.stringify(visualDicePool(HUMAN))");
-const poolReel40 = () => win.eval("JSON.stringify(G.roundState.dicePool[HUMAN])");
+const doc40 = dom.window.document;
+const desVisibles40 = () => doc40.querySelectorAll('[data-diceboard-die^="blue"]').length;
+const videsSurlignes40 = () =>
+  [...doc40.querySelectorAll('[data-diceboard-pending^="blue"]')].map((e) => e.getAttribute("data-diceboard-pending"));
 
-win.eval("pickDie(3); sel.car = G.allCars.find((c) => c.owner === HUMAN); sel.mode = 'assign';");
-console.log("Avant commit, le dé choisi est retiré de l'affichage (attendu true) :",
-  poolAffiche40() === JSON.stringify([3, 5, 2]));
-win.eval("sel.commandDieValue = 5; sel.commandType = 'nitro'; sel.command = { type: 'nitro', dieValue: 5 };");
-console.log("...et le dé de Command aussi (attendu true) :", poolAffiche40() === JSON.stringify([3, 2]));
+console.log("Au départ, les 4 dés sont visibles (attendu true) :", desVisibles40() === 4);
 
-win.eval("sel.car.col = 2; sel.car.row = 2; commitAssignAndCommand();");
-console.log("APRÈS commit, l'affichage colle exactement au pool réel (attendu true) :",
-  poolAffiche40() === poolReel40());
-console.log("...et le second dé de valeur 3 est toujours là (attendu true) :",
-  JSON.parse(poolAffiche40()).filter((v) => v === 3).length === 1);
+win.eval("pickDie(3); render();");
+console.log("Le dé choisi disparaît AUSSITÔT, sans attendre sa destination (attendu true) :", desVisibles40() === 3);
+console.log("...et son emplacement reste surligné comme bouton (attendu true) :", videsSurlignes40().length === 1);
+console.log("Le pool du moteur n'a PAS bougé : seul le dessin change (attendu true) :",
+  win.eval("JSON.stringify(G.roundState.dicePool[HUMAN])") === JSON.stringify([3, 3, 5, 2]));
+console.log("Le second dé de valeur 3 est toujours dessiné (attendu true) :", desVisibles40() === 3);
+
+win.eval("sel.car = G.allCars.find((c) => c.owner === HUMAN); sel.mode = 'assign'; sel.step = 'command-die';");
+win.eval("sel.commandDieValue = 5; sel.commandType = 'nitro'; render();");
+console.log("Un second dé choisi vide un second emplacement, apparié par valeur (attendu true) :",
+  desVisibles40() === 2 && videsSurlignes40().length === 2);
+
+// Clic sur l'emplacement vide du dé de Command : il revient, le choix
+// du véhicule est conservé.
+const videCommand40 = [...doc40.querySelectorAll('[data-diceboard-pending^="blue"]')].pop();
+videCommand40.dispatchEvent(new win.Event("click", { bubbles: true }));
+console.log("Cliquer sur l'emplacement vide rend le dé (attendu true) :", desVisibles40() === 3);
+console.log("...et n'annule que la Command, pas le choix du véhicule (attendu true) :",
+  win.eval("sel.commandDieValue") === null && win.eval("!!sel.car") === true);
 
 console.log("\n=== Fin des tests dédiés (Dashboards, tranche 1) ===");
