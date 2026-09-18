@@ -7718,29 +7718,37 @@ function dieMarkup(value, color, x, y, size, extraAttrs, rotationDeg) {
 // visuellement, même si le moteur ne les retire réellement du pool
 // qu'au commit. Sans ça, un dé posé restait dupliqué : visible à la
 // fois sur le diceboard ET sur le dashboard où il vient d'être posé.
+// Le pool affiché est désormais EXACTEMENT le pool du moteur.
+//
+// Avant, on en retranchait les dés choisis pour simuler leur retrait
+// avant le commit — d'où deux comportements différents selon l'ordre de
+// sélection (retour de Mayrik), et un bug de dé disparu quand une même
+// valeur existait en double. Un dé choisi n'est plus retiré du pool : il
+// est simplement DESSINÉ AUTREMENT, en emplacement vide surligné (voir
+// pendingDiceSlots et la boucle de dessin du diceboard). L'emplacement
+// garde donc sa place, et sert de bouton d'annulation.
 function visualDicePool(playerName) {
-  const pool = [...(G.roundState.dicePool[playerName] || [])];
-  // BUG CORRIGÉ (signalé par Mayrik, capture à l'appui) : cette
-  // compensation ne vaut QUE tant que les dés choisis n'ont pas encore
-  // été retirés du vrai pool. Au commit, le moteur les retire pour de
-  // bon, mais sel.dieValue / sel.commandDieValue restent renseignés
-  // pendant toute la phase de mouvement — on retranchait donc une
-  // seconde fois ces valeurs, ce qui faisait disparaître un dé
-  // légitime portant la même valeur. Intermittent par nature : sans
-  // doublon de valeur dans le pool, indexOf échouait et rien ne
-  // bougeait.
-  if (playerName === HUMAN && !sel.diceCommitted) {
-    if (sel.car) {
-      const i = pool.indexOf(sel.dieValue);
-      if (i !== -1) pool.splice(i, 1);
-    }
-    if (sel.commandDieValue !== undefined && sel.commandDieValue !== null) {
-      const i = pool.indexOf(sel.commandDieValue);
-      if (i !== -1) pool.splice(i, 1);
-    }
-  }
-  return pool;
+  return [...(G.roundState.dicePool[playerName] || [])];
 }
+
+// Emplacements dont le dé est choisi mais pas encore posé : ils sont
+// affichés vides et surlignés, et un clic dessus annule le choix. Les
+// valeurs en double sont appariées une par une (deux 4 choisis = deux
+// emplacements distincts), jamais par égalité simple.
+function pendingDiceSlots(playerName) {
+  const pending = new Map(); // index de slot -> "car" | "command"
+  if (playerName !== HUMAN || sel.diceCommitted) return pending;
+  const slots = diceboardSlots(playerName);
+  const prendre = (valeur, role) => {
+    if (valeur === undefined || valeur === null) return;
+    const i = slots.findIndex((v, idx) => v === valeur && !pending.has(idx));
+    if (i !== -1) pending.set(i, role);
+  };
+  prendre(sel.dieValue, "car");
+  prendre(sel.commandDieValue, "command");
+  return pending;
+}
+
 
 // Réconcilie les 2 emplacements dégât (gauche/droite) d'UN véhicule
 // avec son car.damageTokens réel. Règle : un jeton déjà en place (côté
@@ -7992,10 +8000,31 @@ function renderDashboards() {
     const dice = at("diceboard");
     const dicePath = dashboardImagePath(playerName, "diceboard");
     drawImage(svg, dicePath, dice.x, dice.y, dice.w, dice.h);
+    const pendingSlots = pendingDiceSlots(playerName);
     diceboardSlots(playerName).forEach((value, i) => {
       if (value === null) return;
       const slotKey = "slot" + i;
       const { x: dx, y: dy } = slotDieOrigin(dice, DICEBOARD_SLOT_FRACTION[slotKey]);
+      // Dé choisi, en attente de destination : l'emplacement reste à sa
+      // place, vidé et surligné. Un clic dessus annule le choix et rend
+      // le dé (retour de Mayrik).
+      if (pendingSlots.has(i)) {
+        const role = pendingSlots.get(i);
+        svg.insertAdjacentHTML("beforeend", `<rect class="clickable" x="${dx.toFixed(1)}" y="${dy.toFixed(1)}" width="${DIE_DISPLAY_SIZE.toFixed(1)}" height="${DIE_DISPLAY_SIZE.toFixed(1)}" rx="4" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="1.5" stroke-dasharray="3 2" data-diceboard-pending="${playerName}:${i}"/>`);
+        svg.lastElementChild.addEventListener("click", () => {
+          if (role === "command") {
+            // Annule le seul dé de Command : le choix du véhicule reste.
+            sel.commandDieValue = null;
+            sel.command = null;
+            sel.commandType = null;
+            sel.step = "command-die";
+            render();
+          } else {
+            cancelSelection(); // le dé du véhicule porte tout le tour
+          }
+        });
+        return;
+      }
       const isClickable = playerName === HUMAN && (dieStep || commandDieStep);
       // data-diceboard-die : accroche utilisée UNIQUEMENT par l'animation
       // de lancer en début de round (playRoundDiceRollAnimation) pour
