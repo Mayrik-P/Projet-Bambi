@@ -794,9 +794,12 @@ console.log("Le 2e clic cible bien s25 (attendu true) :", sel.car === s25);
 const box25 = win.eval('boardBox("small")');
 const rowBBox25 = win.eval("ROW_BBOX");
 const dimX25 = -rowBBox25.minX + box25.x, dimY25 = -rowBBox25.minY + box25.y;
-const frac25 = win.eval("VEHICLE_SLOT_FRACTION.small");
-const DIE25 = win.eval("DIE_DISPLAY_SIZE");
-const coast1X = dimX25 + frac25.coast1.x * box25.w - DIE25 / 2;
+// On passe par slotDieOrigin() plutôt que de refaire le calcul à la
+// main : le décalage DIE_SLOT_NUDGE (voir ui-script.js) s'applique aux
+// emplacements imprimés, et le test doit suivre le vrai calcul plutôt
+// que de figer une position qui redeviendrait fausse au prochain
+// recalage.
+const coast1X = dimX25 + win.eval('slotDieOrigin(boardBox("small"), VEHICLE_SLOT_FRACTION.small.coast1, DIE_SLOT_NUDGE)').x - box25.x;
 console.log("Le slot proposé est bien TOUJOURS COAST1, même pour le 2e Coast (attendu true) :",
   Math.abs(parseFloat(s25Rect2.getAttribute("x")) - coast1X) < 1);
 
@@ -900,10 +903,11 @@ win.render();
 const box29 = win.eval('boardBox("small")');
 const rowBBox29 = win.eval("ROW_BBOX");
 const dimX29 = -rowBBox29.minX + box29.x, dimY29 = -rowBBox29.minY + box29.y;
-const frac29 = win.eval("VEHICLE_SLOT_FRACTION.small");
-const DIE29 = win.eval("DIE_DISPLAY_SIZE");
-const coast1X29 = dimX29 + frac29.coast1.x * box29.w - DIE29 / 2;
-const coast1Y29 = dimY29 + frac29.coast1.y * box29.h - DIE29 / 2;
+// Même remarque qu'au test 25 : position obtenue par slotDieOrigin(),
+// décalage DIE_SLOT_NUDGE compris.
+const origine29 = win.eval('slotDieOrigin(boardBox("small"), VEHICLE_SLOT_FRACTION.small.coast1, DIE_SLOT_NUDGE)');
+const coast1X29 = dimX29 + origine29.x - box29.x;
+const coast1Y29 = dimY29 + origine29.y - box29.y;
 
 const dashHtml29 = dom.window.document.getElementById("dashboards-rail").innerHTML;
 console.log("Un dé est bien rendu quelque part sur le dashboard (attendu true) :", dashHtml29.includes("die-move-"));
