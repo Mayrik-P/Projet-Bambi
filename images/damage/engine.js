@@ -1,0 +1,3374 @@
+/**
+ * ThunderRoad In The Pocket — Moteur de règles (sans graphisme)
+ * ---------------------------------------------------------------
+ * Ce fichier ne dessine RIEN. Il modélise juste l'état du jeu et les
+ * règles qui le font évoluer. On le teste en lisant les résultats
+ * dans la console (voir test-engine.js).
+ *
+ * Couvre aujourd'hui l'intégralité du jeu de base (p.1-11 du
+ * rulebook) : mouvement (arc avant, entrée, Coast, bonus Road),
+ * Slams (direct, en chaîne, avec relance), hazards (tous types),
+ * dégâts et réparation, tir (normal et Airstrike), Commands
+ * (Nitro/Drift/Repair/Airstrike), progression des tuiles (défilement,
+ * ligne d'arrivée) et conditions de victoire — pour un nombre de
+ * joueurs quelconque (2 à 4). L'IA (ai-decision.js), la couche
+ * joueur humain (human-decision.js) et l'exécution de tour
+ * (turn-executor.js) sont des modules séparés qui s'appuient
+ * uniquement sur ce fichier.
+ */
+
+// -----------------------------------------------------------------
+// 1. CONSTANTES DE RÈGLES (tirées du rulebook)
+// -----------------------------------------------------------------
+
+const TERRAIN = {
+  ROAD: "road",           // coûte 1 déplacement
+  OFF_ROAD: "off_road",   // coûte 1 déplacement
+  MUD: "mud",             // coûte 2 déplacements
+  IMPASSABLE: "impassable" // élimine la voiture qui y entre
+};
+
+const MOVE_COST = {
+  [TERRAIN.ROAD]: 1,
+  [TERRAIN.OFF_ROAD]: 1,
+  [TERRAIN.MUD]: 2
+  // IMPASSABLE n'a pas de coût : on n'y "avance" pas, on est éliminé.
+};
+
+const CAR_SIZE = {
+  SMALL: "small",
+  MEDIUM: "medium",
+  LARGE: "large"
+};
+
+const CAR_STATUS = {
+  OPERABLE: "operable",
+  INOPERABLE: "inoperable",
+  ELIMINATED: "eliminated"
+};
+
+// -----------------------------------------------------------------
+// 1bis. RÉPARTITION EXACTE DES DÉS (confirmée par Mayrik, p.10 rulebook)
+// -----------------------------------------------------------------
+// Centralisé ici pour référence. Tous ont une fonction de tirage
+// (rollRoadDie, rollStuntDie, rollShootingDie, rollSlamDie,
+// rollDirectionDie) sauf MOVEMENT : la valeur du dé de mouvement est
+// toujours fournie en paramètre par l'appelant (joueur/IA), jamais
+// "tirée" par le moteur lui-même — gardé ici comme simple référence
+// de la composition du dé physique.
+
+const DICE_FACES = {
+  MOVEMENT: [1, 2, 3, 4, 5, 6],
+  ROAD: [1, 1, 1, 2, 2, 3],
+  STUNT: [1, 2, 2, 3, 3, 4],
+  SHOOTING: ["large", "large", "large", "medium", "small-medium", "any"],
+  SLAM: ["top", "top", "bottom", "bottom", "bottom", "bottom"] // déjà utilisé par rollSlamDie
+};
+
+// -----------------------------------------------------------------
+// 2. MODÈLE DE LA TUILE
+// -----------------------------------------------------------------
+// Une tuile est une grille [row][col]. col augmente vers l'avant
+// (direction dans laquelle les voitures avancent). row est la
+// position latérale sur la tuile.
+//
+// NOTE : la géométrie exacte (grille isométrique à cases décalées,
+// comme dans l'éditeur de plateau) sera reconciliée avec le rendu
+// plus tard. Pour l'instant on teste la LOGIQUE sur une grille
+// simple rectangulaire — les règles de coût/arc sont identiques,
+// seul l'affichage final changera.
+
+function createTestTile(cols, rows) {
+  const grid = [];
+  for (let r = 0; r < rows; r++) {
+    const row = [];
+    for (let c = 0; c < cols; c++) {
+      row.push({ terrain: TERRAIN.ROAD, hazard: null, revealedHazard: null });
+    }
+    grid.push(row);
+  }
+  return { cols, rows, grid };
+}
+
+// -----------------------------------------------------------------
+// 2bis. PLATEAU (p.5) — rear + middle + lead collées en une seule grille
+// -----------------------------------------------------------------
+// Le plateau réel du jeu est composé de 3 tuiles à la fois. Plutôt
+// que d'apprendre à moveCar/enterAdjacentSpace/etc. à jongler entre 3
+// tuiles séparées, on les colle en une seule grande grille (mêmes
+// lignes, colonnes concaténées) — le "plateau" a alors EXACTEMENT la
+// même forme qu'une tuile simple ({cols, rows, grid}), donc TOUT le
+// moteur déjà écrit et testé (mouvement, slam, hazards, bonus Road...)
+// fonctionne dessus SANS AUCUNE modification.
+//
+// Colonnes 0..tileCols-1 = rear, tileCols..2*tileCols-1 = middle,
+// 2*tileCols..3*tileCols-1 = lead. Les cellules du plateau sont les
+// MÊMES OBJETS que celles des tuiles d'origine (pas une copie) — donc
+// une résolution de hazard qui modifie une case via le plateau modifie
+// bien la vraie tuile en dessous, ce qui compte quand cette tuile
+// glissera de position (rear→défaussée, middle→rear, lead→middle).
+function createBoard(...tiles) {
+  const rows = tiles[0].rows;
+  const grid = [];
+  for (let r = 0; r < rows; r++) {
+    grid.push(tiles.reduce((acc, t) => acc.concat(t.grid[r]), []));
+  }
+  const cols = tiles.reduce((sum, t) => sum + t.cols, 0);
+  return {
+    cols,
+    rows,
+    grid,
+    tiles: [...tiles],
+    tileCols: tiles[0].cols // largeur de la tuile rear — reste valide même avec une 4e tuile Arrivée ajoutée
+  };
+}
+
+function getSpace(tile, col, row) {
+  if (row < 0 || row >= tile.rows) return null; // hors tuile (bord gauche/droit)
+  if (col < 0 || col >= tile.cols) return undefined; // hors tuile (bord avant/arrière) — les appelants (enterAdjacentSpace, forceMoveOneSpace) distinguent ensuite avant (progression des tuiles) et arrière (élimination)
+  return tile.grid[row][col];
+}
+
+// -----------------------------------------------------------------
+// 2ter. PROGRESSION DES TUILES (p.11)
+// -----------------------------------------------------------------
+// État possédant les 3 VRAIES tuiles (pas juste le plateau collé,
+// qui n'en est qu'une vue reconstruite à chaque fois). C'est cet
+// état qui évolue quand une voiture sort par l'avant.
+//
+// Chaque tuile physique a 2 faces différentes (A/B) dans le vrai jeu ;
+// ici, chaque face est un fichier de données à part entière (voir
+// tiles/data/) — le "retournement" se traduit donc par un tirage
+// aléatoire entre ces fichiers au moment d'instancier la tuile
+// (pickRandomFace/groupTilesByNumber), jamais par une rotation gérée
+// par ce moteur. Choix de conception définitif, pas une limitation
+// temporaire : plus simple à raisonner, et strictement équivalent du
+// point de vue des règles (une face = un terrain figé, comme la vraie
+// tuile imprimée).
+//
+// Place automatiquement un jeton hazard sur chaque case marquée
+// hazardSpace=true des 3 tuiles de départ (mise en place physique du
+// jeu p.5) — voir populateTileHazards(). Sans effet sur des tuiles de
+// test sans ce marquage. options.forced{Rear,Middle,Lead}Hazards
+// permettent des tirages déterministes en test, tuile par tuile.
+function createTileProgressionState(rearTile, middleTile, leadTile, drawPile = [], options = {}) {
+  populateTileHazards(rearTile, options.forcedRearHazards || []);
+  populateTileHazards(middleTile, options.forcedMiddleHazards || []);
+  populateTileHazards(leadTile, options.forcedLeadHazards || []);
+  return {
+    rearTile,
+    middleTile,
+    leadTile,
+    drawPile: [...drawPile], // tuiles restant à piocher
+    tilesPlacedCount: 1, // la lead actuelle compte comme la 1ère tuile "placée" (p.11, règle des 5 tuiles à 2 joueurs)
+    finishLineTile: null // devient une vraie tuile (1 colonne) une fois les conditions réunies, voir checkGameEndConditions
+  };
+}
+
+// La ligne d'arrivée n'est PAS la lead tile elle-même — c'est une
+// tuile À PART ajoutée APRÈS elle une fois les conditions de tuile
+// finale réunies : une seule colonne de large, purement décorative
+// (précisé par Mayrik). Y entrer = victoire immédiate pour le
+// propriétaire du véhicule.
+// Le visuel (face "a" ou "b") est purement esthétique — aucune
+// influence sur le terrain (toujours 100% Route) — tiré au hasard à
+// la pose, comme les faces des tuiles route (voir pickRandomFace).
+// injectedFace permet de forcer une face précise pour les tests.
+function createFinishLineTile(rows, injectedFace = null) {
+  const face = injectedFace || (Math.random() < 0.5 ? "a" : "b");
+  const grid = [];
+  for (let r = 0; r < rows; r++) {
+    grid.push([{ terrain: TERRAIN.ROAD, hazard: null, revealedHazard: null, isFinishLine: true }]);
+  }
+  return { cols: 1, rows, grid, face };
+}
+
+function buildBoardFromProgressionState(state) {
+  const tiles = [state.rearTile, state.middleTile, state.leadTile];
+  if (state.finishLineTile) tiles.push(state.finishLineTile); // ajoutée seulement une fois les conditions réunies
+  return createBoard(...tiles);
+}
+
+// p.11 : FONCTION FAISANT AUTORITÉ pour l'état de fin de partie —
+// à appeler à CHAQUE fin de tour (précisé par Mayrik), pas seulement
+// quand une voiture atteint le bord du plateau. Quatre vérifications,
+// dans cet ordre :
+//   1. Un véhicule est sur la tuile Finish Line → partie terminée,
+//      victoire de son propriétaire.
+//   2. Plus qu'un seul joueur encore en jeu → partie terminée,
+//      victoire de ce joueur (p.11, "last player standing").
+//   3. Partie à 2 joueurs et 5e tuile posée → ajoute la Finish Line
+//      (sans terminer la partie : il faut encore l'atteindre).
+//   4. Partie à 3-4 joueurs et un joueur hors jeu → ajoute la Finish
+//      Line (même remarque).
+// Idempotent : appeler cette fonction plusieurs fois par tour (ex.
+// une fois après le mouvement, une fois en fin de tour) ne cause
+// aucun effet de bord — une fois la Finish Line posée ou la partie
+// terminée, les vérifications suivantes ne font que le confirmer.
+function checkGameEndConditions(state, allCars, allChoppers, playerNames, options = {}) {
+  const log = [];
+
+  // 1. Victoire par ligne d'arrivée.
+  if (state.finishLineTile) {
+    const finishColStart = state.rearTile.cols + state.middleTile.cols + state.leadTile.cols;
+    const winnerCar = allCars.find((c) => c.status !== CAR_STATUS.ELIMINATED && c.col >= finishColStart);
+    if (winnerCar) {
+      log.push(`${winnerCar.id} est sur la Finish Line → VICTOIRE de ${winnerCar.owner} !`);
+      return { log, gameOver: true, winner: winnerCar.owner, reason: "finish-line" };
+    }
+  }
+
+  // 2. Dernier joueur restant.
+  const activePlayers = playerNames.filter((p) => !isPlayerOutOfGame(p, allCars));
+  if (activePlayers.length <= 1) {
+    const winner = activePlayers[0] || null;
+    log.push(winner ? `${winner} est le dernier joueur encore en jeu → VICTOIRE !` : `Plus aucun joueur en jeu — partie terminée sans vainqueur.`);
+    return { log, gameOver: true, winner, reason: "last-player-standing" };
+  }
+
+  // 3-4. Ajout de la Finish Line si les conditions sont réunies (sans
+  // terminer la partie — il faut encore l'atteindre).
+  if (!state.finishLineTile) {
+    let shouldAdd = false;
+
+    if (playerNames.length <= 2 && state.tilesPlacedCount >= 5) {
+      shouldAdd = true;
+      log.push(`Finish Line ajoutée (5e tuile, partie à 2 joueurs).`);
+    }
+
+    if (!shouldAdd && playerNames.length >= 3) {
+      const anyOut = playerNames.some((p) => isPlayerOutOfGame(p, allCars));
+      if (anyOut) {
+        shouldAdd = true;
+        log.push(`Finish Line ajoutée (un joueur hors jeu, partie à 3-4 joueurs).`);
+      }
+    }
+
+    if (shouldAdd) {
+      state.finishLineTile = createFinishLineTile(state.rearTile.rows, options.forcedFinishLineFace);
+    }
+  }
+
+  return { log, gameOver: false, winner: null };
+}
+
+// p.11, ÉTAPES 1-9 : à appeler quand une voiture sort par l'AVANT du
+// plateau (moveResult.frontExit === true) ET que la tuile qu'elle
+// vient de quitter n'était PAS la tuile finale (sinon c'est une
+// victoire, à gérer séparément — voir la future condition de
+// victoire). Décale rear→défaussée, middle→rear, lead→middle,
+// pioche une nouvelle lead, et REBASE toutes les positions (voitures
+// + choppers) sur le nouveau repère de colonnes.
+function advanceBoardOnFrontExit(state, allCars, allChoppers, options = {}) {
+  const log = [];
+  const tileCols = state.rearTile.cols;
+
+  // 1. Toutes les voitures sur la tuile rear (qui va être retirée)
+  // sont éliminées (p.11, étape 1).
+  for (const car of allCars) {
+    if (car.status === CAR_STATUS.ELIMINATED) continue;
+    if (car.col >= 0 && car.col < tileCols) {
+      car.status = CAR_STATUS.ELIMINATED;
+      log.push(`${car.id} était sur la tuile rear retirée → ÉLIMINÉE`);
+    }
+  }
+
+  // 2. Les hazards de la tuile rear disparaissent avec elle (rien de
+  // plus à faire : on ne conserve pas de référence à cette tuile).
+  log.push(`Hazards de la tuile rear défaussés avec elle.`);
+
+  // 3. Les choppers présents sur la tuile rear sont rendus à leurs
+  // joueurs (redeviennent non placés).
+  for (const ch of allChoppers || []) {
+    if (ch.placed && ch.col >= 0 && ch.col < tileCols) {
+      ch.placed = false;
+      ch.col = null;
+      ch.row = null;
+      log.push(`Chopper de ${ch.owner} rendu (était sur la tuile rear retirée).`);
+    }
+  }
+
+  // 4-6. Décalage : rear défaussée, middle→rear, lead→middle,
+  // nouvelle lead piochée (ou fournie explicitement pour les tests
+  // via options.forcedNextTile). La tuile défaussée est réinstanciée
+  // à neuf avant de rejoindre la pioche — état d'origine restauré
+  // (pas le terrain/jetons de son passage précédent), ET face
+  // retirée à nouveau au hasard entre A et B si les deux sont connues
+  // (règle confirmée par Mayrik : la face se tire à CHAQUE entrée en
+  // jeu, y compris un recyclage depuis la défausse, pas seulement au
+  // tout premier tirage). options.forcedDiscardFace permet un tirage
+  // déterministe en test. Sur une tuile de test (sans _rawData/
+  // _facesEntry), comportement inchangé : objet repoussé tel quel —
+  // aucune régression sur les tests existants, qui fournissent
+  // toujours leur pioche explicitement.
+  let discardedTile = state.rearTile;
+  if (state.rearTile._facesEntry) {
+    const rawPick = pickRandomFace(state.rearTile._facesEntry, options.forcedDiscardFace);
+    discardedTile = instantiateTile(rawPick, state.rearTile._facesEntry);
+  } else if (state.rearTile._rawData) {
+    discardedTile = instantiateTile(state.rearTile._rawData);
+  }
+  state.drawPile.push(discardedTile);
+  state.rearTile = state.middleTile;
+  state.middleTile = state.leadTile;
+
+  const newLeadTile = options.forcedNextTile || state.drawPile.shift();
+  if (!newLeadTile) {
+    return { ok: false, reason: "Plus aucune tuile disponible dans la pile de pioche.", log };
+  }
+  state.leadTile = newLeadTile;
+  state.tilesPlacedCount += 1;
+
+  // 7. Hazards aléatoires sur la nouvelle lead (p.11) — chaque case
+  // marquée hazardSpace=true (vraie tuile instanciée via
+  // instantiateTile) reçoit un jeton fraîchement tiré. Sans effet sur
+  // les tuiles de test (createTestTile) qui n'ont pas ce marquage.
+  // options.forcedLeadHazards permet un tirage déterministe en test.
+  populateTileHazards(newLeadTile, options.forcedLeadHazards || []);
+  log.push(`Nouvelle tuile lead posée, hazards placés sur ses cases marquées.`);
+
+  // Rebase : toutes les positions (voitures encore en jeu, choppers
+  // placés) reculent d'une largeur de tuile, puisque le repère
+  // (colonne 0) avance d'une tuile vers l'avant.
+  for (const car of allCars) {
+    if (car.status === CAR_STATUS.ELIMINATED) continue;
+    car.col -= tileCols;
+  }
+  for (const ch of allChoppers || []) {
+    if (ch.placed) ch.col -= tileCols;
+  }
+
+  const newBoard = buildBoardFromProgressionState(state);
+
+  return { ok: true, log, newBoard };
+}
+
+// -----------------------------------------------------------------
+// 2quater. ORCHESTRATEUR : MOUVEMENT + PROGRESSION + VICTOIRE (p.11)
+// -----------------------------------------------------------------
+// Enchaîne automatiquement : mouvement → si sortie par l'avant, soit
+// décalage des tuiles (si pas encore la tuile finale) et reprise du
+// mouvement restant, soit détection de la tuile finale (ajout de la
+// ligne d'arrivée) → et victoire dès que la voiture entre
+// effectivement sur cette ligne d'arrivée. Reconstruit le plateau à
+// chaque itération (nécessaire puisque le nombre de tuiles peut
+// changer en cours de route, une fois la ligne d'arrivée ajoutée).
+function* moveCarWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, slamOptions = {}) {
+  const log = [];
+  let remainingPath = [...chosenPath];
+  let remainingDie = notifyMovesRemaining(dieValue);
+  // p.9 (bonus Road) : l'éligibilité doit tenir sur TOUTE la
+  // trajectoire, pas seulement le dernier segment — bug corrigé
+  // (détecté en câblant le bonus Road, jamais appliqué jusqu'ici) :
+  // chaque tour de boucle appelait moveCar() qui recalculait
+  // roadEligible à partir de zéro depuis la position de DÉPART de ce
+  // segment (après un changement de tuile), écrasant silencieusement
+  // l'historique d'un segment précédent qui aurait quitté la route.
+  let overallRoadEligible = true;
+
+  const movementOptions = { ...slamOptions, progressionState: state, allChoppers };
+
+  while (true) {
+    const board = buildBoardFromProgressionState(state);
+    const moveResult = yield* moveCarGen(board, car, remainingDie, remainingPath, allCars, movementOptions);
+    log.push(...moveResult.log);
+
+    if (!moveResult.ok) {
+      return { ok: false, reason: moveResult.reason, log };
+    }
+
+    overallRoadEligible = overallRoadEligible && !!moveResult.roadEligible;
+
+    const endCheck = checkGameEndConditions(state, allCars, allChoppers, playerNames);
+    log.push(...endCheck.log);
+    if (endCheck.gameOver) {
+      return { ok: true, log, moveResult, gameOver: true, winner: endCheck.winner, reason: endCheck.reason, roadEligible: overallRoadEligible };
+    }
+
+    if (!moveResult.frontExit) {
+      // Mouvement terminé (normalement, élimination, ou slam) sans
+      // atteindre le bord avant pour la voiture ACTIVÉE ce tour.
+      // Reste un cas à vérifier séparément : la voiture qu'elle vient
+      // de PERCUTER (slam) peut, elle, avoir été projetée hors du
+      // bord avant — jamais géré avant ce correctif (voir le
+      // commentaire détaillé dans resolveSlam). Sans ce traitement,
+      // la voiture percutée restait immobile sur sa case d'origine,
+      // ce qui pouvait la laisser empilée avec la voiture arrivante
+      // au lieu d'être repoussée par le décalage de tuile normal.
+      const slamExit = moveResult.slam && moveResult.slam.frontExitInfo;
+      if (slamExit && slamExit.car.status !== CAR_STATUS.ELIMINATED) {
+        const exitingCar = slamExit.car;
+        const exitDirection = slamExit.direction;
+        let guard = 0;
+        let retryFrontExit = true;
+        while (retryFrontExit && guard < 4 && exitingCar.status !== CAR_STATUS.ELIMINATED) {
+          guard++;
+          const preAdvanceEnd = checkGameEndConditions(state, allCars, allChoppers, playerNames);
+          log.push(...preAdvanceEnd.log);
+          if (preAdvanceEnd.gameOver) {
+            return { ok: true, log, moveResult, gameOver: true, winner: preAdvanceEnd.winner, reason: preAdvanceEnd.reason, roadEligible: overallRoadEligible };
+          }
+          if (!state.finishLineTile) {
+            const advanceResult = advanceBoardOnFrontExit(state, allCars, allChoppers, {});
+            log.push(...advanceResult.log);
+            if (!advanceResult.ok) {
+              log.push(`${exitingCar.id} — décalage de tuile impossible après avoir été projetée hors du bord avant par un Slam : ${advanceResult.reason}`);
+              break;
+            }
+          }
+          if (exitingCar.status === CAR_STATUS.ELIMINATED) break; // éliminée en tant qu'ex-occupante de la tuile rear retirée
+          const retryBoard = buildBoardFromProgressionState(state);
+          const retryResult = yield* forceMoveOneSpaceGen(retryBoard, exitingCar, allCars, exitDirection, movementOptions);
+          log.push(...retryResult.log);
+          retryFrontExit = !!retryResult.frontExit;
+        }
+      }
+
+      const finalEndCheck = checkGameEndConditions(state, allCars, allChoppers, playerNames);
+      log.push(...finalEndCheck.log);
+      if (finalEndCheck.gameOver) {
+        return { ok: true, log, moveResult, gameOver: true, winner: finalEndCheck.winner, reason: finalEndCheck.reason, roadEligible: overallRoadEligible };
+      }
+
+      return { ok: true, log, moveResult, gameOver: false, winner: null, roadEligible: overallRoadEligible };
+    }
+
+    // Sortie par l'avant de la lead tile ACTUELLE.
+    remainingDie = moveResult.remaining;
+    remainingPath = remainingPath.slice(moveResult.stepsConsumed);
+
+    if (!state.finishLineTile) {
+      // La Finish Line n'est toujours pas là (checkGameEndConditions
+      // vient de le confirmer ci-dessus) : décalage classique.
+      const advanceResult = advanceBoardOnFrontExit(state, allCars, allChoppers, {});
+      log.push(...advanceResult.log);
+      if (!advanceResult.ok) {
+        return { ok: false, reason: advanceResult.reason, log };
+      }
+    }
+    // Si la Finish Line vient d'être attachée par checkGameEndConditions
+    // ci-dessus, la prochaine itération reconstruit un plateau à 4
+    // tuiles, sur lequel la voiture peut y entrer normalement (plus de
+    // sortie de plateau à ce stade).
+
+    // On boucle : reprise du reste du mouvement sur le plateau à jour.
+  }
+}
+
+function moveCarWithProgression(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, slamOptions = {}) {
+  return driveSync(moveCarWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, slamOptions));
+}
+
+// -----------------------------------------------------------------
+// 3. MODÈLE DE LA VOITURE
+// -----------------------------------------------------------------
+
+let nextCarId = 1;
+
+function createCar(owner, size, col, row) {
+  return {
+    id: nextCarId++,
+    owner,
+    size,
+    col,
+    row,
+    status: CAR_STATUS.OPERABLE,
+    damageTokens: [],
+    facingReversed: false, // true une fois inopérable (p.6)
+    movedThisRound: false, // p.8 : une voiture ne peut être ASSIGNÉE normalement qu'une fois par ROUND
+    coastCount: 0 // p.8 : nombre de fois où elle a été réactivée par Coast ce round (max 2)
+  };
+}
+
+// p.5-6 : au début d'une partie, les voitures ne sont PAS encore sur
+// le plateau — elles entrent en jeu au moment de leur tout premier
+// mouvement, en choisissant librement une case de la colonne 0 (voir
+// moveCarEnteringBoard, plus bas). col/row à null identifie cet état
+// "pas encore entré" — à ne jamais confondre avec une élimination
+// (status reste OPERABLE). Fenêtre de vie courte : uniquement entre
+// la mise en place et le tout premier mouvement DE CETTE VOITURE
+// précise (généralement round 1 uniquement, confirmé par Mayrik).
+function createCarOffBoard(owner, size) {
+  return createCar(owner, size, null, null);
+}
+
+// -----------------------------------------------------------------
+// 3bis. CHOPPER (p.6, p.8, p.11)
+// -----------------------------------------------------------------
+// Un chopper N'EST PAS un véhicule routier : il ne peut pas être
+// tiré dessus, ne prend pas de dégâts, ne slamme pas et n'est pas
+// slammé. Il PEUT tirer, et élimine tout véhicule qui finit un tour
+// sur sa case (même le sien). Il est placé via la commande Airstrike
+// (voir placeChopperAirstrike ci-dessous) — avant sa première
+// utilisation, il n'est nulle part sur le plateau (placed: false).
+let nextChopperId = 1;
+
+function createChopper(owner) {
+  return {
+    id: `chopper-${nextChopperId++}`,
+    owner,
+    col: null,
+    row: null,
+    placed: false,
+    isChopper: true // permet à resolveShoot() de refuser de le cibler
+  };
+}
+
+// p.8 : "Place your chopper on any empty space on the board (a space
+// with no obstacles)." Un obstacle = un véhicule routier, un AUTRE
+// chopper, un hazard (face cachée ou visible), ou une case impassable
+// (p.7, "Obstacles"). Retourne {ok:false, reason} si la case n'est
+// pas valide, sinon place le chopper et retourne {ok:true}.
+function placeChopperAirstrike(tile, allCars, allChoppers, chopper, col, row) {
+  const space = getSpace(tile, col, row);
+
+  if (space === null || space === undefined) {
+    return { ok: false, reason: "Case hors du plateau." };
+  }
+  if (space.terrain === TERRAIN.IMPASSABLE) {
+    return { ok: false, reason: "Case impassable : pas une case vide." };
+  }
+  if (space.hazard) {
+    return { ok: false, reason: "Case avec un hazard : pas une case vide." };
+  }
+  if (getCarAt(allCars, col, row)) {
+    return { ok: false, reason: "Case occupée par un véhicule : pas une case vide." };
+  }
+  if (allChoppers.some((c) => c !== chopper && c.placed && c.col === col && c.row === row)) {
+    return { ok: false, reason: "Case occupée par un autre chopper : pas une case vide." };
+  }
+
+  chopper.col = col;
+  chopper.row = row;
+  chopper.placed = true;
+  return { ok: true };
+}
+
+// p.11, END OF TURN : "Any cars in a space with a chopper are
+// eliminated." — à appeler par le futur moteur de tour, à la fin de
+// CHAQUE tour (pas seulement celui qui vient de placer un chopper).
+function eliminateCarsOnChoppers(allCars, allChoppers) {
+  const log = [];
+  for (const car of allCars) {
+    if (car.status === CAR_STATUS.ELIMINATED) continue;
+    const onChopper = allChoppers.some((ch) => ch.placed && ch.col === car.col && ch.row === car.row);
+    if (onChopper) {
+      car.status = CAR_STATUS.ELIMINATED;
+      log.push(`${car.id} finit sur la case d'un chopper → ÉLIMINÉE`);
+    }
+  }
+  return { log };
+}
+
+// -----------------------------------------------------------------
+// 4. ARC AVANT
+// -----------------------------------------------------------------
+// Règle (p.9) : une voiture ne peut avancer que dans l'une des 3
+// cases de son arc avant : front-left, front, front-right.
+
+// Résout un nom de direction AVANT (front / front-left / front-right)
+// en delta {dCol, dRow} réel depuis une case (col, row) donnée, en
+// respectant la parité de la rangée de départ (voir getFrontArc).
+// Réutilisé par tout code qui marche une trajectoire hypothétique
+// (recherche IA) sans passer par moveCar — la table DIRECTIONS seule
+// ne suffit PAS ici : elle ignore la parité. Symétrique de
+// getBackwardDelta ci-dessous, pour rear/rear-left/rear-right.
+function getForwardDelta(dirName, fromCol, fromRow) {
+  const arc = getFrontArc({ col: fromCol, row: fromRow });
+  const target = arc.find((a) => a.name === dirName);
+  return { dCol: target.col - fromCol, dRow: target.row - fromRow };
+}
+
+function getFrontArc(car) {
+  // La tuile est en quinconce (cases en chevron) : selon la parité de
+  // la rangée de DÉPART, les deux cases diagonales de l'arc avant ne
+  // sont pas physiquement adjacentes au même décalage de colonne que
+  // la case "front" tout droit. Confirmé par Mayrik avec des exemples
+  // concrets sur le vrai rendu visuel (jamais détecté avant : aucun
+  // des 174 tests ni des centaines de parties simulées n'avait de
+  // vérification contre la géométrie réelle des tuiles) :
+  //   - Depuis une rangée PAIRE (0, 2, 4...) : les diagonales restent
+  //     sur la MÊME colonne que la case de départ.
+  //   - Depuis une rangée IMPAIRE (1, 3, 5...) : les diagonales
+  //     avancent aussi d'une colonne (+1), comme la case "front".
+  const diagColOffset = (car.row % 2 === 0) ? 0 : 1;
+  return [
+    { name: "front-left", col: car.col + diagColOffset, row: car.row - 1 },
+    { name: "front", col: car.col + 1, row: car.row },
+    { name: "front-right", col: car.col + diagColOffset, row: car.row + 1 }
+  ];
+}
+
+// Arc ARRIÈRE (rear / rear-left / rear-right) — même principe que
+// getFrontArc, confirmé par Mayrik avec 2 exemples concrets (rangée
+// paire et impaire). Utilisé par le slam, et par les jetons de dégâts
+// qui peuvent envoyer une voiture dans n'importe laquelle des 6
+// directions (Skid, Dazed, Blast Off, Shrapnel) :
+//   - Depuis une rangée PAIRE : les diagonales sont sur la MÊME
+//     colonne que la case "rear" tout droit (col - 1).
+//   - Depuis une rangée IMPAIRE : les diagonales restent sur la
+//     colonne de départ (aucun décalage).
+function getRearArc(car) {
+  const diagColOffset = (car.row % 2 === 0) ? -1 : 0;
+  return [
+    { name: "rear-left", col: car.col + diagColOffset, row: car.row - 1 },
+    { name: "rear", col: car.col - 1, row: car.row },
+    { name: "rear-right", col: car.col + diagColOffset, row: car.row + 1 }
+  ];
+}
+
+// Résout un nom de direction ARRIÈRE en delta {dCol, dRow} réel depuis
+// une case donnée (même rôle que getForwardDelta, pour rear/rear-left/
+// rear-right).
+function getBackwardDelta(dirName, fromCol, fromRow) {
+  const arc = getRearArc({ col: fromCol, row: fromRow });
+  const target = arc.find((a) => a.name === dirName);
+  return { dCol: target.col - fromCol, dRow: target.row - fromRow };
+}
+
+// Dispatcher unique pour les 6 directions nommées — à utiliser à la
+// place de la table statique DIRECTIONS partout où une case cible
+// réelle est calculée (la table DIRECTIONS elle-même reste en place
+// uniquement pour lister les noms/existence des 6 directions, plus
+// comme source de vérité géométrique).
+function getDirectionDelta(dirName, fromCol, fromRow) {
+  if (dirName === "front" || dirName === "front-left" || dirName === "front-right") {
+    return getForwardDelta(dirName, fromCol, fromRow);
+  }
+  return getBackwardDelta(dirName, fromCol, fromRow);
+}
+
+// -----------------------------------------------------------------
+// 5. DÉPLACEMENT
+// -----------------------------------------------------------------
+// Règle (p.9) : une voiture gagne un nombre de déplacements égal au
+// dé assigné. Chaque case coûte 1 ou 2 déplacements selon le terrain.
+// Une voiture doit utiliser TOUT son déplacement, sauf si un effet
+// lui fait perdre ses déplacements restants (dégâts, slam...).
+// Le mouvement lui-même gère aussi, au fil des cases : slam,
+// résolution des hazards, et sortie du plateau (avant → progression
+// des tuiles ; arrière/latéral → élimination).
+
+// Fait entrer une voiture dans UNE case adjacente en respectant le
+// coût de terrain (contrairement à forceMoveOneSpace, utilisé par le
+// slam, qui ignore ce coût). Partagé entre moveCar (mouvement normal,
+// arc avant) et l'effet Dazed (6 directions, coût respecté).
+//
+// Retourne { log, remaining, stopped, eliminated?, frontExit?,
+// insufficientMove?, slam? }. stopped=true signifie que la séquence
+// de déplacement en cours doit s'arrêter là (élimination, slam, ou
+// pas assez de déplacement pour cette case).
+function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remaining, slamOptions = {}, suppressOccupantSlam = false) {
+  const log = [];
+  const space = getSpace(tile, targetCol, targetRow);
+
+  if (space === null) {
+    car.status = CAR_STATUS.ELIMINATED;
+    log.push(`${car.id} sort par le bord latéral → ÉLIMINÉE`);
+    return { log, remaining: 0, stopped: true, eliminated: true };
+  }
+
+  if (space === undefined) {
+    if (targetCol < 0) {
+      // p.5-6 : sortie par le bord ARRIÈRE du plateau → élimination,
+      // même règle que la sortie latérale.
+      car.status = CAR_STATUS.ELIMINATED;
+      log.push(`${car.id} sort par le bord ARRIÈRE du plateau → ÉLIMINÉE`);
+      return { log, remaining: 0, stopped: true, eliminated: true };
+    }
+    // targetCol >= tile.cols : sortie par l'AVANT — PAS une
+    // élimination. Signal distinct pour l'orchestrateur de
+    // progression des tuiles (voir advanceBoardOnFrontExit),
+    // qui décide la suite (décalage des tuiles + poursuite du
+    // mouvement, ou victoire si tuile finale + ligne d'arrivée).
+    log.push(`${car.id} atteint le bord AVANT du plateau (sortie par l'avant)`);
+    return { log, remaining, stopped: true, frontExit: true };
+  }
+
+  if (space.terrain === TERRAIN.IMPASSABLE) {
+    car.status = CAR_STATUS.ELIMINATED;
+    log.push(`${car.id} entre sur une case impassable → ÉLIMINÉE`);
+    return { log, remaining: 0, stopped: true, eliminated: true };
+  }
+
+  const cost = MOVE_COST[space.terrain];
+  const mudExceptionApplies = space.terrain === TERRAIN.MUD && remaining === 1; // p.7
+
+  if (cost > remaining && !mudExceptionApplies) {
+    return { log, remaining, stopped: true, insufficientMove: true };
+  }
+
+  car.col = targetCol;
+  car.row = targetRow;
+  let newRemaining = notifyMovesRemaining(mudExceptionApplies ? 0 : remaining - cost);
+  log.push(`${car.id} avance vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
+
+  // Ligne d'arrivée (p.11) : y entrer met fin à la partie IMMÉDIATEMENT
+  // — le mouvement en cours (chemin complet de l'IA, cascade Dazed...)
+  // doit s'arrêter LÀ, sans consommer un seul point de déplacement
+  // supplémentaire. BUG RÉEL corrigé (retour de Mayrik) : avant ce
+  // correctif, seul checkGameEndConditions() (appelé par
+  // l'orchestrateur APRÈS la fin ENTIÈRE du pas) détectait la victoire
+  // — un chemin qui traversait la Finish Line en cours de route (ex.
+  // l'IA calcule tout son trajet d'un coup, contrairement au joueur
+  // humain qui avance case par case) pouvait donc continuer plusieurs
+  // cases de plus avant que la partie ne se termine. `stopped: true`
+  // fait remonter l'arrêt à TOUS les appelants (moveCarGen, entrée sur
+  // le plateau, cascade Dazed) exactement comme une élimination ou un
+  // Slam — la victoire elle-même reste détectée par
+  // checkGameEndConditions(), appelé par l'orchestrateur juste après
+  // ce pas, jamais recalculée ici.
+  if (space.isFinishLine) {
+    log.push(`${car.id} atteint la Finish Line — mouvement interrompu immédiatement.`);
+    yield* emitEvent(slamOptions, { type: "step", car, col: car.col, row: car.row });
+    return { log, remaining: 0, stopped: true, reachedFinishLine: true };
+  }
+
+  // Pause purement VISUELLE (aucun effet sur les règles ni sur l'issue
+  // de la partie) — demandée par Mayrik le 28/08 pour voir le
+  // mouvement de l'IA case par case au lieu d'un saut direct vers la
+  // case finale + un pavé de log. N'a lieu QUE si l'appelant le
+  // demande explicitement via `slamOptions.emitEvents` (voir
+  // tools/ui-script.js, driveAiTurnGenerator) — absent par défaut,
+  // donc AUCUN changement de comportement pour tout code existant
+  // (tests, self-play, tour humain click par click qui voit déjà
+  // chaque case au fil de ses propres clics).
+  yield* emitEvent(slamOptions, { type: "step", car, col: car.col, row: car.row });
+
+  // Résolution d'un hazard éventuel (p.7) AVANT la vérification
+  // d'occupation : un Wreck fraîchement posé devient lui-même
+  // l'occupant à considérer, et résout déjà son propre slam.
+  const hazardResult = yield* resolveHazardGen(tile, allCars, car, newRemaining, slamOptions);
+  log.push(...hazardResult.log);
+  newRemaining = notifyMovesRemaining(hazardResult.remaining);
+  if (hazardResult.stopped) {
+    return {
+      log,
+      remaining: newRemaining,
+      stopped: true,
+      eliminated: car.status === CAR_STATUS.ELIMINATED,
+      slam: hazardResult.slam
+    };
+  }
+
+  // NOTE : car.col/car.row peuvent avoir changé si le hazard était un
+  // Oil Slick (glissade) — on vérifie donc l'occupation à la position
+  // ACTUELLE de la voiture, pas à targetCol/targetRow d'origine.
+  const occupant = getCarAt(allCars, car.col, car.row, car);
+
+  if (occupant && suppressOccupantSlam) {
+    // p.8 : Drift — la voiture traverse SANS slammer. NOTE : cette
+    // exemption ne couvre que l'occupation "classique" (véhicule déjà
+    // présent) — pas un slam déclenché par un hazard (ex. Wreck), qui
+    // est déjà résolu plus haut avant ce point, indépendamment de Drift.
+    log.push(`${car.id} traverse la case de ${occupant.id} sans la slammer (Drift)`);
+    return { log, remaining: newRemaining, stopped: false, driftPassThrough: true };
+  }
+
+  if (occupant) {
+    log.push(`${car.id} entre dans la case de ${occupant.id} → SLAM`);
+    const slamResult = yield* resolveSlamGen(tile, allCars, car, occupant, slamOptions);
+    log.push(...slamResult.log);
+    return { log, remaining: 0, stopped: true, slam: slamResult };
+  }
+
+  return { log, remaining: newRemaining, stopped: false };
+}
+
+function enterAdjacentSpace(tile, car, allCars, targetCol, targetRow, remaining, slamOptions = {}, suppressOccupantSlam = false) {
+  return driveSync(enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remaining, slamOptions, suppressOccupantSlam));
+}
+
+function* moveCarGen(tile, car, dieValue, chosenPath, allCars = [], slamOptions = {}) {
+  // chosenPath : liste de directions ("front-left" | "front" | "front-right"),
+  // une par case franchie. Pour l'étape 1, c'est le joueur (ou plus
+  // tard l'IA) qui choisit ce chemin à l'avance ; le moteur se
+  // contente de vérifier et d'appliquer.
+  // allCars : toutes les voitures en jeu, pour détecter les cases occupées.
+  //
+  // slamOptions.driftAvailable (p.8, commande Drift) : autorise à
+  // traverser SANS slammer le PREMIER véhicule rencontré — mais
+  // seulement si ce n'est PAS la case où le mouvement va se terminer
+  // ("If you end your turn in a space with a road vehicle, you still
+  // slam it, even if it is your first slam").
+  //
+  // slamOptions.startedInStartingArea (p.9, bonus Road, précisé par
+  // Mayrik) : au 1er tour de jeu, la voiture entre depuis la zone de
+  // départ hors plateau — considérée comme une case route par
+  // convention pour l'éligibilité au bonus. À utiliser UNIQUEMENT pour
+  // ce cas précis (sinon l'éligibilité se base sur la vraie case de
+  // départ de la voiture sur la tuile).
+
+  if (car.status !== CAR_STATUS.OPERABLE) {
+    return { ok: false, reason: "La voiture n'est pas opérationnelle.", log: [] };
+  }
+
+  let remaining = dieValue;
+  const log = [];
+  let driftUsed = false;
+  const driftAvailable = !!slamOptions.driftAvailable;
+
+  // p.9 : éligibilité au bonus Road — la voiture doit avoir COMMENCÉ
+  // son mouvement sur une case route, et être restée sur une case
+  // route à CHAQUE étape (y compris après résolution d'un hazard
+  // comme Blank/Oil Slick, qui transforment la case en route "sous le
+  // capot" — voir enterAdjacentSpace/resolveHazard). Un hazard Oil
+  // Slick qui glisse la voiture ne casse pas l'éligibilité SI la
+  // case d'atterrissage de la glissade est elle-même une route (ce
+  // qui est vérifié naturellement ici, puisqu'on lit la position
+  // FINALE de la voiture après résolution complète du hazard).
+  let roadEligible = true;
+  if (slamOptions.startedInStartingArea !== true) {
+    const startSpace = getSpace(tile, car.col, car.row);
+    if (!startSpace || startSpace.terrain !== TERRAIN.ROAD) {
+      roadEligible = false;
+    }
+  }
+
+  for (let i = 0; i < chosenPath.length; i++) {
+    const direction = chosenPath[i];
+    if (remaining <= 0) break;
+
+    const arc = getFrontArc(car);
+    const target = arc.find((a) => a.name === direction);
+    if (!target) {
+      return { ok: false, reason: `Direction invalide : ${direction}` };
+    }
+
+    // Garde-fou primaire : chosenPath représente toujours un choix
+    // VOLONTAIRE (joueur humain ou trajectoire pré-calculée par
+    // l'IA), jamais un déplacement forcé — les seules entrées
+    // légitimes sur une case Impassable passent par des chemins
+    // séparés (Mine, Shrapnel, glissade Oil Slick... via
+    // forceMoveOneSpace/resolveHazard), jamais par cette boucle.
+    // Un chemin devient parfois obsolète en cours de route : une
+    // glissade Oil Slick (p.7, "the vehicle continues moving if it
+    // has moves remaining") repositionne la voiture SANS interrompre
+    // le mouvement, et les directions restantes de chosenPath
+    // (relatives : "front"/"front-left"/"front-right") sont alors
+    // réappliquées depuis cette nouvelle position jamais vérifiée par
+    // l'IA au moment où elle avait choisi ce chemin en sécurité.
+    // Plutôt que de blindly continuer vers une case Impassable
+    // jamais souhaitée, on arrête proprement le mouvement ici (points
+    // restants non dépensés) — jamais une élimination "volontaire".
+    const nextTarget = getSpace(tile, target.col, target.row);
+    if (nextTarget && nextTarget.terrain === TERRAIN.IMPASSABLE) {
+      log.push(`${car.id} interrompt son mouvement avant d'entrer sur une case impassable (col ${target.col}, row ${target.row}) — jamais une entrée volontaire`);
+      return { ok: true, log, remaining, roadEligible, stepsConsumed: i };
+    }
+
+    // Anticipation : cette case sera-t-elle celle où le mouvement se
+    // termine (plus de déplacement ensuite) ? Nécessaire pour savoir
+    // si Drift peut s'appliquer ICI (p.8, confirmé par Mayrik via
+    // capture des règles : "This turn, your car may pass through the
+    // FIRST space it enters that contains another road vehicle,
+    // without slamming it. If you end your turn in a space with a
+    // road vehicle, you still slam it, even if it is your first
+    // slam.") — CORRECTIF (28/08, retour de Mayrik) : cette
+    // anticipation se basait à tort aussi sur `hasMoreSteps` (position
+    // dans CE `chosenPath` précis), une notion sans rapport avec la
+    // règle elle-même et qui ne vaut QUE pour un chemin complet
+    // calculé d'un coup (le cas de l'IA). Pour le tour HUMAIN, chaque
+    // case est jouée par un appel séparé avec un `chosenPath` d'UNE
+    // seule direction (voir tools/ui-script.js, pickMoveStep) — dans
+    // ce cas, `i < chosenPath.length - 1` valait TOUJOURS faux
+    // (chosenPath.length === 1), forçant `isFinalStep` à toujours
+    // vrai et empêchant Drift de jamais s'appliquer, quelle que soit
+    // la suite du mouvement. Seul `predictedRemaining` (des points
+    // de déplacement restent-ils après cette case ?) détermine
+    // réellement si le mouvement continue — la règle impose d'utiliser
+    // tout son déplacement, donc "il reste des points" équivaut
+    // toujours à "le mouvement va continuer", que ce soit l'IA (chemin
+    // complet déjà connu) ou un humain (case par case).
+    let isFinalStep = true;
+    const lookSpace = nextTarget; // déjà récupérée ci-dessus (et déjà vérifiée non-Impassable à ce stade)
+    if (lookSpace) {
+      const lookCost = MOVE_COST[lookSpace.terrain];
+      const lookMudException = lookSpace.terrain === TERRAIN.MUD && remaining === 1;
+      const predictedRemaining = lookMudException ? 0 : remaining - lookCost;
+      isFinalStep = !(predictedRemaining > 0);
+    }
+
+    const driftEligible = driftAvailable && !driftUsed && !isFinalStep;
+
+    const step = yield* enterAdjacentSpaceGen(tile, car, allCars, target.col, target.row, remaining, slamOptions, driftEligible);
+    log.push(...step.log);
+
+    if (step.insufficientMove) {
+      return { ok: false, reason: "Pas assez de déplacements restants pour cette case." };
+    }
+
+    remaining = step.remaining;
+
+    if (step.driftPassThrough) {
+      driftUsed = true; // Drift ne s'applique qu'au PREMIER véhicule traversé (p.8)
+    }
+
+    // Suivi de l'éligibilité au bonus Road : on lit la position
+    // ACTUELLE de la voiture (après résolution complète du hazard,
+    // y compris une éventuelle glissade Oil Slick) plutôt que la
+    // case initialement visée.
+    if (roadEligible && car.status !== CAR_STATUS.ELIMINATED) {
+      const enteredSpace = getSpace(tile, car.col, car.row);
+      if (!enteredSpace || enteredSpace.terrain !== TERRAIN.ROAD) {
+        roadEligible = false;
+      }
+    }
+
+    if (step.eliminated) return { ok: true, log, remaining: 0, eliminated: true, roadEligible, stepsConsumed: i };
+    if (step.frontExit) return { ok: true, log, remaining, frontExit: true, roadEligible, stepsConsumed: i };
+    // Un Slam met fin au mouvement ET rend inéligible au bonus Road
+    // (p.9), quel que soit le terrain sur lequel la voiture atterrit
+    // après avoir été projetée — bug trouvé par Mayrik (le bonus Road
+    // était quand même proposé si la projection retombait sur route).
+    // roadEligible ne suivait jusqu'ici que le terrain traversé, pas
+    // l'événement Slam lui-même.
+    if (step.slam) return { ok: true, log, remaining: 0, slam: step.slam, roadEligible: false, stepsConsumed: i };
+  }
+
+  return { ok: true, log, remaining, roadEligible };
+}
+
+function moveCar(tile, car, dieValue, chosenPath, allCars = [], slamOptions = {}) {
+  return driveSync(moveCarGen(tile, car, dieValue, chosenPath, allCars, slamOptions));
+}
+
+// p.5-6 : mouvement d'ENTRÉE en jeu — réservé au tout premier
+// mouvement d'une voiture (car.col === null, voir createCarOffBoard).
+// Contrairement au mouvement normal (limité aux 3 cases de l'arc
+// avant), le joueur choisit LIBREMENT n'importe quelle rangée de la
+// colonne 0 (confirmé par Mayrik : aucune contrainte d'arc, puisqu'il
+// n'existe pas de case de départ réelle sur le plateau). Le coût de
+// terrain de cette première case s'applique normalement (Route/
+// Hors-piste = 1, Boue = 2), consommé sur le dé assigné.
+//
+// Pour l'éligibilité au bonus dé Road (p.9), la zone de départ hors
+// plateau compte CONVENTIONNELLEMENT comme une case route (précisé
+// par Mayrik) — donc seule la case d'entrée réellement choisie (et
+// la suite du trajet) détermine si le bonus reste éligible, jamais
+// une "case d'origine" qui n'existe pas.
+//
+// chosenPath (optionnel) : la suite du trajet APRÈS l'entrée, avec la
+// même sémantique que moveCar (arc avant, une fois positionné en
+// colonne 0). Délègue à moveCar() pour cette suite — inutile de
+// dupliquer sa logique.
+//
+// Pas de variante "WithProgression" pour l'entrée : en pratique,
+// IMPOSSIBLE par construction, pas juste improbable — le plateau de
+// départ a déjà ses 3 tuiles en place (24 colonnes), donc sortir par
+// l'avant dès le tour d'entrée demanderait d'atteindre col >= 24.
+// Même en cumulant dé de base (max 6) + Nitro (max 6) + bonus Road
+// (max 3) sur cette même voiture, on plafonne à 15 (confirmé par
+// Mayrik). Le garde-fou frontExit ci-dessous reste présent par
+// simple prudence défensive, mais ne devrait jamais se déclencher.
+function* moveCarEnteringBoardGen(tile, car, dieValue, entryRow, chosenPath = [], allCars = [], slamOptions = {}) {
+  if (car.status !== CAR_STATUS.OPERABLE) {
+    return { ok: false, reason: "La voiture n'est pas opérationnelle.", log: [] };
+  }
+  if (car.col !== null || car.row !== null) {
+    return { ok: false, reason: "Cette voiture est déjà entrée sur le plateau (col/row déjà assignés).", log: [] };
+  }
+  if (!Number.isInteger(entryRow) || entryRow < 0 || entryRow >= tile.rows) {
+    return { ok: false, reason: `Rangée d'entrée invalide : ${entryRow}.`, log: [] };
+  }
+
+  const log = [];
+  // slamOptions.driftAvailable (p.8) s'applique ici EXACTEMENT comme
+  // pour un mouvement normal : la case d'entrée est la toute première
+  // case franchie ce tour, donc Drift permet d'y entrer sans slammer
+  // un véhicule déjà présent — utile si toutes les rangées de la
+  // colonne 0 sont occupées (repéré par Mayrik : oubli lors de
+  // l'intégration initiale, ce paramètre était figé à false).
+  // CORRECTIF (28/08, même bug que dans moveCarGen — voir son
+  // commentaire détaillé) : Drift ne protège QUE si le mouvement
+  // continue après cette case (p.8 : "If you end your turn in a
+  // space with a road vehicle, you still slam it, even if it is your
+  // first slam.") — l'ancien code supprimait le Slam d'entrée
+  // INCONDITIONNELLEMENT dès que Drift était actif, même si le dé de
+  // mouvement s'épuisait pile sur cette case d'entrée (auquel cas le
+  // Slam doit s'appliquer normalement, comme n'importe quelle autre
+  // case où le mouvement se termine).
+  let entryIsFinalStep = true;
+  const entrySpace = getSpace(tile, 0, entryRow);
+  if (entrySpace && entrySpace.terrain !== TERRAIN.IMPASSABLE) {
+    const entryCost = MOVE_COST[entrySpace.terrain];
+    const entryMudException = entrySpace.terrain === TERRAIN.MUD && dieValue === 1;
+    const predictedRemainingAfterEntry = entryMudException ? 0 : dieValue - entryCost;
+    entryIsFinalStep = !(predictedRemainingAfterEntry > 0);
+  }
+  const entryDriftEligible = !!slamOptions.driftAvailable && !entryIsFinalStep;
+  const entryStep = yield* enterAdjacentSpaceGen(tile, car, allCars, 0, entryRow, dieValue, slamOptions, entryDriftEligible);
+  log.push(...entryStep.log);
+
+  if (entryStep.insufficientMove) {
+    return { ok: false, reason: "Pas assez de déplacement pour entrer sur cette case.", log };
+  }
+
+  // Éligibilité au bonus Road : la case d'entrée elle-même doit être
+  // une route pour rester éligible (la convention "zone de départ =
+  // route" ne couvre que l'absence de case d'origine réelle, pas la
+  // case d'entrée effectivement choisie).
+  let roadEligible = true;
+  if (car.status !== CAR_STATUS.ELIMINATED) {
+    const enteredSpace = getSpace(tile, car.col, car.row);
+    if (!enteredSpace || enteredSpace.terrain !== TERRAIN.ROAD) {
+      roadEligible = false;
+    }
+  }
+
+  if (entryStep.eliminated) {
+    return { ok: true, log, remaining: 0, eliminated: true, roadEligible, stepsConsumed: 0 };
+  }
+  if (entryStep.frontExit) {
+    // Cas extrême non géré, voir note ci-dessus — on s'arrête proprement plutôt que de planter.
+    log.push(`${car.id} — sortie par l'avant dès l'entrée : cas non géré pour l'instant, mouvement arrêté ici.`);
+    return { ok: true, log, remaining: entryStep.remaining, frontExit: true, roadEligible, stepsConsumed: 0 };
+  }
+  if (entryStep.slam) {
+    // Même règle que dans moveCarGen ci-dessus : un Slam annule
+    // toujours l'éligibilité au bonus Road, quel que soit le terrain.
+    return { ok: true, log, remaining: 0, slam: entryStep.slam, roadEligible: false, stepsConsumed: 0 };
+  }
+
+  // Poursuite du trajet (s'il en reste) avec le mouvement normal en
+  // arc avant, depuis la position d'entrée désormais réelle sur le
+  // plateau. startedInStartingArea:true indique à moveCar() de ne
+  // PAS réévaluer une "case d'origine" (déjà comptabilisée ci-dessus
+  // via roadEligible) — la suite du trajet garde son propre suivi
+  // normal, case par case.
+  if (entryStep.remaining > 0 && chosenPath.length > 0) {
+    const restResult = yield* moveCarGen(tile, car, entryStep.remaining, chosenPath, allCars, { ...slamOptions, startedInStartingArea: true });
+    log.push(...restResult.log);
+    return { ...restResult, log, roadEligible: roadEligible && restResult.roadEligible };
+  }
+
+  return { ok: true, log, remaining: entryStep.remaining, roadEligible };
+}
+
+function moveCarEnteringBoard(tile, car, dieValue, entryRow, chosenPath = [], allCars = [], slamOptions = {}) {
+  return driveSync(moveCarEnteringBoardGen(tile, car, dieValue, entryRow, chosenPath, allCars, slamOptions));
+}
+
+// -----------------------------------------------------------------
+// 6. UTILITAIRES : voiture présente à une position
+// -----------------------------------------------------------------
+
+function getCarAt(allCars, col, row, excludeCar = null) {
+  return allCars.find(
+    (c) =>
+      c !== excludeCar &&
+      c.col === col &&
+      c.row === row &&
+      c.status !== CAR_STATUS.ELIMINATED
+  );
+}
+
+// -----------------------------------------------------------------
+// 7. SLAM (p.9-10)
+// -----------------------------------------------------------------
+// Quand deux voitures se retrouvent dans la même case, elles se
+// slamment. Le dé de Slam désigne laquelle des deux bouge (voiture
+// du dessus ou du dessous), le dé de Direction indique où. La
+// voiture désignée est déplacée d'UNE case dans cette direction,
+// quel que soit le coût d'entrée normal de cette case (règle
+// confirmée par Mayrik) — mais les effets de la case d'arrivée
+// s'appliquent normalement une fois dessus.
+//
+// Toutes les 6 directions possibles (pas seulement l'arc avant,
+// contrairement au mouvement normal).
+
+const DIRECTIONS = {
+  front: { dCol: 1, dRow: 0 },
+  "front-left": { dCol: 1, dRow: -1 },
+  "front-right": { dCol: 1, dRow: 1 },
+  rear: { dCol: -1, dRow: 0 },
+  "rear-left": { dCol: -1, dRow: -1 },
+  "rear-right": { dCol: -1, dRow: 1 }
+};
+
+const SIZE_RANK = {
+  [CAR_SIZE.SMALL]: 1,
+  [CAR_SIZE.MEDIUM]: 2,
+  [CAR_SIZE.LARGE]: 3
+};
+
+
+// Coût pour entrer sur une case, répliquant EXACTEMENT la règle
+// utilisée par enterAdjacentSpace (y compris l'exception p.7 : la
+// boue ne coûte que le dernier point restant s'il n'en reste qu'1) —
+// indispensable pour que l'IA ne planifie jamais une trajectoire
+// qu'elle ne pourrait pas réellement exécuter ensuite via moveCar.
+// Retourne null si la case est infranchissable ou inabordable avec
+// les points restants.
+function computeAiStepCost(terrain, remainingBefore) {
+  if (terrain === TERRAIN.IMPASSABLE) return null;
+  const cost = MOVE_COST[terrain];
+  if (terrain === TERRAIN.MUD && remainingBefore === 1) return 1; // p.7
+  if (cost > remainingBefore) return null;
+  return cost;
+}
+
+// Une case est un "hazard face cachée" du point de vue de l'IA tant
+// que son jeton n'a jamais été résolu (cell.hazard !== null) — elle
+// ne peut pas savoir ce qu'il contient avant de le déclencher,
+// exactement comme un joueur humain face à un jeton non retourné.
+function isAiHiddenHazard(cell) {
+  return cell.hazard !== null;
+}
+
+// p.6 : une voiture qui termine son tour dans la même case qu'UN
+// chopper (même le sien) est éliminée. Traverser un chopper reste
+// autorisé (p.7), donc cette règle ne filtre que la case D'ARRIVÉE,
+// jamais les cases intermédiaires. Ajouté suite à un vrai cas observé
+// par Mayrik : l'IA terminait parfois sciemment sur un chopper alors
+// qu'une autre case sûre était disponible au même palier.
+function isChopperOccupied(allChoppers, col, row) {
+  return !!(allChoppers && allChoppers.some((c) => c.placed && c.col === col && c.row === row));
+}
+
+// Cherche une case de placement pour le chopper telle que targetCar
+// tombe dans son arc avant une fois posé (mêmes 3 cases que
+// getFrontArc, mais "à l'envers" : col-1, row-1/row/row+1). Retourne
+// {col,row} de la première case valide trouvée (mêmes critères que
+// placeChopperAirstrike : dans le plateau, pas Impassable, pas de
+// hazard non résolu, pas de véhicule, pas d'autre chopper), ou null.
+function findAiAirstrikePlacement(board, targetCar, allCars, allChoppers) {
+  // Même correctif que getFrontArc (voir son commentaire) : on
+  // cherche ici l'inverse — une case pour le CHOPPER telle que
+  // targetCar tombe dans SON arc avant à lui. Le décalage de colonne
+  // des diagonales dépend donc de la parité de la rangée du CHOPPER
+  // (candidate.row), pas de celle de targetCar.
+  const diagColOffsetFor = (row) => (((row % 2) + 2) % 2 === 0) ? 0 : 1; // sûr même pour row négatif
+  const candidates = [
+    { col: targetCar.col - diagColOffsetFor(targetCar.row - 1), row: targetCar.row - 1 }, // targetCar en front-right du chopper
+    { col: targetCar.col - 1, row: targetCar.row },                                        // targetCar en front du chopper
+    { col: targetCar.col - diagColOffsetFor(targetCar.row + 1), row: targetCar.row + 1 }  // targetCar en front-left du chopper
+  ];
+  for (const { col, row } of candidates) {
+    const space = getSpace(board, col, row);
+    if (!space) continue;
+    if (space.terrain === TERRAIN.IMPASSABLE) continue;
+    if (space.hazard) continue;
+    if (getCarAt(allCars, col, row)) continue;
+    if (allChoppers.some((c) => c.placed && c.col === col && c.row === row)) continue;
+    return { col, row };
+  }
+  return null;
+}
+
+// Trouve le véhicule le plus en avant d'une liste (utilisé par
+// ai-decision.js — repérage de la cible/menace la plus avancée).
+function findFrontmostCar(cars) {
+  return cars.reduce((best, c) => (c.col > best.col ? c : best));
+}
+
+// Dé de slam à 6 faces : 2 faces "top", 4 faces "bottom" (p.10).
+// injectedValue permet de forcer un résultat précis pour les tests.
+// -----------------------------------------------------------------
+// OBSERVATEUR DE DÉS — crochet de PRÉSENTATION, jamais de règle.
+// Le moteur tire ses dés spéciaux en interne et n'en rendait compte
+// que dans ses textes de journal, impossibles à exploiter sans les
+// analyser. Cet observateur, désactivé par défaut, prévient
+// l'interface de chaque tirage réel. Il ne change aucun résultat, ne
+// lit aucun état, et une exception dans l'observateur ne peut pas
+// interrompre une partie.
+// Sûr par construction : l'IA n'appelle aucune fonction de tirage
+// (elle évalue de façon déterministe), donc l'observateur ne voit
+// jamais un dé « imaginé » pendant une réflexion.
+// -----------------------------------------------------------------
+let diceObserver = null;
+function setDiceObserver(fn) { diceObserver = (typeof fn === "function") ? fn : null; }
+
+// Même principe pour le compteur de cases de mouvement restantes, que
+// le moteur ne gardait que dans une variable locale. Il est notifié à
+// chaque fois qu'il change : au départ (valeur du dé), puis à chaque
+// case entrée — y compris la boue, qui coûte 2 — et après tout effet de
+// terrain qui le modifie.
+// EXTENSION À VENIR (dé Fire) : un véhicule en feu tirera un dé en
+// début de phase de mouvement, ajoutant 1 ou 2 cases. Rien de nouveau à
+// prévoir ici : il suffira que ce bonus passe par la même variable, et
+// l'affichage suivra sans un seul changement.
+let movesObserver = null;
+let lastNotifiedMoves = null; // évite de notifier deux fois la même valeur
+function setMovesObserver(fn) {
+  movesObserver = (typeof fn === "function") ? fn : null;
+  lastNotifiedMoves = null;
+}
+function notifyMovesRemaining(n) {
+  if (!movesObserver || n === lastNotifiedMoves) return n;
+  lastNotifiedMoves = n;
+  try { movesObserver(n); } catch (e) { /* la présentation ne bloque jamais le jeu */ }
+  return n;
+}
+function notifyDieRolled(kind, value) {
+  if (!diceObserver) return value;
+  try { diceObserver(kind, value); } catch (e) { /* la présentation ne bloque jamais le jeu */ }
+  return value;
+}
+
+function rollSlamDie(injectedValue = null) {
+  if (injectedValue) return notifyDieRolled("slam", injectedValue); // "top" | "bottom"
+  return notifyDieRolled("slam", DICE_FACES.SLAM[Math.floor(Math.random() * DICE_FACES.SLAM.length)]);
+}
+
+// Dé de direction à 6 faces, une par direction (p.10).
+// injectedValue permet de forcer une direction précise pour les tests.
+function rollDirectionDie(injectedValue = null) {
+  if (injectedValue) return notifyDieRolled("direction", injectedValue);
+  const faces = Object.keys(DIRECTIONS);
+  return notifyDieRolled("direction", faces[Math.floor(Math.random() * faces.length)]);
+}
+
+// Dé de cascade (Stunt) à 6 faces : 1-2-2-3-3-4 (confirmé par Mayrik).
+// Utilisé par les jetons Dazed et Blast Off.
+function rollStuntDie(injectedValue = null) {
+  if (injectedValue) return notifyDieRolled("stunt", injectedValue);
+  return notifyDieRolled("stunt", DICE_FACES.STUNT[Math.floor(Math.random() * DICE_FACES.STUNT.length)]);
+}
+
+// Dé de tir à 6 faces : large×3, medium×1, small-medium×1, any×1
+// (confirmé par Mayrik, correspond à DICE_FACES.SHOOTING).
+function rollShootingDie(injectedValue = null) {
+  if (injectedValue) return notifyDieRolled("shooting", injectedValue);
+  return notifyDieRolled("shooting", DICE_FACES.SHOOTING[Math.floor(Math.random() * DICE_FACES.SHOOTING.length)]);
+}
+
+// Dé Road à 6 faces : 1-1-1-2-2-3 (confirmé par Mayrik). Tiré une
+// seule fois par round, par le 1er joueur (p.9) — voir
+// ensureRoadDieRolled. Le BONUS de déplacement qu'il donne aux
+// voitures restées sur route (p.9 : "if their car started on and
+// moved on only road spaces, that car may immediately gain moves
+// equal to the road die") est implémenté dans
+// playTurnAssignMoveWithProgressionGen/playTurnAssignEnterWithProgressionGen
+// (options.roadDieValue + options.roadBonusPath, jamais ici — ce dé
+// n'est que le TIRAGE, pas son application).
+function rollRoadDie(injectedValue = null) {
+  if (injectedValue) return notifyDieRolled("road", injectedValue);
+  return notifyDieRolled("road", DICE_FACES.ROAD[Math.floor(Math.random() * DICE_FACES.ROAD.length)]);
+}
+
+
+// Déplace une voiture d'UNE case dans une direction donnée, sans
+// tenir compte du coût de terrain (utilisé par le slam, et plus
+// tard par les effets d'extension type rampe/desert glass).
+// Retourne un log, et déclenche récursivement un nouveau slam si la
+// case d'arrivée est déjà occupée (chaîne de slams, p.9).
+//
+// options est transmis tel quel aux slams en chaîne éventuels
+// (mêmes forcedDice / decideReroll que le slam d'origine).
+// options.progressionState (+ options.allChoppers) : quand fournis,
+// une sortie par l'AVANT est gérée directement ICI — décalage de
+// tuile (advanceBoardOnFrontExit) puis nouvelle tentative du MÊME
+// déplacement d'une case sur le plateau reconstruit — plutôt que de
+// remonter un simple signal frontExit que CHAQUE appelant devrait
+// intercepter individuellement. Centralise ainsi la correction pour
+// TOUS les appelants (Slam direct, slam en chaîne, Skid/Dazed/
+// Shrapnel déclenchés par un dégât, Wreck...) au lieu de patcher
+// chaque site un par un — bug réel trouvé par Mayrik en jouant : une
+// voiture percutée (Slam) ou déplacée de force par un dégât pouvait
+// rester figée sur sa case d'origine, empilée avec une autre voiture,
+// sans jamais être ni repoussée ni éliminée.
+// -----------------------------------------------------------------
+// GÉNÉRATEURS — chantier "chaîne mouvement" (docs/rewrite-plan.md) :
+// chaque fonction de la chaîne de résolution (forceMoveOneSpace,
+// resolveSlam/finalizeSlam, resolveHazard, resolveOilSlickSlide,
+// enterAdjacentSpace, moveCar, moveCarWithProgression/EnteringBoard)
+// existe désormais en DEUX versions :
+//   - une version `*Gen` (function*), qui délègue avec `yield*` à la
+//     fonction Gen du niveau suivant, et qui peut `yield` UNE SEULE
+//     fois, au point exact de resolveSlamGen où `decideReroll`
+//     serait sinon appelée, mais UNIQUEMENT si `options.isHumanOwner`
+//     dit que la voiture plus grande appartient à un joueur humain.
+//   - la fonction du même nom que l'ancienne API SYNCHRONE (inchangée
+//     dans sa signature), qui se contente de "driver" la version Gen
+//     jusqu'au bout via `driveSync` ci-dessous. Tant qu'aucun appelant
+//     ne fournit `options.isHumanOwner`, cette version Gen ne `yield`
+//     jamais (le test `isHumanOwner(...)` renvoie toujours false par
+//     défaut) — donc STRICTEMENT AUCUN changement de comportement pour
+//     tout code existant (tests, self-play IA vs IA, tour humain
+//     propre déjà géré par sa propre UI pas à pas).
+// Seul un appelant qui fournit explicitement `options.isHumanOwner`
+// (voir turn-executor.js, tour de l'IA) peut effectivement recevoir
+// une pause `yield` — voir aussi le commentaire au-dessus de
+// resolveSlamGen.
+//
+// Portée actuelle (chaîne MOUVEMENT uniquement, voir rewrite-plan.md) :
+// couvre un Slam direct (occupant déjà présent) et un Slam révélé par
+// un Wreck. La chaîne TIR/DÉGÂTS (resolveShoot, resolveDamageToken,
+// applyDamage — donc une cascade Dazed déclenchée par un tir) reste
+// pour l'instant synchrone, comme avant (étape 2, à venir) : depuis
+// resolveHazardGen, le cas MINE continue d'appeler applyDamage()
+// directement, sans passer par un générateur.
+// -----------------------------------------------------------------
+// -----------------------------------------------------------------
+// ÉVÉNEMENTS DE PRÉSENTATION (chantier rythme 4b)
+// -----------------------------------------------------------------
+// Deux natures de `yield` circulent maintenant dans la chaîne, et il
+// ne faut jamais les confondre :
+//   - une DÉCISION ({type:"slam-reroll"}) : le moteur ne PEUT PAS
+//     continuer sans la réponse d'un joueur. C'est le contrat décrit
+//     au-dessus, inchangé.
+//   - un ÉVÉNEMENT DE PRÉSENTATION (ci-dessous) : le moteur annonce
+//     ce qu'il vient de faire et s'arrête un instant pour laisser
+//     l'interface le montrer. La valeur renvoyée n'est jamais lue, et
+//     ignorer l'événement ne change STRICTEMENT RIEN au résultat de la
+//     partie.
+//
+// Pourquoi ces événements : sans eux, tous les moments intéressants
+// d'un pas (dés lancés, slam résolu, dégât infligé, tir résolu)
+// avaient lieu à l'intérieur d'un unique {type:"step"}, sans rien à
+// quoi accrocher une pause — le véhicule avait donc déjà bougé pendant
+// que ses dés volaient encore (constat de Mayrik en jouant).
+//
+// Ils ne sont émis QUE si l'appelant le demande via
+// `options.emitEvents` (anciennement `emitSteps`, devenu trop étroit).
+// Absent par défaut : aucun changement de comportement pour les
+// tests, le self-play ou toute API synchrone existante.
+const PRESENTATION_EVENTS = new Set([
+  "step",           // le véhicule vient d'atteindre une case
+  "hazard",         // un hazard vient d'être révélé, avant d'être résolu
+  "slam-dice",      // les dés de slam viennent d'être lancés, avant tout déplacement
+  "slam-resolved",  // le slam est résolu, on sait qui part et dans quelle direction
+  "damage",         // un jeton de dégât vient d'être posé sur un véhicule
+  "damage-resolved",// ses effets sont finis : le jeton peut repasser face cachée
+  "shoot-dice",     // le dé de tir vient d'être lancé, avant l'éventuel dégât
+  "shoot-resolved"  // le tir est entièrement résolu
+]);
+
+function isPresentationEvent(value) {
+  return !!value && PRESENTATION_EVENTS.has(value.type);
+}
+
+// À utiliser exclusivement en `yield* emitEvent(options, {...})` : sans
+// l'option, le générateur ne se suspend même pas.
+function* emitEvent(options, event) {
+  if (options && options.emitEvents) {
+    yield event;
+  }
+}
+
+function driveSync(gen) {
+  let result = gen.next();
+  // Un appelant synchrone n'a pas d'interface à animer : il traverse
+  // les événements de présentation sans rien en faire. Ça rend
+  // l'émission d'un événement SANS RISQUE depuis n'importe quel point
+  // de la chaîne, y compris un point encore atteignable par une API
+  // synchrone. Seule une vraie décision en attente reste une violation
+  // du contrat.
+  while (!result.done && isPresentationEvent(result.value)) {
+    result = gen.next();
+  }
+  if (!result.done) {
+    throw new Error("Générateur de résolution interrompu de façon inattendue en mode synchrone (isHumanOwner non fourni) — ceci ne devrait jamais arriver.");
+  }
+  return result.value;
+}
+
+function* forceMoveOneSpaceGen(tile, car, allCars, directionName, options = {}, _guard = 0) {
+  const log = [];
+  const delta = getDirectionDelta(directionName, car.col, car.row);
+  const targetCol = car.col + delta.dCol;
+  const targetRow = car.row + delta.dRow;
+
+  const space = getSpace(tile, targetCol, targetRow);
+
+  if (space === null) {
+    car.status = CAR_STATUS.ELIMINATED;
+    log.push(`${car.id} est projetée hors du bord latéral → ÉLIMINÉE`);
+    return { log };
+  }
+
+  if (space === undefined) {
+    if (targetCol < 0) {
+      // p.5-6 : sortie par le bord ARRIÈRE → élimination (ex. voiture
+      // projetée vers l'arrière par un slam ou un Skid).
+      car.status = CAR_STATUS.ELIMINATED;
+      log.push(`${car.id} est projetée hors du bord ARRIÈRE du plateau → ÉLIMINÉE`);
+      return { log, eliminated: true };
+    }
+    // targetCol >= tile.cols : sortie par l'avant. Si un état de
+    // progression est disponible (partie réelle), on décale la tuile
+    // et on retente ICI le même déplacement forcé sur le plateau
+    // reconstruit — garde-fou _guard pour éviter toute boucle
+    // infinie théorique (jamais atteint en pratique : une seule tuile
+    // suffit toujours à absorber un déplacement d'UNE case).
+    if (options.progressionState && !options.progressionState.finishLineTile && _guard < 4) {
+      log.push(`${car.id} est projetée hors du bord AVANT du plateau — décalage de tuile`);
+      const advanceResult = advanceBoardOnFrontExit(options.progressionState, allCars, options.allChoppers || [], {});
+      log.push(...advanceResult.log);
+      if (!advanceResult.ok) {
+        log.push(`${car.id} — décalage de tuile impossible : ${advanceResult.reason}`);
+        return { log, frontExit: true };
+      }
+      if (car.status === CAR_STATUS.ELIMINATED) {
+        // Étaient sur la tuile rear qui vient d'être retirée.
+        return { log, eliminated: true };
+      }
+      const retryResult = yield* forceMoveOneSpaceGen(advanceResult.newBoard, car, allCars, directionName, options, _guard + 1);
+      log.push(...retryResult.log);
+      return { ...retryResult, log };
+    }
+    // Pas d'état de progression fourni (appel direct/test), ou Finish
+    // Line déjà en place (plus de décalage possible — la victoire
+    // éventuelle sera détectée par checkGameEndConditions en aval) :
+    // on remonte le signal frontExit tel quel, comportement inchangé.
+    log.push(`${car.id} est projetée hors du bord AVANT du plateau`);
+    return { log, frontExit: true };
+  }
+
+  if (space.terrain === TERRAIN.IMPASSABLE) {
+    car.status = CAR_STATUS.ELIMINATED;
+    log.push(`${car.id} est projetée sur une case impassable → ÉLIMINÉE`);
+    return { log };
+  }
+
+  car.col = targetCol;
+  car.row = targetRow;
+  log.push(`${car.id} est projetée en ${directionName} vers (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
+
+  // Même correctif que dans enterAdjacentSpaceGen (voir son commentaire
+  // détaillé) : un déplacement FORCÉ (Slam, Skid, glissade Oil Slick,
+  // cascade en chaîne) qui atterrit sur la Finish Line doit lui aussi
+  // arrêter tout net — un véhicule projeté sur la ligne d'arrivée par
+  // un Slam remporte la partie pour son PROPRIÉTAIRE, même si ce n'est
+  // pas son tour (précisé par Mayrik). Retourner sans `slam`/
+  // `frontExit`/`eliminated` équivaut déjà à "déplacement réussi, rien
+  // d'autre à résoudre" pour tous les appelants existants (chaîne de
+  // Slam, Skid, glissade) — aucune plomberie supplémentaire requise :
+  // checkGameEndConditions(), appelé par l'orchestrateur juste après,
+  // détectera la victoire à ce point exact.
+  if (space.isFinishLine) {
+    log.push(`${car.id} atteint la Finish Line — mouvement interrompu immédiatement.`);
+    yield* emitEvent(options, { type: "step", car, col: car.col, row: car.row });
+    return { log, reachedFinishLine: true };
+  }
+
+  // Pause purement VISUELLE — voir le commentaire détaillé dans
+  // enterAdjacentSpaceGen. Couvre ici les projections forcées (Slam,
+  // Skid, glissade Oil Slick, cascade Dazed via enterAdjacentSpaceGen
+  // plus haut) : n'importe quelle case franchie mérite une frame,
+  // pas seulement l'avancée normale.
+  yield* emitEvent(options, { type: "step", car, col: car.col, row: car.row });
+
+  // Résolution d'un hazard éventuel (p.7) avant la vérification
+  // d'occupation, même logique que dans enterAdjacentSpace.
+  const hazardResult = yield* resolveHazardGen(tile, allCars, car, 0, options);
+  log.push(...hazardResult.log);
+  if (hazardResult.stopped) {
+    // On fait remonter le slam éventuel (ex. Wreck) à l'appelant —
+    // utile notamment pour Oil Slick, qui doit savoir si sa glissade
+    // a déclenché un slam. `stopped` remonte aussi explicitement :
+    // un hazard imbriqué (ex. Mine touchée pendant une glissade Oil
+    // Slick) doit pouvoir couper le mouvement EXTÉRIEUR en cours,
+    // pas seulement ce déplacement forcé ponctuel — bug réel trouvé
+    // par simulation à grande échelle (voir le commentaire détaillé
+    // dans le cas OIL_SLICK ci-dessus) : sans ce signal, une voiture
+    // touchée par une Mine EN PLEINE glissade Oil Slick continuait
+    // silencieusement son mouvement d'origine, parfois jusqu'à sortir
+    // du plateau alors qu'elle venait de devenir inopérable.
+    return { log, slam: hazardResult.slam, eliminated: car.status === CAR_STATUS.ELIMINATED, stopped: true };
+  }
+
+  const occupant = getCarAt(allCars, car.col, car.row, car);
+  if (occupant) {
+    log.push(`${car.id} atterrit sur ${occupant.id} → nouveau slam en chaîne`);
+    const chained = yield* resolveSlamGen(tile, allCars, car, occupant, options);
+    log.push(...chained.log);
+    return { log, slam: chained };
+  }
+
+  return { log };
+}
+
+function forceMoveOneSpace(tile, car, allCars, directionName, options = {}, _guard = 0) {
+  return driveSync(forceMoveOneSpaceGen(tile, car, allCars, directionName, options, _guard));
+}
+
+// Résout un slam entre deux voitures empilées dans la même case (p.9-10).
+//
+// options.forcedDice = { slam, direction, rerolledSlam, rerolledDirection }
+//   → force les résultats de dés (tests uniquement ; sinon aléatoire).
+//
+// options.decideReroll = (context) => boolean
+//   → appelée UNIQUEMENT quand les deux voitures ont une taille
+//   différente (seul cas où la règle p.9 autorise une relance).
+//   context = { largerCar, smallerCar, slamRoll, directionRoll }.
+//   Cette fonction est le point d'entrée pour brancher plus tard soit
+//   une vraie interaction joueur (popup "Relancer ?"), soit une IA
+//   simplifiée (ex. relance si le résultat lui est défavorable).
+//   Par défaut, ne relance jamais (comportement neutre tant qu'aucun
+//   joueur/IA n'est branché).
+// -----------------------------------------------------------------
+// SLAM — DÉCOMPOSITION EN DEUX ÉTAPES (rollSlamDice / finalizeSlam)
+// -----------------------------------------------------------------
+// resolveSlam() reste la fonction complète, synchrone, utilisée par
+// l'IA et le self-play (comportement et log strictement inchangés).
+// Mais un `decideReroll` synchrone ne peut pas mettre en pause
+// l'exécution pour un VRAI clic d'un joueur humain (p.9 : le joueur
+// doit voir le lancer initial avant de décider) — ces deux fonctions
+// exportées séparément permettent à l'appelant (voir human-decision.js/
+// turn-executor.js) de rejouer exactement les 2 mêmes étapes en 2
+// appels séparés, avec un rendu d'écran entre les deux.
+//
+// rollSlamDice: lance les 2 dés, détermine l'éligibilité à la relance
+// (p.9 : uniquement si les tailles diffèrent) et QUI décide (le
+// propriétaire de la voiture plus grande, "même si elle est inopérable
+// ou si les deux voitures appartiennent au même joueur" — donc jamais
+// déduit du joueur actif). Fonction PURE : aucun effet de bord, peut
+// être appelée en toute sécurité pour un simple aperçu.
+function rollSlamDice(topCar, bottomCar, forcedDice = {}) {
+  const slamRoll = rollSlamDie(forcedDice.slam);
+  const directionRoll = rollDirectionDie(forcedDice.direction);
+  const topRank = SIZE_RANK[topCar.size];
+  const bottomRank = SIZE_RANK[bottomCar.size];
+  const rerollEligible = topRank !== bottomRank;
+  const largerCar = rerollEligible ? (topRank > bottomRank ? topCar : bottomCar) : null;
+  const smallerCar = rerollEligible ? (topRank > bottomRank ? bottomCar : topCar) : null;
+  const movingCar = slamRoll === "top" ? topCar : bottomCar;
+  return { slamRoll, directionRoll, rerollEligible, largerCar, smallerCar, movingCar, topCar, bottomCar };
+}
+
+// finalizeSlam: à partir d'un résultat de dés déjà DÉFINITIF (après
+// une éventuelle relance déjà décidée), déplace réellement la voiture
+// concernée et résout la chaîne de collisions éventuelle — c'est la
+// seconde moitié de l'ancien resolveSlam, avec effets de bord.
+function* finalizeSlamGen(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options = {}) {
+  const log = [];
+  const movingCar = slamRoll === "top" ? topCar : bottomCar;
+  log.push(`→ ${movingCar.id} bouge en ${directionRoll}`);
+
+  const moveResult = yield* forceMoveOneSpaceGen(tile, movingCar, allCars, directionRoll, options);
+  log.push(...moveResult.log);
+
+  // p.11 : un slam (y compris en chaîne, si la voiture percutée
+  // atterrit elle-même sur un 3e véhicule) peut se terminer par une
+  // sortie de plateau par l'AVANT — voir le commentaire détaillé
+  // historique dans resolveSlam ci-dessous.
+  let frontExitInfo = null;
+  if (moveResult.frontExit) {
+    frontExitInfo = { car: movingCar, direction: directionRoll };
+  } else if (moveResult.slam && moveResult.slam.frontExitInfo) {
+    frontExitInfo = moveResult.slam.frontExitInfo;
+  }
+
+  return { log, movingCar, direction: directionRoll, frontExitInfo };
+}
+
+function finalizeSlam(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options = {}) {
+  return driveSync(finalizeSlamGen(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options));
+}
+
+// resolveSlamGen : seul point de toute la chaîne où un VRAI `yield`
+// (pas un `yield*` de délégation) peut avoir lieu — voir le
+// commentaire détaillé au-dessus de driveSync. `options.isHumanOwner`
+// (par défaut : personne n'est humain) reçoit le NOM du propriétaire
+// de la voiture plus grande (largerCar.owner) et doit renvoyer un
+// booléen ; ce n'est QUE dans ce cas que la fonction met en pause son
+// exécution avec `yield {type:"slam-reroll", ...}` au lieu d'appeler
+// `decideReroll` (politique IA) directement — comportement synchrone
+// inchangé dans tous les autres cas.
+function* resolveSlamGen(tile, allCars, topCar, bottomCar, options = {}) {
+  const { forcedDice = {}, decideReroll = () => false, isHumanOwner = () => false } = options;
+  const log = [];
+
+  let { slamRoll, directionRoll, rerollEligible, largerCar, smallerCar, movingCar } = rollSlamDice(topCar, bottomCar, forcedDice);
+  log.push(`Dé de slam : ${slamRoll} | Dé de direction : ${directionRoll}`);
+
+  // Les dés SONT LANCÉS, mais personne n'a encore bougé : c'est ici que
+  // l'interface peut les montrer en vol et attendre qu'ils se posent.
+  // Avant ce chantier, ce moment n'existait pas — le déplacement induit
+  // suivait dans la même foulée.
+  yield* emitEvent(options, { type: "slam-dice", topCar, bottomCar, largerCar, smallerCar, movingCar, slamRoll, directionRoll, rerolled: false });
+
+  if (rerollEligible) {
+    const ctx = { largerCar, smallerCar, slamRoll, directionRoll, movingCar, topCar, bottomCar };
+    const wantsReroll = isHumanOwner(largerCar.owner)
+      ? yield { type: "slam-reroll", ...ctx }
+      : decideReroll(ctx);
+    if (wantsReroll) {
+      log.push(`${largerCar.id} (voiture plus grande) demande la relance des deux dés`);
+      const rerolled = rollSlamDice(topCar, bottomCar, { slam: forcedDice.rerolledSlam, direction: forcedDice.rerolledDirection });
+      slamRoll = rerolled.slamRoll;
+      directionRoll = rerolled.directionRoll;
+      log.push(`Relance → Dé de slam : ${slamRoll} | Dé de direction : ${directionRoll}`);
+      yield* emitEvent(options, { type: "slam-dice", topCar, bottomCar, largerCar, smallerCar, movingCar, slamRoll, directionRoll, rerolled: true });
+    }
+  }
+
+  const finalResult = yield* finalizeSlamGen(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options);
+  log.push(...finalResult.log);
+
+  yield* emitEvent(options, { type: "slam-resolved", topCar, bottomCar, movingCar: finalResult.movingCar, direction: finalResult.direction });
+
+  return { log, movingCar: finalResult.movingCar, direction: finalResult.direction, frontExitInfo: finalResult.frontExitInfo };
+}
+
+function resolveSlam(tile, allCars, topCar, bottomCar, options = {}) {
+  return driveSync(resolveSlamGen(tile, allCars, topCar, bottomCar, options));
+}
+
+// -----------------------------------------------------------------
+// 7bis. HAZARDS (p.7)
+// -----------------------------------------------------------------
+// Noms de variables alignés sur le matériel officiel (fiche BGG) :
+// Blank, Oil Slick, Dirt, Mine, Wreck — 26 jetons au total.
+//
+// Simplification valable dans les deux cas du rulebook ("discard
+// after resolving" pour Mine/Wreck, "remain on board" pour
+// Blank/Dirt/Oil Slick qui transforment la case en terrain permanent) :
+// CHAQUE jeton ne se déclenche qu'UNE SEULE fois. Pas besoin de suivre
+// un état face cachée/face visible séparé — resolveHazard() efface
+// toujours le hazard de la case après l'avoir résolu.
+
+const HAZARD_TYPES = {
+  BLANK: "blank",       // p.7 "Road" — la case devient une case de route
+  OIL_SLICK: "oil_slick",
+  DIRT: "dirt",          // p.7 "Mud" — la case devient une case de boue
+  MINE: "mine",
+  WRECK: "wreck"
+};
+
+// p.7, confirmé par Mayrik (jeu physique) : seuls Mine et Wreck sont
+// réellement retirés du plateau et défaussés après résolution. Les 3
+// autres (Blank/Dirt/Oil Slick) restent EN PLACE, face visible, pour
+// le reste de la partie — les joueurs doivent voir physiquement quel
+// jeton est là pour se souvenir de l'effet en vigueur. Tant qu'un
+// jeton "persist" reste sur le plateau, il ne fait partie ni de la
+// pioche ni de la défausse (déjà garanti ici : drawHazardToken() ne
+// modélise pas une vraie pioche finie qui se viderait, donc rien à
+// changer de ce côté).
+//
+// Table unique servant à la fois de source de vérité pour le moteur
+// (cell.revealedHazard ci-dessous) et, plus tard, pour l'interface
+// (quel visuel/règle associer à quel jeton révélé) — évite de dupliquer
+// cette distinction séparément dans le code et dans les assets visuels.
+const HAZARD_BEHAVIOR = {
+  [HAZARD_TYPES.BLANK]: "persist",
+  [HAZARD_TYPES.DIRT]: "persist",
+  [HAZARD_TYPES.OIL_SLICK]: "persist",
+  [HAZARD_TYPES.MINE]: "discard",
+  [HAZARD_TYPES.WRECK]: "discard"
+};
+
+const HAZARD_TOKEN_COMPOSITION = [
+  { type: HAZARD_TYPES.BLANK, count: 6 },
+  { type: HAZARD_TYPES.OIL_SLICK, count: 6 },
+  { type: HAZARD_TYPES.DIRT, count: 6 },
+  { type: HAZARD_TYPES.MINE, count: 4 },
+  { type: HAZARD_TYPES.WRECK, count: 4 }
+]; // total : 26
+
+function drawHazardToken(injectedValue = null) {
+  if (injectedValue) return injectedValue;
+  const pool = [];
+  for (const entry of HAZARD_TOKEN_COMPOSITION) {
+    for (let i = 0; i < entry.count; i++) pool.push(entry.type);
+  }
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// -----------------------------------------------------------------
+// 1ter. CONTENU RÉEL DES TUILES (produit par l'outil de tagging,
+// fichiers tiles/data/*.js) — fait le pont entre le format exporté
+// par l'outil et celui utilisé en jeu par le moteur.
+// -----------------------------------------------------------------
+// L'outil de tagging exporte directement `hazardSpace: true/false`
+// pour chaque case — une propriété FIXE du design de la vraie tuile
+// physique (case marquée du double triangle rouge, oui/non). Nom
+// choisi précisément pour ne jamais être confondu avec `cell.hazard`,
+// que le moteur utilise pour tout autre chose : le jeton ACTUELLEMENT
+// posé sur la case (null tant qu'aucun jeton n'y a été placé, sinon
+// une valeur de HAZARD_TYPES). instantiateTile() n'a donc plus qu'à
+// recopier hazardSpace tel quel, et à initialiser hazard à null (le
+// jeton dynamique, lui, doit toujours repartir vide à chaque nouvelle
+// instanciation — voir populateTileHazards() juste après).
+//
+// facesEntry (optionnel) : { a: rawDataA, b: rawDataB } — les données
+// brutes des DEUX faces de ce numéro physique, si connues. Permet à
+// une tuile de retirer au hasard entre A et B le jour où elle revient
+// en jeu après un passage par la défausse (voir advanceBoardOnFrontExit)
+// — conforme à la règle confirmée par Mayrik : la face se tire au
+// hasard à CHAQUE entrée en jeu, pas seulement la toute première.
+// Absent (null) pour les tuiles instanciées sans ce contexte (ex.
+// appel direct dans un test) — comportement de repli sans incidence.
+function instantiateTile(rawTileData, facesEntry = null) {
+  const grid = rawTileData.grid.map((row) =>
+    row.map((cell) => ({
+      terrain: cell.terrain,
+      hazardSpace: !!cell.hazardSpace,
+      hazard: null, // jeton actuel — vide tant que populateTileHazards() ne l'a pas rempli
+      revealedHazard: null // jeton "persist" (Blank/Dirt/Oil Slick) resté visible après résolution — voir HAZARD_BEHAVIOR
+    }))
+  );
+  return {
+    id: rawTileData.id,
+    name: rawTileData.name,
+    format: rawTileData.format,
+    extension: rawTileData.extension,
+    cols: rawTileData.cols,
+    rows: rawTileData.rows,
+    grid,
+    // Référence interne vers les données brutes d'origine — permet de
+    // réinstancier une copie NEUVE de cette tuile plus tard (voir
+    // advanceBoardOnFrontExit, étape "défausse"), sans quoi une tuile
+    // qui revient dans la pioche après être passée par le plateau
+    // garderait les cicatrices de son premier passage (terrain
+    // modifié par un hazard résolu, jetons déjà consommés) au lieu de
+    // revenir "neuve" comme le vrai composant physique. Absente sur
+    // les tuiles de test (createTestTile), qui n'ont pas cette notion
+    // — comportement de repli inchangé pour elles (voir plus bas).
+    _rawData: rawTileData,
+    // Référence aux 2 faces (voir doc au-dessus de la fonction) —
+    // permet un nouveau tirage aléatoire de face lors d'un recyclage
+    // depuis la défausse (voir advanceBoardOnFrontExit).
+    _facesEntry: facesEntry
+  };
+}
+
+// Pose un jeton hazard fraîchement tiré sur chaque case marquée
+// hazardSpace=true d'une tuile qui entre en jeu — mise en place
+// initiale des 3 tuiles de départ (voir createTileProgressionState)
+// ET nouvelle tuile lead piochée en cours de partie (p.11 étape 7,
+// voir advanceBoardOnFrontExit). Sans effet sur une tuile de test
+// (createTestTile) qui n'a pas ce marquage — donc aucune régression
+// sur les tests déjà en place qui n'utilisent pas de vraies tuiles.
+//
+// forcedSequence permet des tirages déterministes en test : un jeton
+// par case marquée, dans l'ordre de lecture de la grille (rangée par
+// rangée, gauche à droite) ; une fois la séquence épuisée, les cases
+// restantes retombent sur un tirage aléatoire normal — même
+// convention que les autres dés forçables du moteur.
+function populateTileHazards(tile, forcedSequence = []) {
+  const forced = [...forcedSequence];
+  for (const row of tile.grid) {
+    for (const cell of row) {
+      if (cell.hazardSpace) {
+        cell.hazard = drawHazardToken(forced.length ? forced.shift() : null);
+      }
+    }
+  }
+}
+
+// -----------------------------------------------------------------
+// 1quater. MISE EN PLACE D'UNE PARTIE À PARTIR DES VRAIES DONNÉES DE
+// TUILE (fichiers tiles/data/*.js, exportés par l'outil de tagging)
+// -----------------------------------------------------------------
+// Fait le lien entre le contenu réel (10 fichiers, 5 numéros × 2
+// faces) et un vrai tirage aléatoire de partie : quel numéro devient
+// rear/middle/lead, quelle face (A/B) chacun prend, et quels numéros
+// restants forment la pioche — pièce manquante jusqu'ici entre
+// "les tuiles existent" et "une partie peut démarrer avec elles".
+//
+// Regroupe une liste de données brutes de tuile (les objets exportés
+// par l'outil, un par fichier) par numéro physique, à partir de leur
+// id ("vendetta-01a" → numéro "01", face "a"). Une tuile physique
+// n'existe qu'une fois dans un jeu réel : chaque numéro DOIT avoir
+// exactement 2 entrées (face a et face b) — un numéro incomplet est
+// signalé dans le log et exclu (mieux vaut une tuile en moins qu'un
+// tirage qui plante en pleine partie).
+function groupTilesByNumber(rawTileDataList) {
+  const log = [];
+  const byNumber = {};
+  for (const raw of rawTileDataList) {
+    const match = /^([a-z]+)-(\d+)([ab])$/.exec(raw.id || "");
+    if (!match) {
+      log.push(`Identifiant de tuile inattendu, ignoré : "${raw.id}"`);
+      continue;
+    }
+    const [, , number, face] = match;
+    if (!byNumber[number]) byNumber[number] = {};
+    byNumber[number][face] = raw;
+  }
+  const complete = {};
+  for (const number in byNumber) {
+    if (byNumber[number].a && byNumber[number].b) {
+      complete[number] = byNumber[number];
+    } else {
+      log.push(`Tuile numéro ${number} incomplète (il manque une face), exclue du tirage.`);
+    }
+  }
+  return { byNumber: complete, log };
+}
+
+// Choisit une face au hasard (ou la face forcée fournie, pour des
+// tests déterministes — même convention que drawHazardToken).
+function pickRandomFace(facesEntry, injectedFace = null) {
+  const face = injectedFace || (Math.random() < 0.5 ? "a" : "b");
+  return facesEntry[face];
+}
+
+// Mélange une copie du tableau (Fisher-Yates). injectedOrder permet
+// de fournir un ordre exact pour des tests déterministes, en
+// contournant le mélange — même convention que les dés forçables.
+function shuffleTileNumbers(numbers, injectedOrder = null) {
+  if (injectedOrder) return [...injectedOrder];
+  const arr = [...numbers];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// Construit rear/middle/lead + pioche à partir des données brutes de
+// TOUTES les tuiles disponibles (un tableau plat, peu importe leur
+// extension d'origine — le filtrage par extension choisie par le
+// joueur, prévu par Mayrik pour plus tard, se fait via
+// options.allowedExtensions). La tuile de départ (options.startingTileNumber,
+// "01" par défaut, cf. règle confirmée par Mayrik) est TOUJOURS
+// placée en rear, mais sa face reste tirée au hasard comme les
+// autres. Les autres numéros disponibles sont mélangés : les 2
+// premiers deviennent middle et lead, le reste forme state.drawPile.
+//
+// Ne pose PAS encore les hazards (populateTileHazards) — ce n'est pas
+// le rôle de cette fonction, qui ne fait que choisir QUELLES tuiles
+// entrent en jeu. C'est createTileProgressionState (appelée avec le
+// résultat) qui s'en charge, exactement comme pour des tuiles
+// choisies à la main.
+//
+// options.forcedFaces : { "01": "a", "03": "b", ... } — force la face
+// d'un numéro donné plutôt que de la tirer au hasard.
+// options.forcedDrawOrder : ["03","05","02","04"] — force l'ordre des
+// numéros restants (middle, lead, puis pioche dans cet ordre) plutôt
+// que de mélanger.
+function setupTileProgressionFromRawData(rawTileDataList, options = {}) {
+  const log = [];
+  const startingNumber = options.startingTileNumber || "01";
+  const forcedFaces = options.forcedFaces || {};
+
+  let pool = rawTileDataList;
+  if (options.allowedExtensions) {
+    pool = pool.filter((t) => options.allowedExtensions.includes(t.extension));
+  }
+
+  const { byNumber, log: groupLog } = groupTilesByNumber(pool);
+  log.push(...groupLog);
+
+  if (!byNumber[startingNumber]) {
+    return { ok: false, reason: `Tuile de départ numéro ${startingNumber} introuvable ou incomplète.`, log };
+  }
+
+  const rearRaw = pickRandomFace(byNumber[startingNumber], forcedFaces[startingNumber]);
+  log.push(`Tuile de départ : numéro ${startingNumber}, face ${rearRaw.id.slice(-1)} (${rearRaw.name}).`);
+
+  const remainingNumbers = Object.keys(byNumber).filter((n) => n !== startingNumber);
+  if (remainingNumbers.length < 2) {
+    return { ok: false, reason: `Pas assez de tuiles disponibles (${remainingNumbers.length} restantes, 2 minimum pour middle+lead).`, log };
+  }
+
+  const order = shuffleTileNumbers(remainingNumbers, options.forcedDrawOrder);
+  const middleNumber = order[0];
+  const leadNumber = order[1];
+  const drawPileNumbers = order.slice(2);
+
+  const middleRaw = pickRandomFace(byNumber[middleNumber], forcedFaces[middleNumber]);
+  const leadRaw = pickRandomFace(byNumber[leadNumber], forcedFaces[leadNumber]);
+  log.push(`Tuile middle : numéro ${middleNumber}, face ${middleRaw.id.slice(-1)} (${middleRaw.name}).`);
+  log.push(`Tuile lead : numéro ${leadNumber}, face ${leadRaw.id.slice(-1)} (${leadRaw.name}).`);
+  log.push(`Pioche (${drawPileNumbers.length} tuile(s) restante(s)) : ${drawPileNumbers.join(", ") || "aucune"}.`);
+
+  const drawPile = drawPileNumbers.map((n) => instantiateTile(pickRandomFace(byNumber[n], forcedFaces[n]), byNumber[n]));
+
+  return {
+    ok: true,
+    log,
+    rearTile: instantiateTile(rearRaw, byNumber[startingNumber]),
+    middleTile: instantiateTile(middleRaw, byNumber[middleNumber]),
+    leadTile: instantiateTile(leadRaw, byNumber[leadNumber]),
+    drawPile
+  };
+}
+
+// Glissade Oil Slick (jet du dé de direction + déplacement gratuit
+// d'une case) — extraite dans sa propre fonction car elle doit
+// s'exécuter à l'IDENTIQUE la toute première fois (jeton révélé) ET
+// à chaque passage futur une fois le jeton "persist" en place sur le
+// plateau (confirmé par Mayrik : contrairement à Blank/Dirt, dont
+// l'effet se limite entièrement au changement de terrain permanent,
+// Oil Slick a une action supplémentaire — la glissade elle-même —
+// qui doit se redéclencher à chaque fois, indéfiniment).
+function* resolveOilSlickSlideGen(tile, allCars, car, remaining, options, log) {
+  const direction = rollDirectionDie(options.forcedDice?.oilSlickDirection);
+  log.push(`Glissade Oil Slick en ${direction} (ne coûte aucun déplacement)`);
+  const slideResult = yield* forceMoveOneSpaceGen(tile, car, allCars, direction, options);
+  log.push(...slideResult.log);
+
+  if (car.status === CAR_STATUS.ELIMINATED) {
+    return { log, remaining: 0, stopped: true, eliminated: true };
+  }
+
+  if (slideResult.slam) {
+    // Confirmé par Mayrik : un slam déclenché par la glissade suit
+    // EXACTEMENT les règles normales du slam — perte de tout le
+    // déplacement restant, empilement, relance possible pour le
+    // véhicule strictement plus grand, etc. Tout ça est déjà géré
+    // par resolveSlam à l'intérieur de forceMoveOneSpace ci-dessus ;
+    // ici on se contente d'aligner remaining/stopped sur ce fait.
+    log.push(`${car.id} — slam déclenché par la glissade : traité comme un slam normal (perte du déplacement restant)`);
+    return { log, remaining: 0, stopped: true, slam: slideResult.slam };
+  }
+
+  // Bug réel corrigé (trouvé par simulation à grande échelle sur
+  // 150 parties, avec les vraies tuiles) : la case d'atterrissage
+  // de la glissade peut ELLE-MÊME contenir un hazard (y compris un
+  // autre Oil Slick déjà révélé, qui redéclenchera récursivement
+  // cette même fonction via forceMoveOneSpace → resolveHazard),
+  // résolu à l'intérieur de forceMoveOneSpace. Sans cette
+  // vérification, ce cas tombait tout droit dans le "continue
+  // normalement" ci-dessous, ignorant totalement qu'un hazard
+  // imbriqué venait de mettre la voiture hors service ou de la
+  // pousser hors du plateau en cascade.
+  if (slideResult.stopped) {
+    log.push(`${car.id} — la glissade a déclenché un hazard imbriqué qui coupe le mouvement en cours.`);
+    return { log, remaining: 0, stopped: true };
+  }
+
+  // p.7 : "does not cost a move, and the vehicle continues moving
+  // if it has moves remaining" → pas de slam, le mouvement en
+  // cours continue normalement avec le même `remaining`.
+  return { log, remaining, stopped: false };
+}
+
+function resolveOilSlickSlide(tile, allCars, car, remaining, options, log) {
+  return driveSync(resolveOilSlickSlideGen(tile, allCars, car, remaining, options, log));
+}
+
+// Résout le hazard présent sur la case ACTUELLE de la voiture (déjà
+// entrée dessus). remaining = déplacement qu'il lui restait avant
+// résolution — utile pour Mine (qui le met à 0) et Oil Slick (qui ne
+// consomme rien, donc `remaining` ressort inchangé).
+//
+// Retourne { log, remaining, stopped, slam? }. stopped=true signifie
+// que la séquence de mouvement en cours doit s'arrêter (Mine, Wreck,
+// ou élimination survenue pendant la résolution).
+function* resolveHazardGen(tile, allCars, car, remaining, options = {}) {
+  const log = [];
+  const cell = getSpace(tile, car.col, car.row);
+
+  if (!cell) {
+    return { log, remaining, stopped: false };
+  }
+
+  // p.7, confirmé par Mayrik : un jeton "persist" (Blank/Dirt/Oil
+  // Slick) déjà révélé lors d'un passage précédent reste sur le
+  // plateau pour le reste de la partie — voir HAZARD_BEHAVIOR. Seul
+  // Oil Slick a un effet à RÉ-APPLIQUER ici (la glissade) ; Blank et
+  // Dirt n'ont plus rien à faire, leur effet est déjà entièrement
+  // capturé pour toujours par le terrain permanent de la case
+  // (aucune case face cachée à traiter dans ce cas, donc pas de log
+  // "déclenche un hazard").
+  if (!cell.hazard && cell.revealedHazard === HAZARD_TYPES.OIL_SLICK) {
+    log.push(`${car.id} roule à nouveau sur une case Oil Slick déjà révélée`);
+    return yield* resolveOilSlickSlideGen(tile, allCars, car, remaining, options, log);
+  }
+
+  if (!cell.hazard) {
+    return { log, remaining, stopped: false };
+  }
+
+  const hazardType = cell.hazard;
+
+  // Le hazard est RÉVÉLÉ mais pas encore résolu : le moment exact où
+  // l'interface doit l'illustrer (chantier 4c), avant tout dé et tout
+  // déplacement.
+  yield* emitEvent(options, { type: "hazard", car, hazardType, col: car.col, row: car.row });
+  log.push(`${car.id} déclenche un hazard : ${hazardType}`);
+
+  switch (hazardType) {
+    case HAZARD_TYPES.BLANK: {
+      cell.terrain = TERRAIN.ROAD;
+      cell.hazard = null;
+      cell.revealedHazard = HAZARD_TYPES.BLANK;
+      log.push("Case transformée en ROUTE (jeton Blank retourné, reste en place sur le plateau pour le reste de la partie)");
+      return { log, remaining, stopped: false };
+    }
+
+    case HAZARD_TYPES.DIRT: {
+      cell.terrain = TERRAIN.MUD;
+      cell.hazard = null;
+      cell.revealedHazard = HAZARD_TYPES.DIRT;
+      log.push("Case transformée en BOUE (jeton Dirt retourné, reste en place sur le plateau pour le reste de la partie)");
+      return { log, remaining, stopped: false };
+    }
+
+    case HAZARD_TYPES.OIL_SLICK: {
+      cell.terrain = TERRAIN.ROAD;
+      cell.hazard = null;
+      cell.revealedHazard = HAZARD_TYPES.OIL_SLICK;
+      log.push("Case transformée en ROUTE (jeton Oil Slick retourné, reste en place et se redéclenchera à chaque passage futur)");
+      return yield* resolveOilSlickSlideGen(tile, allCars, car, remaining, options, log);
+    }
+
+    case HAZARD_TYPES.MINE: {
+      cell.hazard = null;
+      log.push("Jeton Mine défaussé");
+      const dmgResult = yield* applyDamageGen(car, { ...options, tile, allCars });
+      log.push(...dmgResult.log);
+      log.push(`${car.id} perd tout son déplacement restant (Mine)`);
+      return { log, remaining: 0, stopped: true };
+    }
+
+    case HAZARD_TYPES.WRECK: {
+      cell.hazard = null;
+      log.push("Jeton Wreck défaussé, une épave apparaît sur la case");
+      // p.7 : les épaves sont traitées comme des petites voitures
+      // inopérables, slammées comme n'importe quel véhicule.
+      const wreckCar = createCar(null, CAR_SIZE.SMALL, car.col, car.row);
+      wreckCar.status = CAR_STATUS.INOPERABLE;
+      wreckCar.isWreck = true;
+      allCars.push(wreckCar);
+      log.push(`Épave créée : ${wreckCar.id}`);
+      const slamResult = yield* resolveSlamGen(tile, allCars, car, wreckCar, options);
+      log.push(...slamResult.log);
+      return { log, remaining: 0, stopped: true, slam: slamResult };
+    }
+
+    default:
+      return { log, remaining, stopped: false };
+  }
+}
+
+function resolveHazard(tile, allCars, car, remaining, options = {}) {
+  return driveSync(resolveHazardGen(tile, allCars, car, remaining, options));
+}
+
+
+// Le compteur/statut (opérable → inopérable au 2e dégât) ET le
+// contenu réel des 5 types de jetons sont gérés ici.
+//
+// Répartition exacte des 20 jetons confirmée par Mayrik (fiche
+// officielle BoardGameGeek) et intégrée dans DAMAGE_TOKEN_COMPOSITION
+// ci-dessous. Le type de jeton reste forçable pour les tests et pour
+// la résolution manuelle (mine, tir...).
+
+const TOKEN_TYPES = {
+  DENT: "dent",
+  SHRAPNEL: "shrapnel",
+  SKID: "skid",
+  DAZED: "dazed",
+  BLAST_OFF: "blast_off"
+};
+
+// Composition exacte des 20 jetons de dégâts (source : fiche officielle
+// BoardGameGeek du jeu, transmise par Mayrik). Chaque jeton Skid a une
+// direction FIXE imprimée dessus (6 jetons, un par direction) — c'est
+// donc la composition qui porte cette info, pas un tirage séparé.
+const DAMAGE_TOKEN_COMPOSITION = [
+  { type: TOKEN_TYPES.DENT, count: 3 },
+  { type: TOKEN_TYPES.SKID, count: 1, skidDirection: "front" },
+  { type: TOKEN_TYPES.SKID, count: 1, skidDirection: "front-left" },
+  { type: TOKEN_TYPES.SKID, count: 1, skidDirection: "front-right" },
+  { type: TOKEN_TYPES.SKID, count: 1, skidDirection: "rear" },
+  { type: TOKEN_TYPES.SKID, count: 1, skidDirection: "rear-left" },
+  { type: TOKEN_TYPES.SKID, count: 1, skidDirection: "rear-right" },
+  { type: TOKEN_TYPES.SHRAPNEL, count: 3 },
+  { type: TOKEN_TYPES.DAZED, count: 3 },
+  { type: TOKEN_TYPES.BLAST_OFF, count: 5 }
+]; // total : 20
+
+// Tire un jeton au hasard dans la composition ci-dessus (tirage AVEC
+// remise pour l'instant — pas encore de pile partagée qui s'épuise
+// au fil de la partie ; à revoir si on veut modéliser la vraie pile
+// physique qui se vide/se remélange).
+// injectedValue permet de forcer un jeton précis pour les tests :
+// { type, skidDirection? }.
+function drawDamageToken(injectedValue = null) {
+  if (injectedValue) return injectedValue;
+  const pool = [];
+  for (const entry of DAMAGE_TOKEN_COMPOSITION) {
+    for (let i = 0; i < entry.count; i++) {
+      pool.push({ type: entry.type, skidDirection: entry.skidDirection || null });
+    }
+  }
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Résout l'effet d'un jeton de dégâts déjà tiré (p.12).
+// tokenType : une valeur de TOKEN_TYPES.
+// options : { forcedDice, skidDirection, decideReroll } — forcedDice
+// peut contenir shrapnelDirection / dazedStunt / dazedDirections
+// (tableau, une direction par case) / blastOffDirection / blastOffStunt.
+function* resolveDamageTokenGen(tile, allCars, car, tokenType, options = {}) {
+  const forcedDice = options.forcedDice || {};
+  const log = [];
+
+  switch (tokenType) {
+    case TOKEN_TYPES.DENT: {
+      log.push(`${car.id} — jeton DENT : aucun effet`);
+      break;
+    }
+
+    case TOKEN_TYPES.SHRAPNEL: {
+      // p.12 : dé de direction, ligne droite en ignorant tout terrain
+      // (même impassable), jusqu'au premier véhicule rencontré ou au
+      // bord du plateau (auquel cas rien ne se passe).
+      const direction = rollDirectionDie(forcedDice.shrapnelDirection);
+      log.push(`${car.id} — jeton SHRAPNEL : direction ${direction}`);
+      // La grille est en quinconce : le décalage de colonne d'une
+      // direction diagonale dépend de la parité de la rangée COURANTE
+      // à chaque case franchie (pas une seule fois) — voir
+      // getDirectionDelta. Une trajectoire "en ligne droite" zigzague
+      // donc naturellement d'une colonne sur deux pour les 4
+      // directions diagonales (front tout droit à chaque étape).
+      let scanCol = car.col;
+      let scanRow = car.row;
+      let hit = null;
+
+      while (true) {
+        const stepDelta = getDirectionDelta(direction, scanCol, scanRow);
+        scanCol += stepDelta.dCol;
+        scanRow += stepDelta.dRow;
+        const space = getSpace(tile, scanCol, scanRow);
+        if (space === null || space === undefined) break; // bord du plateau atteint
+        const occupant = getCarAt(allCars, scanCol, scanRow);
+        if (occupant) {
+          hit = occupant;
+          break;
+        }
+      }
+
+      if (hit) {
+        log.push(`Shrapnel touche ${hit.id} (même si c'est une des vôtres)`);
+        const hitResult = yield* applyDamageGen(hit, {
+          tokenType: TOKEN_TYPES.DENT, // simplification : pas de pioche en cascade pour la voiture touchée
+          tile,
+          allCars,
+          forcedDice,
+          decideReroll: options.decideReroll,
+          isHumanOwner: options.isHumanOwner,
+          // Sans ce relais, le dégât infligé EN CASCADE par le
+          // Shrapnel n'émettait aucun événement : l'interface voyait
+          // le jeton de la voiture touchée apparaître sans révélation
+          // ni pause (les options sont reconstruites à la main ici,
+          // pas propagées par ...options).
+          emitEvents: options.emitEvents
+        });
+        log.push(...hitResult.log);
+      } else {
+        log.push("Shrapnel ne touche rien (bord du plateau atteint)");
+      }
+      break;
+    }
+
+    case TOKEN_TYPES.SKID: {
+      // p.12 : 6 jetons différents, chacun avec une direction FIXE
+      // imprimée dessus (pas un dé) — direction obligatoire à fournir.
+      const direction = options.skidDirection;
+      if (!direction) {
+        log.push(`${car.id} — jeton SKID : direction manquante (bug d'appel, à corriger)`);
+        break;
+      }
+      log.push(`${car.id} — jeton SKID : direction fixe ${direction}`);
+      // Même comportement que le slam : coût de terrain ignoré,
+      // élimination si bord/impassable, slam en chaîne si occupé.
+      const moveResult = yield* forceMoveOneSpaceGen(tile, car, allCars, direction, options);
+      log.push(...moveResult.log);
+      break;
+    }
+
+    case TOKEN_TYPES.DAZED: {
+      // p.12 : dé de cascade = nombre de cases, direction RELANCÉE à
+      // chaque case, coût de terrain RESPECTÉ (contrairement à Skid),
+      // s'arrête plus tôt si une case fait perdre les déplacements
+      // restants (ex. slam).
+      let remaining = rollStuntDie(forcedDice.dazedStunt);
+      log.push(`${car.id} — jeton DAZED : dé de cascade = ${remaining}`);
+      let step = 0;
+      while (remaining > 0) {
+        const forcedStepDirection = forcedDice.dazedDirections ? forcedDice.dazedDirections[step] : null;
+        const direction = rollDirectionDie(forcedStepDirection);
+        const delta = getDirectionDelta(direction, car.col, car.row);
+        const targetCol = car.col + delta.dCol;
+        const targetRow = car.row + delta.dRow;
+        log.push(`  Étape ${step + 1} — direction ${direction}`);
+
+        const stepResult = yield* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remaining, options);
+        log.push(...stepResult.log);
+        remaining = stepResult.remaining;
+        step++;
+
+        if (stepResult.stopped) {
+          log.push("Dazed s'arrête (élimination, slam, ou plus assez de déplacement)");
+          break;
+        }
+      }
+      break;
+    }
+
+    case TOKEN_TYPES.BLAST_OFF: {
+      // p.12 : dé de direction + dé de cascade = distance en une seule
+      // fois, cases intermédiaires totalement ignorées (pas de coût,
+      // pas de résolution de hazard sur le trajet). Seule la case
+      // d'arrivée compte.
+      const direction = rollDirectionDie(forcedDice.blastOffDirection);
+      const distance = rollStuntDie(forcedDice.blastOffStunt);
+      log.push(`${car.id} — jeton BLAST OFF : direction ${direction}, distance ${distance} (cases intermédiaires ignorées)`);
+      // La grille est en quinconce : le décalage de colonne d'un pas
+      // diagonal dépend de la parité de la rangée COURANTE à CHAQUE
+      // pas, donc on ne peut pas multiplier un delta fixe par la
+      // distance — on accumule pas à pas (voir getDirectionDelta /
+      // même logique que la correction du balayage Shrapnel).
+      let targetCol = car.col;
+      let targetRow = car.row;
+      for (let step = 0; step < distance; step++) {
+        const stepDelta = getDirectionDelta(direction, targetCol, targetRow);
+        targetCol += stepDelta.dCol;
+        targetRow += stepDelta.dRow;
+      }
+
+      // p.11, précisé par Mayrik : si le saut dépasse le bord AVANT du
+      // plateau, deux cas — soit ça déclenche la progression normale
+      // des tuiles (décalage), soit, si la Finish Line est déjà en
+      // place, ça donne directement la victoire. Nécessite que
+      // l'appelant ait fourni options.progressionState (le vrai état
+      // à 3-4 tuiles, pas juste le "tile" local) — sinon (appel direct
+      // hors du moteur de tour avec progression) on garde l'ancien
+      // comportement simplifié ci-dessous, inchangé.
+      const progState = options.progressionState;
+      if (progState) {
+        let currentBoard = buildBoardFromProgressionState(progState);
+
+        // Tant que la cible dépasse le bord avant du plateau ACTUEL et
+        // qu'aucune Finish Line n'existe encore, on décale les tuiles
+        // et on rebase la cible en conséquence — même logique que la
+        // progression normale (advanceBoardOnFrontExit rebase déjà
+        // toutes les voitures, dont celle-ci, de -tileCols ; on
+        // applique le même rebasage à `targetCol`, qui n'est pas
+        // encore assignée à car.col à ce stade).
+        while (!progState.finishLineTile && targetCol >= currentBoard.cols) {
+          const tileCols = progState.rearTile.cols;
+          const advanceResult = advanceBoardOnFrontExit(progState, allCars, options.allChoppers || [], {});
+          log.push(...advanceResult.log);
+          if (!advanceResult.ok) {
+            log.push(`${car.id} — Blast Off interrompu : ${advanceResult.reason}`);
+            return { log };
+          }
+          targetCol -= tileCols;
+          currentBoard = advanceResult.newBoard;
+        }
+
+        // Si la Finish Line existe (déjà en place, ou tout juste
+        // ajoutée par le décalage ci-dessus si les conditions étaient
+        // réunies), une cible qui atteint/dépasse son seuil est une
+        // victoire — la simple comparaison numérique suffit, pas
+        // besoin que la case existe réellement dans la grille
+        // (checkGameEndConditions, appelé par l'orchestrateur juste
+        // après, la détectera automatiquement).
+        if (progState.finishLineTile) {
+          const finishColStart = progState.rearTile.cols + progState.middleTile.cols + progState.leadTile.cols;
+          if (targetCol >= finishColStart) {
+            car.col = targetCol;
+            car.row = targetRow;
+            log.push(`${car.id} atterrit sur la Finish Line via Blast Off !`);
+            break;
+          }
+        }
+
+        // Cible désormais dans les limites du plateau à jour : on
+        // continue avec la résolution normale ci-dessous, sur ce
+        // plateau reconstruit.
+        car.col = targetCol;
+        car.row = targetRow;
+        const finalSpace = getSpace(currentBoard, targetCol, targetRow);
+        if (!finalSpace) {
+          // p.5-6 : sortie du plateau par la gauche/droite (row hors
+          // 0..rows-1) ou par l'arrière (col < 0) → élimination, comme
+          // n'importe quelle autre sortie de plateau. Seule la sortie
+          // par l'AVANT est un cas spécial déjà traité plus haut
+          // (décalage de tuile / Finish Line), donc jamais rencontrée
+          // ici avec un col hors bornes du côté avant.
+          car.status = CAR_STATUS.ELIMINATED;
+          const edge = targetCol < 0 ? "ARRIÈRE" : "latéral (gauche/droite)";
+          log.push(`${car.id} atterrit hors du bord ${edge} du plateau via Blast Off → ÉLIMINÉE`);
+          break;
+        }
+        log.push(`${car.id} atterrit en (col ${targetCol}, row ${targetRow}) — terrain ${finalSpace.terrain}`);
+        if (finalSpace.terrain === TERRAIN.IMPASSABLE) {
+          car.status = CAR_STATUS.ELIMINATED;
+          log.push(`${car.id} atterrit sur une case impassable → ÉLIMINÉE`);
+          break;
+        }
+        const hazardResult2 = yield* resolveHazardGen(currentBoard, allCars, car, 0, options);
+        log.push(...hazardResult2.log);
+        if (hazardResult2.stopped) break;
+        const occupant2 = getCarAt(allCars, car.col, car.row, car);
+        if (occupant2) {
+          log.push(`${car.id} atterrit sur ${occupant2.id} → SLAM`);
+          const slamResult2 = yield* resolveSlamGen(currentBoard, allCars, car, occupant2, options);
+          log.push(...slamResult2.log);
+
+          // Même correctif que dans moveCarWithProgression (voir le
+          // commentaire détaillé là-bas) : la voiture percutée par ce
+          // slam peut elle-même être projetée hors du bord avant.
+          const slamExit2 = slamResult2.frontExitInfo;
+          if (slamExit2 && slamExit2.car.status !== CAR_STATUS.ELIMINATED) {
+            const exitingCar2 = slamExit2.car;
+            let guard2 = 0;
+            let retryFrontExit2 = true;
+            while (retryFrontExit2 && guard2 < 4 && exitingCar2.status !== CAR_STATUS.ELIMINATED) {
+              guard2++;
+              if (!progState.finishLineTile) {
+                const advanceResult2 = advanceBoardOnFrontExit(progState, allCars, options.allChoppers || [], {});
+                log.push(...advanceResult2.log);
+                if (!advanceResult2.ok) {
+                  log.push(`${exitingCar2.id} — décalage de tuile impossible après avoir été projetée hors du bord avant par un Slam : ${advanceResult2.reason}`);
+                  break;
+                }
+                currentBoard = advanceResult2.newBoard;
+              }
+              if (exitingCar2.status === CAR_STATUS.ELIMINATED) break;
+              const retryResult2 = yield* forceMoveOneSpaceGen(currentBoard, exitingCar2, allCars, slamExit2.direction, options);
+              log.push(...retryResult2.log);
+              retryFrontExit2 = !!retryResult2.frontExit;
+            }
+          }
+        }
+        break;
+      }
+
+      const space = getSpace(tile, targetCol, targetRow);
+      if (space === null) {
+        car.status = CAR_STATUS.ELIMINATED;
+        log.push(`${car.id} atterrit hors du bord latéral → ÉLIMINÉE`);
+        break;
+      }
+      if (space === undefined) {
+        if (targetCol < 0) {
+          // Cohérent avec enterAdjacentSpace/forceMoveOneSpace : sortie
+          // par l'arrière du plateau → élimination (p.5-6).
+          car.status = CAR_STATUS.ELIMINATED;
+          log.push(`${car.id} atterrit hors du bord ARRIÈRE du plateau → ÉLIMINÉE`);
+          break;
+        }
+        // Pas de progressionState fourni (appel direct hors du moteur
+        // de tour) : impossible de décaler les tuiles ou de vérifier
+        // la Finish Line ici — la voiture reste à sa position actuelle.
+        log.push(`${car.id} atterrirait hors du bord AVANT du plateau (aucun état de progression fourni : position conservée)`);
+        break;
+      }
+      if (space.terrain === TERRAIN.IMPASSABLE) {
+        car.status = CAR_STATUS.ELIMINATED;
+        log.push(`${car.id} atterrit sur une case impassable → ÉLIMINÉE`);
+        break;
+      }
+
+      car.col = targetCol;
+      car.row = targetRow;
+      log.push(`${car.id} atterrit en (col ${targetCol}, row ${targetRow}) — terrain ${space.terrain}`);
+
+      // p.12 : "You are still affected by the space you move into" —
+      // un hazard sur la case d'ARRIVÉE s'applique normalement (mais
+      // pas sur les cases ignorées entre les deux).
+      const hazardResult = yield* resolveHazardGen(tile, allCars, car, 0, options);
+      log.push(...hazardResult.log);
+      if (hazardResult.stopped) break;
+
+      const occupant = getCarAt(allCars, car.col, car.row, car);
+      if (occupant) {
+        log.push(`${car.id} atterrit sur ${occupant.id} → SLAM`);
+        const slamResult = yield* resolveSlamGen(tile, allCars, car, occupant, options);
+        log.push(...slamResult.log);
+      }
+      break;
+    }
+  }
+
+  return { log };
+}
+
+function resolveDamageToken(tile, allCars, car, tokenType, options = {}) {
+  return driveSync(resolveDamageTokenGen(tile, allCars, car, tokenType, options));
+}
+
+// -----------------------------------------------------------------
+// 8. DÉGÂTS ET STATUT (p.6, p.8, p.12)
+// -----------------------------------------------------------------
+
+// Applique un dégât à une voiture. Retourne applied:false si le
+// dégât est ignoré (voiture déjà inopérable, p.6 : "cannot take
+// additional damage ; if it would, ignore it").
+//
+// options.tokenType : force le type de jeton (sinon tiré via
+// drawDamageToken() selon la vraie répartition, voir
+// DAMAGE_TOKEN_COMPOSITION plus haut).
+// options.tile / options.allCars : nécessaires pour résoudre les
+// effets qui déplacent la voiture (Skid/Dazed/Blast Off) ou qui
+// touchent une autre voiture (Shrapnel). Sans eux, seul le
+// compteur/statut est mis à jour (utile pour les tests qui ne
+// testent que ça).
+//
+// NOTE : si la voiture était EN TRAIN de bouger quand elle prend le
+// dégât (ex. hazard Mine pendant un mouvement), elle perd tout
+// déplacement restant — déjà géré à l'appel, voir le cas MINE dans
+// resolveHazard() plus haut (remaining mis à 0 après applyDamage).
+function* applyDamageGen(car, options = {}) {
+  const log = [];
+
+  if (car.status === CAR_STATUS.ELIMINATED) {
+    return { log, applied: false };
+  }
+
+  // p.7 : "Wrecks are eliminated ... [if they] take any damage." —
+  // règle spéciale, à vérifier AVANT la règle générale d'inopérabilité
+  // ci-dessous, car une épave est TOUJOURS inopérable par construction
+  // (sinon cette règle spéciale ne se déclencherait jamais : elle
+  // serait immédiatement absorbée par le cas "déjà inopérable = dégât
+  // ignoré" qui s'applique aux voitures normales).
+  if (car.isWreck) {
+    car.status = CAR_STATUS.ELIMINATED;
+    log.push(`${car.id} (épave) prend un dégât → ÉLIMINÉE (règle spéciale des épaves, p.7)`);
+    return { log, applied: true, eliminated: true };
+  }
+
+  if (car.status === CAR_STATUS.INOPERABLE) {
+    log.push(`${car.id} est déjà inopérable → dégât ignoré (aucun jeton pioché)`);
+    return { log, applied: false };
+  }
+
+  let tokenType = options.tokenType;
+  let skidDirection = options.skidDirection;
+
+  if (!tokenType) {
+    const drawn = drawDamageToken(options.forcedDice?.drawnToken);
+    tokenType = drawn.type;
+    if (tokenType === TOKEN_TYPES.SKID && !skidDirection) {
+      skidDirection = drawn.skidDirection;
+    }
+  }
+
+  // La direction est CONSERVÉE dans le jeton (chantier 4c) : les six
+  // jetons Skid portent chacun une direction fixe imprimée dessus
+  // (p.12) et ont donc six images distinctes. Sans cette donnée,
+  // l'interface saurait qu'il s'agit d'un Skid mais pas lequel
+  // montrer. Absente pour tous les autres types.
+  const token = { type: tokenType };
+  if (skidDirection) token.skidDirection = skidDirection;
+  car.damageTokens.push(token);
+  log.push(`${car.id} reçoit un dégât — jeton ${tokenType} (total : ${car.damageTokens.length}/2)`);
+
+  // Le jeton est posé : l'interface peut le révéler sous le dashboard
+  // AVANT l'effet qu'il déclenche (Skid, Shrapnel…), qui bougera
+  // peut-être encore des véhicules juste après.
+  yield* emitEvent(options, { type: "damage", car, token, tokenType, skidDirection: skidDirection || null, tokenCount: car.damageTokens.length });
+
+  if (car.damageTokens.length >= 2) {
+    car.status = CAR_STATUS.INOPERABLE;
+    car.facingReversed = true; // "Turn the car to face backward on the road tile" (p.6)
+    log.push(`${car.id} devient INOPÉRABLE (2e dégât) → tourne face arrière`);
+  }
+
+  if (options.tile && options.allCars) {
+    const effectResult = yield* resolveDamageTokenGen(options.tile, options.allCars, car, tokenType, { ...options, skidDirection });
+    log.push(...effectResult.log);
+  }
+
+  // Les effets de CE jeton sont entièrement appliqués : l'interface
+  // peut le remettre face cachée (chantier 4c). Émis après l'effet, et
+  // donc après l'éventuelle cascade qu'il a provoquée — un jeton
+  // déclenché par un autre se retourne ainsi avant celui qui l'a
+  // déclenché, ce qui est l'ordre réel des choses.
+  yield* emitEvent(options, { type: "damage-resolved", car, token, tokenType });
+
+  return { log, applied: true };
+}
+
+function applyDamage(car, options = {}) {
+  return driveSync(applyDamageGen(car, options));
+}
+
+// -----------------------------------------------------------------
+// 9. TIR (p.10)
+// -----------------------------------------------------------------
+// Fonctionne aussi bien pour un tir DEPUIS une voiture que DEPUIS un
+// chopper (Airstrike) — resolveShoot() ne lit que .col/.row/arc avant
+// du tireur, donc un chopper (voir createChopper) fonctionne sans
+// code spécifique. La règle "ne peut pas tirer sur UN chopper" (comme
+// cible) est vérifiée explicitement ci-dessous via target.isChopper.
+// "Premier round : pas de tir" reste une règle de structure de tour
+// (compteur de round), appliquée au niveau du moteur de tour complet
+// (playTurnAssignMove/playTurnCoast), pas ici.
+
+// Résout un tir d'une voiture vers une autre (ou une épave — p.10 :
+// "You may shoot wrecks. Wrecks are treated as inoperable small cars.
+// If a wreck takes any damage, it is eliminated" — déjà géré par la
+// règle spéciale des épaves dans applyDamage).
+//
+// options.forcedDice.shootingDie force le résultat du dé pour les tests.
+function* resolveShootGen(tile, allCars, shooter, target, options = {}) {
+  const log = [];
+  const forcedDice = options.forcedDice || {};
+
+  // p.10 : "You may not shoot choppers."
+  if (target.isChopper) {
+    log.push(`${target.id} est un chopper → impossible de lui tirer dessus`);
+    return { log, hit: false };
+  }
+
+  // p.10 : on ne peut tirer que sur une cible dans son arc avant —
+  // même règle géométrique que le mouvement (p.9, "Front Arc").
+  const arc = getFrontArc(shooter);
+  const inArc = arc.some((a) => a.col === target.col && a.row === target.row);
+  if (!inArc) {
+    log.push(`${target.id} n'est pas dans l'arc avant de ${shooter.id} → tir impossible`);
+    return { log, hit: false };
+  }
+
+  const roll = rollShootingDie(forcedDice.shootingDie);
+  log.push(`${shooter.id} tire sur ${target.id} (taille ${target.size}) — dé de tir : ${roll}`);
+
+  // p.10 : le dé touche si sa valeur correspond exactement à la
+  // taille de la cible, "small-medium" touchant Small OU Medium, et
+  // "any" touchant n'importe quelle taille.
+  const isHit =
+    roll === "any" ||
+    (roll === "small-medium" && (target.size === CAR_SIZE.SMALL || target.size === CAR_SIZE.MEDIUM)) ||
+    roll === target.size;
+
+  // Le dé de tir est lancé et on sait déjà s'il touche, mais le dégât
+  // n'est pas encore appliqué : l'interface montre le dé, puis le
+  // résultat, au lieu des deux d'un coup.
+  yield* emitEvent(options, { type: "shoot-dice", shooter, target, roll, hit: isHit });
+
+  if (!isHit) {
+    log.push(`Raté — le dé ne correspond pas à la taille de ${target.id}`);
+    yield* emitEvent(options, { type: "shoot-resolved", shooter, target, hit: false });
+    return { log, hit: false };
+  }
+
+  log.push(`Touché !`);
+  const dmgResult = yield* applyDamageGen(target, { ...options, tile, allCars });
+  log.push(...dmgResult.log);
+
+  yield* emitEvent(options, { type: "shoot-resolved", shooter, target, hit: true });
+
+  return { log, hit: true, damageResult: dmgResult };
+}
+
+function resolveShoot(tile, allCars, shooter, target, options = {}) {
+  return driveSync(resolveShootGen(tile, allCars, shooter, target, options));
+}
+
+// Commande Repair (p.8, dé = 6) : retire un dégât et rend
+// l'opérabilité si la voiture était inopérable. tokenValue (optionnel)
+// = valeur précise du jeton à retirer, choisie par le JOUEUR humain
+// (voir tools/ui-script.js, clic direct sur un jeton visible) — l'IA
+// et le vieux panneau texte n'en passent pas, comportement inchangé
+// (retire le dernier jeton du tableau) dans ce cas.
+function repairCar(car, tokenValue) {
+  const log = [];
+
+  if (car.status === CAR_STATUS.ELIMINATED) {
+    log.push(`${car.id} est éliminée, impossible à réparer`);
+    return { log, repaired: false };
+  }
+
+  if (car.damageTokens.length === 0) {
+    log.push(`${car.id} n'a aucun dégât à réparer`);
+    return { log, repaired: false };
+  }
+
+  if (tokenValue !== undefined) {
+    const idx = car.damageTokens.indexOf(tokenValue);
+    if (idx !== -1) car.damageTokens.splice(idx, 1);
+    else car.damageTokens.pop(); // filet de sécurité si jamais la valeur ne correspond à rien (ne devrait pas arriver)
+  } else {
+    car.damageTokens.pop(); // remis dans la pile de jetons — pas modélisé ici (pas encore de pile globale)
+  }
+  log.push(`${car.id} répare un dégât (reste : ${car.damageTokens.length}/2)`);
+
+  if (car.status === CAR_STATUS.INOPERABLE && car.damageTokens.length < 2) {
+    car.status = CAR_STATUS.OPERABLE;
+    car.facingReversed = false;
+    log.push(`${car.id} redevient OPÉRABLE (et pourra bouger plus tard ce round si un tour lui reste)`);
+  }
+
+  return { log, repaired: true };
+}
+
+// -----------------------------------------------------------------
+// 11. COMMAND BOARD (p.8) — ÉTAPE 2 DU MOTEUR DE TOUR
+// -----------------------------------------------------------------
+// Chaque commande valide son propre dé (certaines exigent une valeur
+// précise) et applique son effet. La règle "une seule commande par
+// ROUND" et "commande activée AVANT le mouvement de la voiture
+// assignée" seront appliquées par le futur assemblage du tour complet
+// (playTurnAssignMove sera étendu pour orchestrer tout ça) — ces 4
+// fonctions restent volontairement indépendantes et testables seules.
+
+// AIRSTRIKE (n'importe quel dé, p.8) : place le chopper sur une case
+// vide, puis tire avec s'il en a l'occasion ("if able" — si
+// options.shootTarget est fourni ET valide, sinon aucun tir n'a lieu,
+// ce n'est pas une erreur). La règle "pas de tir au 1er round"
+// s'appliquera au niveau du futur moteur de round complet.
+// p.10 : les armes ne sont pas encore actives au 1er round — vaut
+// pour un véhicule (déjà géré par resolveShootStep) MAIS AUSSI pour
+// le chopper (Airstrike). Vérification défensive ici, en plus du
+// filtrage fait en amont par chooseAiCommand (qui évite déjà de
+// choisir Airstrike au round 1) — pour que la fonction reste correcte
+// même appelée directement, sans dépendre de cette décision amont.
+function resolveAirstrikeCommand(tile, allCars, allChoppers, chopper, col, row, options = {}) {
+  const log = [];
+
+  const placeResult = placeChopperAirstrike(tile, allCars, allChoppers, chopper, col, row);
+  if (!placeResult.ok) {
+    return { ok: false, reason: placeResult.reason };
+  }
+  log.push(`AIRSTRIKE : chopper de ${chopper.owner} placé en (col ${col}, row ${row})`);
+
+  const shootOutcome = resolveAirstrikeShoot(tile, allCars, chopper, options.shootTarget, options);
+  log.push(...shootOutcome.log);
+
+  return { ok: true, log, shootResult: shootOutcome.shootResult };
+}
+
+// Moitié "tir" de l'Airstrike, extraite séparément (retour de Mayrik) :
+// permet à l'appelant de placer le chopper (placeChopperAirstrike),
+// laisser l'interface l'afficher sur la case AVANT de résoudre le tir,
+// puis appeler cette fonction séparément — plutôt que tout résoudre
+// d'un coup, incompréhensible visuellement (le chopper et les dégâts
+// du tir apparaissaient jusqu'ici simultanément). resolveAirstrikeCommand
+// ci-dessus reste la version atomique (placement + tir en un seul
+// appel), toujours utilisée telle quelle par le tour de l'IA.
+function resolveAirstrikeShoot(tile, allCars, chopper, shootTarget, options = {}) {
+  const log = [];
+  let shootResult = null;
+  if (shootTarget) {
+    if (options.roundNumber === 1) {
+      log.push(`Tir impossible : les armes ne sont pas encore actives au 1er round (p.10), même pour le chopper`);
+    } else {
+      shootResult = resolveShoot(tile, allCars, chopper, shootTarget, options);
+      log.push(...shootResult.log);
+    }
+  }
+  return { ok: true, log, shootResult };
+}
+
+// NITRO (dé 1-3, p.8) : augmente le mouvement de la voiture assignée
+// de la valeur de CE dé, en plus du dé de mouvement normal. Fonction
+// pure : elle ne fait que calculer/valider le bonus, à additionner au
+// dé de mouvement avant d'appeler moveCar (composition faite par le
+// futur assemblage du tour).
+function resolveNitroCommand(dieValue) {
+  if (dieValue < 1 || dieValue > 3) {
+    return { ok: false, reason: "Nitro nécessite un dé de valeur 1 à 3." };
+  }
+  return { ok: true, bonus: dieValue };
+}
+
+// DRIFT (dé 3-5, p.8) : valide le dé et renvoie le flag à transmettre
+// à moveCar (slamOptions.driftAvailable) — la mécanique elle-même est
+// déjà intégrée dans moveCar/enterAdjacentSpace (voir plus haut).
+function resolveDriftCommand(dieValue) {
+  if (dieValue < 3 || dieValue > 5) {
+    return { ok: false, reason: "Drift nécessite un dé de valeur 3 à 5." };
+  }
+  return { ok: true, driftAvailable: true };
+}
+
+// REPAIR (dé 6, p.8) : valide le dé, puis délègue à repairCar() déjà
+// existant et testé.
+function resolveRepairCommand(dieValue, car, tokenValue) {
+  if (dieValue !== 6) {
+    return { ok: false, reason: "Repair nécessite un dé de valeur 6." };
+  }
+  return { ok: true, ...repairCar(car, tokenValue) };
+}
+
+// -----------------------------------------------------------------
+// 12. MOTEUR DE TOUR — ASSIGN + MOVE + SHOOT + END OF TURN (p.8, p.11)
+// -----------------------------------------------------------------
+// playTurnAssignMove() (et sa variante playTurnAssignMoveWithProgression
+// plus bas) couvre, pour UNE voiture d'UN joueur :
+//   1. ASSIGN : vérifie que la voiture est opérable et n'a pas déjà
+//      été assignée ce round (p.8).
+//   2. MOVE : délègue à moveCar() (ou moveCarWithProgression pour la
+//      variante multi-tuiles), déjà entièrement testés.
+//   3. SHOOT (p.10) : voir resolveShootStep() ci-dessous.
+//   4. END OF TURN (p.11) : marque la voiture comme "déjà jouée ce
+//      round", puis vérifie l'élimination par chopper — cette
+//      dernière vérification porte sur TOUTES les voitures en jeu,
+//      pas seulement celle qui vient de bouger (conforme à la règle,
+//      qui ne limite pas cette vérification à la voiture du tour).
+// Le Command board (Airstrike/Nitro/Drift/Repair) et Coast sont des
+// briques séparées (voir plus haut/bas), composées par l'appelant
+// avant d'invoquer ces fonctions (ex. Nitro augmente dieValue, Drift
+// passe par slamOptions.driftAvailable).
+
+// Étape SHOOT commune à playTurnAssignMove/playTurnCoast et leurs
+// variantes avec progression — évite de dupliquer 4 fois la même
+// logique de validation (cible fournie ? 1er round ? voiture encore
+// opérable ?).
+//
+// "The car you moved ... may shoot" — MÊME après un slam (p.10 :
+// "You may shoot after resolving a slam"), donc cette étape ne
+// bloque PAS le tir juste parce que le mouvement contenait un slam
+// ou s'est arrêté prématurément. Elle bloque seulement si :
+//   - aucune cible n'a été fournie (pas de tir tenté, "if able")
+//   - le 1er round (armes pas encore actives, p.10) — vérifié via
+//     options.roundNumber, fourni par le moteur de round
+//   - la voiture n'est plus opérable (éliminée ou inopérable) après
+//     son mouvement (une voiture inopérable ne peut ni bouger ni
+//     tirer, p.6)
+function* resolveShootStepGen(board, allCars, car, options) {
+  const log = [];
+  let shootResult = null;
+
+  // CORRECTIF (trouvé par Mayrik en relisant une partie complète au
+  // viewer, après l'étape 7 du rewrite) : la cible de tir ne peut PAS
+  // être décidée une fois pour toutes par l'IA avant le mouvement — un
+  // Slam introduit une case d'arrivée réellement aléatoire (dé de slam
+  // + dé de direction, tirés PENDANT la résolution du mouvement
+  // ci-dessus, donc après que l'IA a pris sa décision). Le
+  // `decision.shotTarget` précalculé (voir computeShotTargetForDecision,
+  // ai-decision.js) n'est qu'une PRÉVISION basée sur la destination
+  // PRÉVUE ; une fois le Slam rebondi ailleurs, cette prévision est
+  // souvent fausse — d'où des tirs jugés "impossibles" alors qu'une
+  // cible valide existait bel et bien depuis la case RÉELLE d'arrivée.
+  // Si l'appelant fournit `options.shootTargetFn` (callback pointant
+  // vers ai.chooseShootTarget), on l'utilise pour recalculer la cible
+  // à PARTIR DE LA POSITION RÉELLE de `car` (déjà à jour à ce stade,
+  // le mouvement — Slam compris — est entièrement résolu juste
+  // au-dessus). Repli sur `options.shootTarget` (cible fixe) si aucune
+  // fonction n'est fournie — nécessaire pour l'Airstrike (tir depuis
+  // un chopper à une case fixe, jamais affecté par un Slam de voiture)
+  // et pour ne rien casser des tests existants qui passent une cible
+  // toute faite.
+  const target = options.shootTargetFn
+    ? options.shootTargetFn(car, allCars)
+    : options.shootTarget;
+
+  if (!target) {
+    return { log, shootResult };
+  }
+
+  if (options.roundNumber === 1) {
+    log.push(`Tir impossible : les armes ne sont pas encore actives au 1er round (p.10)`);
+  } else if (car.status !== CAR_STATUS.OPERABLE) {
+    log.push(`${car.id} n'est plus opérable → tir impossible`);
+  } else {
+    shootResult = yield* resolveShootGen(board, allCars, car, target, options);
+    log.push(...shootResult.log);
+  }
+
+  return { log, shootResult };
+}
+
+function resolveShootStep(board, allCars, car, options) {
+  return driveSync(resolveShootStepGen(board, allCars, car, options));
+}
+
+function playTurnAssignMove(tile, car, dieValue, chosenPath, allCars, allChoppers, options = {}) {
+  const log = [];
+
+  // --- ASSIGN ---
+  if (car.status !== CAR_STATUS.OPERABLE) {
+    return { ok: false, reason: `${car.id} n'est pas opérable, ne peut pas être assignée.` };
+  }
+  if (car.movedThisRound) {
+    return { ok: false, reason: `${car.id} a déjà été assignée ce round.` };
+  }
+  log.push(`ASSIGN : dé ${dieValue} assigné à ${car.id}`);
+
+  // --- MOVE ---
+  const moveResult = moveCar(tile, car, dieValue, chosenPath, allCars, options);
+  log.push(...moveResult.log);
+
+  // --- SHOOT (p.10) ---
+  const shootStep = resolveShootStep(tile, allCars, car, options);
+  log.push(...shootStep.log);
+  const shootResult = shootStep.shootResult;
+
+  // --- END OF TURN (p.11) ---
+  // Après le tir, pas juste après le mouvement (ordre exact du tour,
+  // p.8 : Assign → Command → Move → Shoot, puis fin de tour).
+  car.movedThisRound = true;
+  log.push(`END OF TURN : ${car.id} ne pourra plus être assignée ce round`);
+
+  const chopperElim = eliminateCarsOnChoppers(allCars, allChoppers || []);
+  log.push(...chopperElim.log);
+
+  return { ok: true, log, moveResult, shootResult };
+}
+
+// -----------------------------------------------------------------
+// 12bis. ASSIGN + MOVE + SHOOT + END OF TURN — VERSION AVEC PROGRESSION
+// -----------------------------------------------------------------
+// Identique à playTurnAssignMove ci-dessus (ASSIGN/SHOOT/END OF TURN
+// inchangés), sauf que le MOVE passe par moveCarWithProgression (donc
+// gère la traversée de plusieurs tuiles, l'ajout de la Finish Line,
+// et une victoire éventuelle EN COURS de mouvement), et qu'un ultime
+// checkGameEndConditions() ferme le tour — couvre le cas où le tir ou
+// l'élimination-par-chopper de fin de tour déclenche la victoire même
+// sans que le mouvement lui-même n'ait atteint la Finish Line.
+//
+// Séparée de playTurnAssignMove (plutôt que de la modifier) pour ne
+// prendre AUCUN risque sur les tests déjà en place, qui continuent
+// à utiliser la version simple pour tester chaque brique isolément.
+function* playTurnAssignMoveWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+  const log = [];
+
+  // --- ASSIGN ---
+  if (car.status !== CAR_STATUS.OPERABLE) {
+    return { ok: false, reason: `${car.id} n'est pas opérable, ne peut pas être assignée.` };
+  }
+  if (car.movedThisRound) {
+    return { ok: false, reason: `${car.id} a déjà été assignée ce round.` };
+  }
+  log.push(`ASSIGN : dé ${dieValue} assigné à ${car.id}`);
+
+  // --- MOVE (avec progression des tuiles) ---
+  const moveResult = yield* moveCarWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options);
+  log.push(...moveResult.log);
+
+  if (!moveResult.ok) {
+    return { ok: false, reason: moveResult.reason, log };
+  }
+
+  if (moveResult.gameOver) {
+    // Victoire en cours de mouvement (entrée sur la Finish Line) :
+    // le tour s'arrête là, pas de tir, la partie est terminée.
+    car.movedThisRound = true;
+    return { ok: true, log, moveResult, gameOver: true, winner: moveResult.winner, reason: "finish-line" };
+  }
+
+  // --- BONUS ROAD (p.9) ---
+  // Bug corrigé : cette fonction ne l'appliquait jamais (applyRoadBonus
+  // existait, testée isolément, mais jamais câblée dans le vrai flux
+  // de tour — trouvé par Mayrik en relisant le rulebook). Ce n'est pas
+  // une étape séparée : juste une prolongation optionnelle du même
+  // mouvement, résolue AVANT le tir. Éligible si la voiture est restée
+  // sur route du DÉBUT à la FIN (moveResult.roadEligible, désormais
+  // correctement accumulé y compris à travers un changement de tuile).
+  // La valeur du dé Road vit sur roundState (pas state, qui est l'état
+  // de progression des tuiles reçu ici — cette fonction ne connaît pas
+  // le round) : l'appelant la transmet via options.roadDieValue. La
+  // présence de options.roadBonusPath EST la décision de l'utiliser —
+  // mêmes conventions que options.shootTarget. Réutilise
+  // moveCarWithProgression (pas applyRoadBonus, plus simple mais pas
+  // consciente des changements de tuile) pour hériter gratuitement de
+  // la gestion de sortie de plateau et de victoire par Finish Line,
+  // même sur ce bonus.
+  if (car.status === CAR_STATUS.OPERABLE && moveResult.roadEligible && options.roadDieValue && options.roadBonusPath) {
+    log.push(`BONUS ROAD disponible (dé ${options.roadDieValue}) — ${car.id} est restée sur route.`);
+    const bonusResult = yield* moveCarWithProgressionGen(state, car, options.roadDieValue, options.roadBonusPath, allCars, allChoppers, playerNames, options);
+    log.push(...bonusResult.log);
+    if (!bonusResult.ok) {
+      log.push(`Bonus Road non appliqué (chemin fourni invalide) : ${bonusResult.reason}`);
+    } else if (bonusResult.gameOver) {
+      car.movedThisRound = true;
+      return { ok: true, log, moveResult: bonusResult, gameOver: true, winner: bonusResult.winner, reason: "finish-line" };
+    }
+  }
+
+  // --- SHOOT (p.10) ---
+  const shootStep = yield* resolveShootStepGen(buildBoardFromProgressionState(state), allCars, car, { ...options, progressionState: state, allChoppers });
+  log.push(...shootStep.log);
+  const shootResult = shootStep.shootResult;
+
+  // --- END OF TURN (p.11) ---
+  car.movedThisRound = true;
+  log.push(`END OF TURN : ${car.id} ne pourra plus être assignée ce round`);
+
+  const chopperElim = eliminateCarsOnChoppers(allCars, allChoppers || []);
+  log.push(...chopperElim.log);
+
+  // Vérification finale des conditions de fin de partie (couvre une
+  // victoire déclenchée par le tir ou l'élimination-par-chopper qui
+  // vient d'avoir lieu, pas seulement par le mouvement).
+  const endCheck = checkGameEndConditions(state, allCars, allChoppers, playerNames);
+  log.push(...endCheck.log);
+
+  return { ok: true, log, moveResult, shootResult, gameOver: endCheck.gameOver, winner: endCheck.winner, reason: endCheck.reason };
+}
+
+function playTurnAssignMoveWithProgression(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+  return driveSync(playTurnAssignMoveWithProgressionGen(state, car, dieValue, chosenPath, allCars, allChoppers, playerNames, options));
+}
+
+
+// p.5-6 : équivalent de playTurnAssignMoveWithProgression, pour le
+// TOUT PREMIER mouvement d'une voiture pas encore sur le plateau
+// (car.col === null). Volontairement plus simple que sa contrepartie
+// normale — pas de progression de tuile ni de tir à gérer ici :
+//   - Sortie par l'avant DÈS l'entrée : impossible par construction
+//     (confirmé par Mayrik — le plateau de départ a déjà 24 colonnes
+//     en place, largement hors de portée d'un seul tour).
+//   - Tir : toujours refusé au round 1 (p.10), et l'entrée ne peut
+//     JAMAIS survenir après le round 1 (chaque joueur a 4 dés/round,
+//     donc toutes les voitures sont forcément entrées au plus tard en
+//     fin de round 1, confirmé par Mayrik) — donc jamais utile ici.
+// Le bonus dé Road, lui, reste pertinent (déjà géré par
+// moveCarEnteringBoard pour l'éligibilité) et s'applique normalement
+// une fois la voiture réellement sur le plateau.
+function* playTurnAssignEnterWithProgressionGen(state, car, dieValue, entryRow, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+  const log = [];
+
+  if (car.status !== CAR_STATUS.OPERABLE) {
+    return { ok: false, reason: `${car.id} n'est pas opérable, ne peut pas être assignée.` };
+  }
+  if (car.col !== null || car.row !== null) {
+    return { ok: false, reason: `${car.id} est déjà entrée sur le plateau.` };
+  }
+  log.push(`ASSIGN (entrée en jeu) : dé ${dieValue} assigné à ${car.id}`);
+
+  const board = buildBoardFromProgressionState(state);
+  const enterResult = yield* moveCarEnteringBoardGen(board, car, dieValue, entryRow, chosenPath, allCars, options);
+  log.push(...enterResult.log);
+
+  if (!enterResult.ok) {
+    return { ok: false, reason: enterResult.reason, log };
+  }
+
+  // --- BONUS ROAD (p.9) --- mêmes conventions que la fonction normale.
+  if (car.status === CAR_STATUS.OPERABLE && enterResult.roadEligible && options.roadDieValue && options.roadBonusPath) {
+    log.push(`BONUS ROAD disponible (dé ${options.roadDieValue}) — ${car.id} est restée sur route depuis son entrée.`);
+    const bonusResult = yield* moveCarWithProgressionGen(state, car, options.roadDieValue, options.roadBonusPath, allCars, allChoppers, playerNames, options);
+    log.push(...bonusResult.log);
+    if (!bonusResult.ok) {
+      log.push(`Bonus Road non appliqué (chemin fourni invalide) : ${bonusResult.reason}`);
+    } else if (bonusResult.gameOver) {
+      car.movedThisRound = true;
+      return { ok: true, log, moveResult: bonusResult, gameOver: true, winner: bonusResult.winner, reason: "finish-line" };
+    }
+  }
+
+  // --- END OF TURN (p.11) --- pas de tir possible au round 1, donc
+  // rien à faire entre le mouvement et cette étape.
+  car.movedThisRound = true;
+  log.push(`END OF TURN : ${car.id} ne pourra plus être assignée ce round`);
+
+  const chopperElim = eliminateCarsOnChoppers(allCars, allChoppers || []);
+  log.push(...chopperElim.log);
+
+  const endCheck = checkGameEndConditions(state, allCars, allChoppers, playerNames);
+  log.push(...endCheck.log);
+
+  return { ok: true, log, moveResult: enterResult, gameOver: endCheck.gameOver, winner: endCheck.winner, reason: endCheck.reason };
+}
+
+function playTurnAssignEnterWithProgression(state, car, dieValue, entryRow, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+  return driveSync(playTurnAssignEnterWithProgressionGen(state, car, dieValue, entryRow, chosenPath, allCars, allChoppers, playerNames, options));
+}
+
+// -----------------------------------------------------------------
+// 13. COAST (p.8) — ÉTAPE 4 DU MOTEUR DE TOUR
+// -----------------------------------------------------------------
+// Précisé par Mayrik : le Coast N'EST PAS une étape de tour en plus —
+// c'est une VARIANTE d'ASSIGN qui réactive une voiture déjà activée
+// ce round, au lieu d'en assigner une nouvelle. Règles :
+//   - Impossible si le joueur a encore une voiture OPÉRABLE non
+//     activée ce round (p.8 : "You may NOT assign a die to coast if
+//     you have an operable car you have not moved").
+//   - La voiture à coaster doit avoir déjà été activée ce round
+//     (movedThisRound === true) — sinon ce n'est pas un coast, c'est
+//     une activation normale.
+//   - Le dé assigné compte TOUJOURS comme 1, quelle que soit sa
+//     valeur réelle affichée.
+//   - Aucune commande ne peut être activée sur un tour de coast (p.8).
+//   - Maximum 2 coasts par voiture par round (donc 3 activations
+//     possibles au total par round pour une même voiture : 1 normale
+//     + 2 coasts).
+//   - Le reste du tour (Move, Shoot, End of turn) se déroule ensuite
+//     normalement, comme pour playTurnAssignMove.
+
+// Validation commune à playTurnCoast et playTurnCoastWithProgression
+// (les 4 conditions d'éligibilité au Coast) — évite de dupliquer ce
+// bloc entre les deux fonctions.
+function validateCoastEligibility(car, allCars, options) {
+  if (car.status !== CAR_STATUS.OPERABLE) {
+    return { ok: false, reason: `${car.id} n'est pas opérable, ne peut pas coaster.` };
+  }
+  if (!car.movedThisRound) {
+    return { ok: false, reason: `${car.id} n'a pas encore été activée ce round — impossible de la coaster (ce serait une activation normale).` };
+  }
+  if ((car.coastCount || 0) >= 2) {
+    return { ok: false, reason: `${car.id} a déjà coasté 2 fois ce round (maximum atteint).` };
+  }
+
+  // p.8 : le coast n'est autorisé que si TOUTES les autres voitures
+  // opérables du même propriétaire ont déjà été activées ce round.
+  const ownerOtherCars = allCars.filter((c) => c.owner === car.owner && c !== car);
+  const hasUnmovedOperableCar = ownerOtherCars.some(
+    (c) => c.status === CAR_STATUS.OPERABLE && !c.movedThisRound
+  );
+  if (hasUnmovedOperableCar) {
+    return { ok: false, reason: `Coast impossible : ${car.owner} a encore une voiture opérable non activée ce round.` };
+  }
+
+  // p.8 : "You may NOT assign a die to a command on a turn you are
+  // coasting." — refus explicite si une commande a été glissée dans
+  // les options (Drift notamment, seul flag de commande indépendant
+  // de la valeur du dé — Nitro est neutralisé de fait puisque le dé
+  // de coast vaut toujours 1, quel que soit ce qui serait ajouté).
+  if (options.driftAvailable) {
+    return { ok: false, reason: "Impossible d'activer une commande (Drift) pendant un coast." };
+  }
+
+  return { ok: true };
+}
+
+function playTurnCoast(tile, car, chosenPath, allCars, allChoppers, options = {}) {
+  const log = [];
+
+  const eligibility = validateCoastEligibility(car, allCars, options);
+  if (!eligibility.ok) {
+    return eligibility;
+  }
+
+  const coastNumber = (car.coastCount || 0) + 1;
+  log.push(`COAST : ${car.id} réactivée (coast n°${coastNumber} ce round) — dé compté comme 1`);
+
+  // --- MOVE --- (toujours avec une valeur de 1, quelle que soit la
+  // valeur réelle du dé assigné)
+  const moveResult = moveCar(tile, car, 1, chosenPath, allCars, options);
+  log.push(...moveResult.log);
+
+  // --- SHOOT ---
+  const shootStep = resolveShootStep(tile, allCars, car, options);
+  log.push(...shootStep.log);
+  const shootResult = shootStep.shootResult;
+
+  // --- END OF TURN ---
+  car.coastCount = coastNumber;
+  log.push(`END OF TURN : ${car.id} a coasté ${coastNumber} fois ce round`);
+
+  const chopperElim = eliminateCarsOnChoppers(allCars, allChoppers || []);
+  log.push(...chopperElim.log);
+
+  return { ok: true, log, moveResult, shootResult };
+}
+
+// -----------------------------------------------------------------
+// 13bis. COAST — VERSION AVEC PROGRESSION
+// -----------------------------------------------------------------
+// Même principe que playTurnAssignMoveWithProgression : toutes les
+// vérifications de playTurnCoast restent identiques, seul le MOVE
+// passe par moveCarWithProgression, et un checkGameEndConditions()
+// final ferme le tour.
+function* playTurnCoastWithProgressionGen(state, car, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+  const log = [];
+
+  const eligibility = validateCoastEligibility(car, allCars, options);
+  if (!eligibility.ok) {
+    return eligibility;
+  }
+
+  const coastNumber = (car.coastCount || 0) + 1;
+  log.push(`COAST : ${car.id} réactivée (coast n°${coastNumber} ce round) — dé compté comme 1`);
+
+  // --- MOVE (avec progression des tuiles, toujours avec une valeur
+  // de 1 quelle que soit la valeur réelle du dé assigné) ---
+  const moveResult = yield* moveCarWithProgressionGen(state, car, 1, chosenPath, allCars, allChoppers, playerNames, options);
+  log.push(...moveResult.log);
+
+  if (!moveResult.ok) {
+    return { ok: false, reason: moveResult.reason, log };
+  }
+
+  if (moveResult.gameOver) {
+    car.coastCount = coastNumber;
+    return { ok: true, log, moveResult, gameOver: true, winner: moveResult.winner, reason: "finish-line" };
+  }
+
+  // --- SHOOT ---
+  const shootStep = yield* resolveShootStepGen(buildBoardFromProgressionState(state), allCars, car, { ...options, progressionState: state, allChoppers });
+  log.push(...shootStep.log);
+  const shootResult = shootStep.shootResult;
+
+  // --- END OF TURN ---
+  car.coastCount = coastNumber;
+  log.push(`END OF TURN : ${car.id} a coasté ${coastNumber} fois ce round`);
+
+  const chopperElim = eliminateCarsOnChoppers(allCars, allChoppers || []);
+  log.push(...chopperElim.log);
+
+  const endCheck = checkGameEndConditions(state, allCars, allChoppers, playerNames);
+  log.push(...endCheck.log);
+
+  return { ok: true, log, moveResult, shootResult, gameOver: endCheck.gameOver, winner: endCheck.winner, reason: endCheck.reason };
+}
+
+function playTurnCoastWithProgression(state, car, chosenPath, allCars, allChoppers, playerNames, options = {}) {
+  return driveSync(playTurnCoastWithProgressionGen(state, car, chosenPath, allCars, allChoppers, playerNames, options));
+}
+
+
+// -----------------------------------------------------------------
+// Rotation à UN tour à la fois (pas "3 tours d'affilée par joueur") :
+// "The player on your left takes the next turn" (p.11). Un round se
+// termine quand chaque joueur ENCORE EN JEU a pris 3 tours (p.8).
+// Un joueur est "out of game" (p.11) si toutes ses voitures sont
+// éliminées ou inopérables — il ne joue plus aucun tour, mais reste
+// dans l'ordre de rotation (sauté silencieusement).
+//
+// Les voitures/choppers eux-mêmes ne sont PAS stockés dans l'état de
+// round : on les retrouve via allCars/allChoppers en filtrant sur
+// owner === nom du joueur (même logique déjà utilisée par
+// playTurnCoast pour retrouver "les autres voitures du joueur").
+
+// p.9 (précisé par Mayrik, pas explicite dans le rulebook transcrit
+// jusqu'ici) : chaque joueur lance un pool de 4 dés de mouvement au
+// début de CHAQUE round — jamais reporté d'un round à l'autre. Les 3
+// tours du round consomment normalement 3 de ces dés (un par Assign,
+// p.8) ; le 4e reste disponible pour UNE Command au choix pendant le
+// round (Repair/Nitro/Drift/Airstrike, voir resolveXCommand) — perdu
+// s'il n'est pas utilisé. injectedValues permet un tirage
+// déterministe en test : { "Alice": [3,6,1,4], ... }.
+function rollDicePool(playerNames, injectedValues = null) {
+  const pool = {};
+  for (const name of playerNames) {
+    pool[name] =
+      injectedValues && injectedValues[name]
+        ? [...injectedValues[name]]
+        : Array.from({ length: 4 }, () => rollMovementDie());
+  }
+  return pool;
+}
+
+// Retire et retourne LE dé de plus forte valeur du pool d'un joueur
+// (utile pour l'IA — "le dé de plus forte valeur disponible" du
+// document). Retourne null si le pool de ce joueur est vide.
+function drawHighestDieFromPool(dicePool, playerName) {
+  const dice = dicePool[playerName];
+  if (!dice || dice.length === 0) return null;
+  let bestIdx = 0;
+  for (let i = 1; i < dice.length; i++) if (dice[i] > dice[bestIdx]) bestIdx = i;
+  return dice.splice(bestIdx, 1)[0];
+}
+
+// Retire et retourne UNE occurrence d'une valeur précise du pool d'un
+// joueur (ex. le 6 exact requis par Repair, ou un dé 1-3 pour Nitro).
+// Retourne null si cette valeur n'est pas disponible dans le pool.
+function drawSpecificDieFromPool(dicePool, playerName, value) {
+  const dice = dicePool[playerName];
+  if (!dice) return null;
+  const idx = dice.indexOf(value);
+  if (idx === -1) return null;
+  return dice.splice(idx, 1)[0];
+}
+
+function createRoundState(playerNames, injectedDiceValues = null) {
+  return {
+    playerOrder: [...playerNames], // ordre de table, fixe pour toute la partie
+    turnsThisRound: Object.fromEntries(playerNames.map((n) => [n, 0])),
+    currentPlayerIndex: 0,
+    roundStartIndex: 0, // joueur qui a démarré CE round (celui qui tire le dé Road)
+    roundNumber: 1,
+    roadDie: null, // tiré au début de chaque round, remis à null à chaque nouveau round
+    dicePool: rollDicePool(playerNames, injectedDiceValues), // pool de 4 dés par joueur, relancé à chaque round (voir advanceTurn)
+    commandUsedThisRound: Object.fromEntries(playerNames.map((n) => [n, false])) // 1 seule Command par joueur par round
+  };
+}
+
+function getCurrentPlayer(state) {
+  return state.playerOrder[state.currentPlayerIndex];
+}
+
+// p.11 : un joueur est hors jeu si TOUTES ses voitures sont éliminées
+// ou inopérables (les inopérables restent sur le plateau mais ne
+// peuvent plus jouer — il en va de même pour leur propriétaire).
+function isPlayerOutOfGame(playerName, allCars) {
+  const playerCars = allCars.filter((c) => c.owner === playerName);
+  if (playerCars.length === 0) return false; // aucune voiture trouvée : cas défensif, on ne le considère pas hors jeu
+  return playerCars.every(
+    (c) => c.status === CAR_STATUS.ELIMINATED || c.status === CAR_STATUS.INOPERABLE
+  );
+}
+
+// p.9 : le dé Road n'est tiré qu'une fois par round, par le 1er
+// joueur. Appeler cette fonction à chaque tour ne le retire PAS s'il
+// est déjà tiré ce round (idempotent).
+function ensureRoadDieRolled(state, forcedValue = null) {
+  if (state.roadDie !== null) {
+    return { log: [], value: state.roadDie };
+  }
+  const value = rollRoadDie(forcedValue);
+  state.roadDie = value;
+  return { log: [`Dé Road tiré pour le round ${state.roundNumber} : ${value}`], value };
+}
+
+// À appeler une fois le tour du joueur courant terminé (qu'il ait
+// joué normalement ou coasté). Incrémente son compteur de tours,
+// avance au joueur suivant ENCORE EN JEU qui n'a pas fini ses 3 tours,
+// et détecte/le passage au round suivant si plus personne ne peut
+// jouer ce round.
+function advanceTurn(state, allCars) {
+  const log = [];
+  const currentPlayer = getCurrentPlayer(state);
+  state.turnsThisRound[currentPlayer] = (state.turnsThisRound[currentPlayer] || 0) + 1;
+  log.push(`${currentPlayer} a joué ${state.turnsThisRound[currentPlayer]} tour(s) ce round.`);
+
+  const n = state.playerOrder.length;
+  let foundNext = false;
+
+  // Cherche, dans l'ordre de table à partir du joueur suivant, le
+  // premier joueur encore en jeu qui n'a pas fini ses 3 tours. Le
+  // dernier pas (step = n) revient sur le joueur courant lui-même :
+  // ça couvre naturellement le cas d'un seul joueur encore en jeu qui
+  // n'a pas fini ses 3 tours, sans code séparé.
+  for (let step = 1; step <= n; step++) {
+    const idx = (state.currentPlayerIndex + step) % n;
+    const candidate = state.playerOrder[idx];
+    if (isPlayerOutOfGame(candidate, allCars)) continue;
+    if ((state.turnsThisRound[candidate] || 0) >= 3) continue;
+    state.currentPlayerIndex = idx;
+    foundNext = true;
+    break;
+  }
+
+  if (!foundNext) {
+    log.push(`Fin du round ${state.roundNumber}.`);
+    for (const p of state.playerOrder) state.turnsThisRound[p] = 0;
+    // Bug corrigé (détecté par simulateRandomGame, jamais couvert par
+    // un test unitaire car aucun ne traversait une frontière de round
+    // en le vérifiant) : movedThisRound et coastCount sont des
+    // compteurs PAR ROUND (leurs noms et les commentaires du code le
+    // disaient déjà) mais n'étaient jamais remis à zéro nulle part —
+    // une voiture ne pouvait donc être assignée qu'UNE SEULE FOIS
+    // dans toute la partie, jamais une fois par round comme prévu.
+    for (const c of allCars) {
+      c.movedThisRound = false;
+      c.coastCount = 0;
+    }
+    state.roundNumber += 1;
+    state.roadDie = null;
+    // Nouveau pool de 4 dés par joueur pour ce nouveau round (précisé
+    // par Mayrik) — jamais reporté, les dés non utilisés du round
+    // précédent sont simplement perdus.
+    state.dicePool = rollDicePool(state.playerOrder);
+    state.commandUsedThisRound = Object.fromEntries(state.playerOrder.map((p) => [p, false]));
+
+    // p.11 : "pass the road die to the player on your left" — "your"
+    // fait référence au 1er joueur DE CE ROUND (roundStartIndex), pas
+    // au dernier joueur à avoir pris un tour. Le prochain 1er joueur
+    // est donc celui après roundStartIndex, encore en jeu.
+    for (let step = 1; step <= n; step++) {
+      const idx = (state.roundStartIndex + step) % n;
+      if (!isPlayerOutOfGame(state.playerOrder[idx], allCars)) {
+        state.currentPlayerIndex = idx;
+        state.roundStartIndex = idx;
+        break;
+      }
+    }
+    log.push(`Nouveau round ${state.roundNumber}, premier joueur : ${getCurrentPlayer(state)}`);
+  }
+
+  return { log };
+}
+
+// Dé de mouvement à 6 faces classique (1-6), tiré 4 fois par joueur
+// au début de chaque round pour constituer son pool (voir
+// rollDicePool ci-dessus, p.9). injectedValue permet un tirage
+// déterministe en test.
+function rollMovementDie(injectedValue = null) {
+  return injectedValue || DICE_FACES.MOVEMENT[Math.floor(Math.random() * DICE_FACES.MOVEMENT.length)];
+}
+
+
+if (typeof module !== "undefined" && module.exports) {
+module.exports = {
+  setDiceObserver,
+  setMovesObserver,
+
+  driveSync,
+  isPresentationEvent,
+  PRESENTATION_EVENTS,
+  TERRAIN,
+  MOVE_COST,
+  CAR_SIZE,
+  CAR_STATUS,
+  DIRECTIONS,
+  DICE_FACES,
+  TOKEN_TYPES,
+  DAMAGE_TOKEN_COMPOSITION,
+  HAZARD_TYPES,
+  HAZARD_BEHAVIOR,
+  HAZARD_TOKEN_COMPOSITION,
+  drawHazardToken,
+  resolveHazard,
+  instantiateTile,
+  populateTileHazards,
+  groupTilesByNumber,
+  setupTileProgressionFromRawData,
+  createTestTile,
+  createBoard,
+  createTileProgressionState,
+  createFinishLineTile,
+  buildBoardFromProgressionState,
+  checkGameEndConditions,
+  advanceBoardOnFrontExit,
+  moveCarWithProgression,
+  getSpace,
+  createCar,
+  createCarOffBoard,
+  createChopper,
+  placeChopperAirstrike,
+  eliminateCarsOnChoppers,
+  getFrontArc,
+  getRearArc,
+  getCarAt,
+  isChopperOccupied,
+  enterAdjacentSpace,
+  moveCar,
+  moveCarEnteringBoard,
+  rollSlamDie,
+  rollDirectionDie,
+  rollStuntDie,
+  rollShootingDie,
+  resolveShoot,
+  forceMoveOneSpace,
+  resolveSlam,
+  rollSlamDice,
+  finalizeSlam,
+  // Versions génératrices (chantier "chaîne mouvement", voir
+  // docs/rewrite-plan.md) — permettent à un appelant (turn-executor.js)
+  // de mettre en pause la résolution exactement au point de relance
+  // d'un Slam, quand la voiture plus grande appartient à un joueur
+  // humain (options.isHumanOwner). Les fonctions synchrones ci-dessus
+  // restent le point d'entrée normal pour tout le reste (tests,
+  // self-play, tour humain propre) — comportement strictement inchangé.
+  moveCarWithProgressionGen,
+  moveCarEnteringBoardGen,
+  moveCarGen,
+  enterAdjacentSpaceGen,
+  resolveSlamGen,
+  resolveShootGen,
+  resolveShootStepGen,
+  applyDamageGen,
+  resolveDamageTokenGen,
+  playTurnAssignMoveWithProgressionGen,
+  playTurnAssignEnterWithProgressionGen,
+  playTurnCoastWithProgressionGen,
+  drawDamageToken,
+  resolveDamageToken,
+  applyDamage,
+  repairCar,
+  resolveAirstrikeCommand,
+  resolveAirstrikeShoot,
+  resolveNitroCommand,
+  resolveDriftCommand,
+  resolveRepairCommand,
+  playTurnAssignMove,
+  playTurnAssignMoveWithProgression,
+  playTurnAssignEnterWithProgression,
+  playTurnCoast,
+  playTurnCoastWithProgression,
+  rollRoadDie,
+  createRoundState,
+  rollDicePool,
+  drawHighestDieFromPool,
+  drawSpecificDieFromPool,
+  getCurrentPlayer,
+  isPlayerOutOfGame,
+  ensureRoadDieRolled,
+  advanceTurn,
+  rollMovementDie,
+  getForwardDelta,
+  getBackwardDelta,
+  getDirectionDelta,
+  computeAiStepCost,
+  isAiHiddenHazard,
+  findAiAirstrikePlacement,
+  findFrontmostCar
+};
+}
