@@ -27,7 +27,7 @@
 const {
   createTestTile, createCar, CAR_SIZE, HAZARD_TYPES,
   moveCar, moveCarGen, resolveShoot, resolveShootGen,
-  isPresentationEvent, TOKEN_TYPES
+  isPresentationEvent, TOKEN_TYPES, getSpace
 } = require("./engine.js");
 
 function section(title) { console.log("\n=== " + title + " ==="); }
@@ -204,5 +204,70 @@ try {
   erreurTir = e;
 }
 console.log("Même chose pour un tir synchrone (attendu true) :", erreurTir === null && !!resTir && resTir.hit === true);
+
+
+// -----------------------------------------------------------------
+section("Test 6 — Épave : le véhicule qui arrive est TOUJOURS le TOP du dé de slam");
+
+// Règle p.7, citée par Mayrik : « Place the moving road vehicle on top
+// of the wreck and resolve the slam. » Deux chemins de code distincts
+// mènent là, et les deux doivent donner le même ordre :
+//   a) une épave qui APPARAÎT sous le véhicule (jeton Wreck révélé) —
+//      cas explicite de resolveHazardGen ;
+//   b) une épave DÉJÀ PRÉSENTE depuis un tour précédent, qui n'est
+//      qu'un occupant ordinaire trouvé par getCarAt.
+
+// (a) jeton Wreck révélé à l'arrivée
+tile = createTestTile(8, 6);
+const rouleur = createCar("IA", CAR_SIZE.MEDIUM, 3, 3);
+cars = [rouleur];
+getSpace(tile, 4, 3).hazard = HAZARD_TYPES.WRECK;
+
+const genWreck = moveCarGen(tile, rouleur, 1, ["front"], cars, {
+  forcedDice: { slam: "top", direction: "front-left" },
+  emitEvents: true
+});
+const wreck = collecter(genWreck);
+const evtDesWreck = wreck.evenements.find((e) => e.type === "slam-dice");
+const epaveCreee = cars.find((c) => c.isWreck);
+console.log("Une épave a bien été créée (attendu true) :", !!epaveCreee);
+console.log("Le véhicule qui arrive est le TOP (attendu true) :", !!evtDesWreck && evtDesWreck.topCar === rouleur);
+console.log("L'épave est le BOTTOM (attendu true) :", !!evtDesWreck && evtDesWreck.bottomCar === epaveCreee);
+console.log("Un dé 'top' déplace donc bien le véhicule, pas l'épave (attendu true) :",
+  !!evtDesWreck && evtDesWreck.movingCar === rouleur);
+
+// (b) épave déjà là, rencontrée comme occupant ordinaire
+tile = createTestTile(8, 6);
+const rouleur2 = createCar("IA", CAR_SIZE.MEDIUM, 3, 3);
+const epaveExistante = createCar(null, CAR_SIZE.SMALL, 4, 3);
+epaveExistante.isWreck = true;
+cars = [rouleur2, epaveExistante];
+
+const genExistante = moveCarGen(tile, rouleur2, 1, ["front"], cars, {
+  forcedDice: { slam: "top", direction: "front-left" },
+  emitEvents: true
+});
+const existante = collecter(genExistante);
+const evtDes2 = existante.evenements.find((e) => e.type === "slam-dice");
+console.log("Une épave déjà présente déclenche bien un slam (attendu true) :", !!evtDes2);
+console.log("Le véhicule qui arrive est le TOP, là aussi (attendu true) :", !!evtDes2 && evtDes2.topCar === rouleur2);
+console.log("L'épave est le BOTTOM, là aussi (attendu true) :", !!evtDes2 && evtDes2.bottomCar === epaveExistante);
+
+// Éligibilité à la relance : l'épave compte comme une petite voiture.
+console.log("Medium contre épave Small : relance possible, au plus grand (attendu true) :",
+  !!evtDes2 && evtDes2.largerCar === rouleur2 && evtDes2.smallerCar === epaveExistante);
+
+const tile3 = createTestTile(8, 6);
+const petit = createCar("IA", CAR_SIZE.SMALL, 3, 3);
+const epave3 = createCar(null, CAR_SIZE.SMALL, 4, 3);
+epave3.isWreck = true;
+const gen3 = moveCarGen(tile3, petit, 1, ["front"], [petit, epave3], {
+  forcedDice: { slam: "top", direction: "front-left" },
+  emitEvents: true
+});
+const petitContreEpave = collecter(gen3);
+const evtDes3 = petitContreEpave.evenements.find((e) => e.type === "slam-dice");
+console.log("Small contre épave Small : aucune relance possible (attendu true) :",
+  !!evtDes3 && evtDes3.largerCar === null && evtDes3.smallerCar === null);
 
 console.log("\n=== Fin des tests dédiés (événements de présentation, 4b) ===");

@@ -191,6 +191,58 @@ async function main() {
   console.log("Au chargement suivant, la vitesse mémorisée est restaurée (attendu true) :",
     win5.currentPaceSpeed() === "fast" && win5.eval("PACE_MS") === 200);
 
+  section("Test 6 — Empilement : le véhicule qui arrive se dessine PAR-DESSUS celui déjà là");
+
+  // Bug signalé par Mayrik : depuis que les pauses de rythme rendent
+  // l'empilement visible, l'ordre de dessin suivait l'ordre arbitraire
+  // de G.allCars — tantôt l'un, tantôt l'autre par-dessus.
+  const dom6 = makeDom(true);
+  const win6 = dom6.window;
+  win6.newGame();
+  const G6 = win6.eval("G");
+  G6.allCars.length = 0;
+  const dejaLa = win6.createCar(HUMAN, CAR_SIZE.LARGE, 4, 3);
+  const entrant = win6.createCar(OPPONENT, CAR_SIZE.SMALL, 4, 3); // même case : empilement
+  G6.allCars.push(entrant, dejaLa); // ordre du tableau volontairement DÉFAVORABLE
+
+  const ordreDessin = () => {
+    const images = [...win6.document.getElementById("board").querySelectorAll("image")]
+      .map((el) => el.getAttribute("href") || "");
+    return {
+      dejaLa: images.findIndex((h) => h.includes(win6.carImagePath(dejaLa))),
+      entrant: images.findIndex((h) => h.includes(win6.carImagePath(entrant)))
+    };
+  };
+
+  win6.eval("vehiculeEntrant = null");
+  win6.render();
+  const avant = ordreDessin();
+  console.log("Les deux véhicules sont bien dessinés (attendu true) :", avant.dejaLa >= 0 && avant.entrant >= 0);
+  // Sans cette vérification, le test passerait tout seul : il faut que
+  // l'ordre brut de G.allCars soit bien le MAUVAIS au départ.
+  console.log("Sans repère, l'ordre brut du tableau met le mauvais au-dessus (attendu true) :", avant.dejaLa > avant.entrant);
+
+  // Le moteur annonce l'arrivée : c'est ce seul événement qui décide.
+  win6.noterVehiculeEntrant({ type: "step", car: entrant });
+  win6.render();
+  const apres = ordreDessin();
+  console.log("Le véhicule arrivé est dessiné en dernier, donc au-dessus (attendu true) :",
+    apres.entrant > apres.dejaLa);
+
+  // Slam en chaîne : la voiture percutée devient à son tour l'entrante.
+  win6.noterVehiculeEntrant({ type: "step", car: dejaLa });
+  win6.render();
+  const inverse = ordreDessin();
+  console.log("L'ordre suit le dernier arrivé, sans cas particulier (attendu true) :",
+    inverse.dejaLa > inverse.entrant);
+
+  // Le moteur peut aussi le dire explicitement au moment des dés.
+  win6.noterVehiculeEntrant({ type: "slam-dice", topCar: entrant, bottomCar: dejaLa });
+  win6.render();
+  const parLesDes = ordreDessin();
+  console.log("Le topCar annoncé avec les dés de slam fait foi (attendu true) :",
+    parLesDes.entrant > parLesDes.dejaLa);
+
   console.log("\n=== Fin des tests dédiés (rythme des animations, 4a) ===");
 }
 
