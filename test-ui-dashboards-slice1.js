@@ -444,21 +444,30 @@ const boardEl3 = dom.window.document.getElementById("board");
 const rerollImgs = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-reroll.webp"));
 const slamFaceImgs = [...boardEl3.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes(`die-fx-slam-${ctx12.slamRoll}.webp`));
 const dirFaceImgs = [...boardEl3.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes("die-fx-direction-"));
-const noImgsSlam = [...boardEl3.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("marker-yes.webp"));
+const yesImgs12 = [...boardEl3.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes("marker-yes.webp"));
 
 console.log("marker-reroll toujours affiché sur la case du Slam (attendu true) :", rerollImgs.length === 1);
 console.log("La face du dé Slam est affichée UNE FOIS, sur la case de DESTINATION (attendu true) :", slamFaceImgs.length === 1);
-console.log("...et n'est PAS cliquable (retour de Mayrik : marker-reroll suffit) (attendu true) :", slamFaceImgs[0] && slamFaceImgs[0].getAttribute("pointer-events") === "none" && !slamFaceImgs[0].classList.contains("clickable"));
+// Retour de Mayrik : c'est désormais CE dé qui accepte le résultat —
+// en jouant vite, le réflexe est de cliquer le dé visible sur la case
+// de destination plutôt qu'un marqueur posé ailleurs.
+console.log("...et il est CLIQUABLE (il accepte le résultat) (attendu true) :", !!slamFaceImgs[0] && slamFaceImgs[0].classList.contains("clickable"));
 const slamFaceCenter = win.cellCenter(destCol, destRow);
 const rerollCenter = win.cellCenter(ctx12.topCar.col, ctx12.topCar.row);
 console.log("...et cette case de destination est bien DIFFÉRENTE de la case du Slam (attendu true) :",
   Math.abs(slamFaceCenter.cx - rerollCenter.cx) > 1 || Math.abs(slamFaceCenter.cy - rerollCenter.cy) > 1);
 console.log("Le dé Direction n'est PAS affiché (retour de Mayrik) (attendu true) :", dirFaceImgs.length === 0);
-console.log("marker-yes (pas marker-no, retour de Mayrik) affiché derrière le véhicule qui décide (attendu true) :", noImgsSlam.length === 1);
+console.log("Plus aucun marker-yes sur le plateau (retiré, retour de Mayrik) (attendu true) :", yesImgs12.length === 0);
+// La case sous le dé est mise en surbrillance comme n'importe quelle
+// case de destination de mouvement, et cliquer dessus fait la même
+// chose que cliquer le dé.
+const casesSlam12 = win.highlightedCells();
+console.log("La case de destination est proposée comme case cliquable (attendu true) :",
+  casesSlam12.length === 1 && casesSlam12[0].col === destCol && casesSlam12[0].row === destRow);
 
-click(dom, noImgsSlam[0]);
+click(dom, slamFaceImgs[0]);
 sel = win.eval("sel");
-console.log("Cliquer marker-yes a bien répondu 'j'accepte ce résultat' (pause terminée) (attendu true) :", !sel.pendingHumanSlam);
+console.log("Cliquer le dé Slam a bien répondu 'j'accepte ce résultat' (pause terminée) (attendu true) :", !sel.pendingHumanSlam);
 
 section("Test 13 — Airstrike : le chopper s'affiche à sa position choisie pendant l'arc de tir");
 
@@ -820,8 +829,15 @@ const vehicleImg26 = vehicleImgs26[vehicleImgs26.length - 1]; // la dernière = 
 console.log("Aucun attribut opacity sur le véhicule inopérable (attendu true) :", vehicleImg26.getAttribute("opacity") === null);
 console.log("La rotation 180° est bien conservée (attendu true) :", (vehicleImg26.getAttribute("transform") || "").includes("rotate(180"));
 
-section("Test 27 — Slam : marker-yes se décale vers rear-left si le dé Direction pointe pile sur la case arrière");
+section("Test 27 — Slam : le dé Direction pointant sur la case arrière ne pose plus aucun problème de superposition");
 
+// Ce test vérifiait autrefois que marker-yes se décalait vers
+// rear-left quand le dé Direction pointait pile sur la case arrière,
+// pour ne pas recouvrir le dé Slam. marker-yes ayant été retiré
+// (retour de Mayrik : on clique le dé, pas un marqueur posé ailleurs),
+// la superposition ne peut tout simplement plus se produire — et c'est
+// une variante de placement en moins à maintenir. On vérifie donc
+// qu'elle a bien disparu, et que le cas reste jouable.
 dom = makeDom();
 win = dom.window;
 win.newGame();
@@ -840,15 +856,23 @@ sel.step = "slam-reroll-choice";
 win.render();
 
 const boardEl27 = dom.window.document.getElementById("board");
-const rearArc27 = win.getRearArc(largerCar27);
-const rearLeft27 = rearArc27.find((a) => a.name === "rear-left");
-const yesImg27 = [...boardEl27.querySelectorAll("image.clickable")].find((el) => el.getAttribute("href").includes("marker-yes.webp"));
+const yesImg27 = [...boardEl27.querySelectorAll("image")].filter((el) => el.getAttribute("href").includes("marker-yes.webp"));
+console.log("Aucun marker-yes, donc aucune superposition possible (attendu true) :", yesImg27.length === 0);
+
+const slamImg27 = [...boardEl27.querySelectorAll("image.clickable")].filter((el) => el.getAttribute("href").includes("die-fx-slam"));
 const MARKER_SIZE27 = win.eval("MARKER_ICON_SIZE");
-const yesCenterX27 = parseFloat(yesImg27.getAttribute("x")) + MARKER_SIZE27 / 2;
-const yesCenterY27 = parseFloat(yesImg27.getAttribute("y")) + MARKER_SIZE27 / 2;
-const rearLeftCenter27 = win.cellCenter(rearLeft27.col, rearLeft27.row);
-console.log("marker-yes s'est bien décalé vers rear-left quand le dé Direction pointe sur 'rear' (attendu true) :",
-  Math.abs(yesCenterX27 - rearLeftCenter27.cx) < 1 && Math.abs(yesCenterY27 - rearLeftCenter27.cy) < 1);
+const delta27 = win.getDirectionDelta("rear", smallerCar27.col, smallerCar27.row);
+const rearCenter27 = win.cellCenter(smallerCar27.col + delta27.dCol, smallerCar27.row + delta27.dRow);
+console.log("Le dé Slam est affiché une seule fois, sur la case arrière (attendu true) :",
+  slamImg27.length === 1 &&
+  Math.abs(parseFloat(slamImg27[0].getAttribute("x")) + MARKER_SIZE27 / 2 - rearCenter27.cx) < 1 &&
+  Math.abs(parseFloat(slamImg27[0].getAttribute("y")) + MARKER_SIZE27 / 2 - rearCenter27.cy) < 1);
+
+const casesSlam27 = win.highlightedCells();
+console.log("Cette case arrière est bien proposée en surbrillance (attendu true) :",
+  casesSlam27.length === 1 &&
+  casesSlam27[0].col === smallerCar27.col + delta27.dCol &&
+  casesSlam27[0].row === smallerCar27.row + delta27.dRow);
 
 section("Test 28 — Bouton IA : au-dessus de tout, coins arrondis partout, pas de transparence pendant l'animation");
 
