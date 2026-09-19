@@ -8826,8 +8826,30 @@ function attendreAnimations() {
 
 // Le battement lui-même : le temps mort volontaire entre deux étapes,
 // une fois l'écran stabilisé.
-function attendreBattement() {
-  return new Promise((r) => setTimeout(r, PACE_MS));
+//
+// ATTENTION — il existe DEUX natures d'attente, et une seule est
+// réglable (retour de Mayrik après plusieurs parties) :
+//
+//   - entre deux étapes que la MACHINE enchaîne toute seule (un pas de
+//     plus, des dés qui tombent, un déplacement induit), le battement
+//     sert à comprendre ce qui se passe : c'est PACE_MS, réglé par les
+//     boutons Lent/Moyen/Rapide, et il est jugé bon tel quel ;
+//
+//   - entre la fin d'une scène et le moment où le JOUEUR reprend la
+//     main (surbrillance des destinations, question de relance de
+//     Slam), il n'y a rien à comprendre : c'est une latence. En dessous
+//     de 0,1 s, l'utilisateur a le sentiment que c'est son geste qui
+//     agit ; au-delà, il a le sentiment d'attendre la machine. D'où
+//     zéro ci-dessous.
+//
+// La séparation existait déjà en creux dans le fichier : apresBattement()
+// n'est appelé QUE machine→machine, gelerPendantLaScene() QUE
+// machine→joueur. Elles ne partagent simplement plus la même valeur.
+const BATTEMENT_RENDU_MAIN_MS = 0;
+
+function attendreRetourDeMain() {
+  if (BATTEMENT_RENDU_MAIN_MS <= 0) return null;
+  return new Promise((r) => setTimeout(r, BATTEMENT_RENDU_MAIN_MS));
 }
 
 // Enchaîne `suite` APRÈS la fin des animations en vol, PUIS le
@@ -8873,11 +8895,111 @@ function gelerPendantLaScene() {
   if (!attente) return false;
   G.uiLocked = true;
   appliquerVoileDeGel();
-  attente.then(attendreBattement).then(() => {
+  attente.then(attendreRetourDeMain).then(() => {
     G.uiLocked = false;
     render();
   });
   return true;
+}
+
+// --- SCÈNE ÉCOURTABLE PAR UN TAP -----------------------------------
+// Deux natures d'affichage bien distinctes dans la fenêtre
+// Illustration, et une seule est concernée ici :
+//
+//   - SCÈNE FINIE (révélation d'un jeton de dégât) : le joueur n'a
+//     rien à décider, ça dure le temps que ça dure. C'est long par
+//     construction — il faut le temps de lire le jeton — donc
+//     écourtable.
+//   - BOUCLE (à venir : Slam en attente de relance, tir en attente de
+//     cible) : ça tourne pendant que le joueur choisit sur le plateau,
+//     sans durée propre. Rien à écourter, et l'interface doit rester
+//     vive puisqu'on attend justement un clic. Une boucle n'appellera
+//     donc jamais ce qui suit.
+//
+// Écourter ne fait RIEN perdre : le moteur a déjà tout résolu quand la
+// scène se joue (le rythme est purement visuel), et l'état final de la
+// révélation est persistant — le jeton reste face visible sous le
+// dashboard tant que ses effets s'appliquent.
+//
+// Seule la fenêtre Illustration écoute (demande de Mayrik) : un
+// attrapeur plein écran avalerait les gestes de défilement et de zoom,
+// qui sont désormais les gestes natifs du navigateur.
+let sceneIllustration = null;
+
+// #wrap est en position:fixed, donc il crée un contexte d'empilement :
+// un z-index sur #illu-module, qui est son enfant, ne peut PAS le faire
+// passer au-dessus du voile anti-clic posé sur <body>. On cale donc une
+// surcouche fixe indépendante sur le rectangle écran réel de la
+// fenêtre — exactement la technique déjà utilisée pour l'animation des
+// dés (voir animateOneMovingDie). Elle fonctionne avec ou sans voile,
+// ce qui compte : pendant le tour de l'IA il n'y a pas de voile.
+function poserAttrapeurDeTap(scene) {
+  if (typeof document === "undefined" || !document.body) return;
+  const illu = document.getElementById("illu-module");
+  if (!illu) return;
+  const zone = document.createElement("div");
+  zone.id = "scene-skip";
+  zone.style.position = "fixed";
+  zone.style.zIndex = "9999"; // au-dessus du voile (9998)
+  zone.style.background = "transparent";
+  zone.style.cursor = "pointer";
+  const caler = () => {
+    const r = illu.getBoundingClientRect();
+    zone.style.left = r.left + "px";
+    zone.style.top = r.top + "px";
+    zone.style.width = r.width + "px";
+    zone.style.height = r.height + "px";
+  };
+  caler();
+  zone.addEventListener("click", () => sauterSceneIllustration());
+  window.addEventListener("resize", caler);
+  window.addEventListener("orientationchange", caler);
+  scene.retirerAttrapeur = () => {
+    window.removeEventListener("resize", caler);
+    window.removeEventListener("orientationchange", caler);
+    zone.remove();
+  };
+  document.body.appendChild(zone);
+}
+
+function ouvrirSceneIllustration() {
+  const scene = { passee: false, reprendre: null, t0: performance.now(), retirerAttrapeur: null };
+  sceneIllustration = scene;
+  poserAttrapeurDeTap(scene);
+  return scene;
+}
+
+function fermerSceneIllustration(scene) {
+  if (scene.retirerAttrapeur) scene.retirerAttrapeur();
+  if (sceneIllustration === scene) sceneIllustration = null;
+}
+
+// Un tap = TOUTE la scène en cours jusqu'à son état final, pas une
+// étape de plus (décision de Mayrik). Les taps ne s'accumulent pas :
+// une scène déjà passée ne se repasse pas, et la scène close ne répond
+// plus du tout. Le délai d'armement évite qu'un tap arrivé une fraction
+// de seconde après la fin d'une scène ne tue la suivante avant même
+// qu'elle ne s'affiche — ce qui arrive dans une cascade de dégâts, où
+// deux scènes s'enchaînent dans la même image.
+const ARMEMENT_SKIP_MS = 150;
+
+function sauterSceneIllustration() {
+  const scene = sceneIllustration;
+  if (!scene || scene.passee) return false;
+  if (performance.now() - scene.t0 < ARMEMENT_SKIP_MS) return false;
+  scene.passee = true;
+  if (scene.reprendre) scene.reprendre();
+  return true;
+}
+
+// Attente interruptible : résout au bout de `ms`, ou tout de suite si
+// la scène a été écourtée entre-temps.
+function pauseDeScene(scene, ms) {
+  if (scene.passee || ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const t = setTimeout(() => { scene.reprendre = null; resolve(); }, ms);
+    scene.reprendre = () => { clearTimeout(t); scene.reprendre = null; resolve(); };
+  });
 }
 
 // Empilement de deux véhicules sur la même case. Jusqu'au chantier 4b,
@@ -8956,11 +9078,21 @@ function damageImagePath(token) {
 //   - un léger étirement vertical au moment le plus mince, et une
 //     courbe d'accélération qui rend le milieu du retournement rapide :
 //     c'est ce qui donne l'illusion de relief sans aucune 3D.
-function animerRetournement(el, faceArriere, totalMs) {
+//
+// `scene` est optionnel : s'il est fourni et que le joueur écourte en
+// plein retournement, on saute directement à la face révélée, à plat,
+// plutôt que de finir une rotation que personne ne regarde plus.
+function animerRetournement(el, faceArriere, totalMs, scene) {
   return new Promise((resolve) => {
     const t0 = performance.now();
     let echange = false;
     function frame(now) {
+      if (scene && scene.passee) {
+        el.src = faceArriere;
+        el.style.transform = "";
+        resolve();
+        return;
+      }
       const t = Math.min(1, (now - t0) / totalMs);
       const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2)/2;
       const sx = Math.abs(1 - 2*e); // 1 → 0 → 1
@@ -8976,6 +9108,33 @@ function animerRetournement(el, faceArriere, totalMs) {
 // Joue la révélation dans la fenêtre Illustration, puis pose le jeton
 // face visible sous le dashboard. S'inscrit au registre des animations
 // en vol : le système de rythme l'attend donc sans une ligne de plus.
+// Trois temps, dans un rapport 1/2/4 donné par Mayrik : le dos
+// apparaît, le jeton se retourne, la face tirée reste exposée assez
+// longtemps pour qu'on comprenne DE QUEL jeton il s'agit et ce qu'il
+// fait. Avant ce réglage, tout tenait dans un seul retournement de
+// PACE_MS — on ne voyait ni l'animation ni la face.
+const REVELATION_TEMPS = { apparition: 500, rotation: 1000, exposition: 2000 };
+
+// Une durée de transition suit la distance parcourue ; un temps de
+// LECTURE suit la quantité d'information à comprendre, qui ne change
+// pas avec le réglage. La révélation ne suit donc pas l'échelle
+// PACE_PRESETS (rapport de 4,5 entre Lent et Rapide, bien trop violent
+// pour de la lecture) mais une échelle compressée : même en Rapide,
+// l'exposition tient 1,4 s. C'est le plancher qui empêche le mode
+// Rapide de devenir un mode « on saute tout » — l'écueil connu des
+// portages de jeux de plateau, où l'option « passer les animations »
+// finit par rendre le jeu illisible.
+const REVELATION_ECHELLE = { slow: 1.3, medium: 1.0, fast: 0.7 };
+
+function dureesRevelation() {
+  const k = REVELATION_ECHELLE[paceSpeedName] || 1;
+  return {
+    apparition: Math.round(REVELATION_TEMPS.apparition * k),
+    rotation: Math.round(REVELATION_TEMPS.rotation * k),
+    exposition: Math.round(REVELATION_TEMPS.exposition * k)
+  };
+}
+
 function revelerJeton(token) {
   const illu = document.getElementById("illu-module");
   if (!illu || !scenePeutAnimer()) { jetonsReveles.add(token); return; }
@@ -8984,11 +9143,17 @@ function revelerJeton(token) {
   img.src = DAMAGE_FRONT;
   img.alt = "";
   illu.appendChild(img);
-  suivreAnimation(animerRetournement(img, damageImagePath(token), Math.max(240, PACE_MS)).then(() => {
+  const t = dureesRevelation();
+  const scene = ouvrirSceneIllustration();
+  suivreAnimation((async () => {
+    await pauseDeScene(scene, t.apparition);           // 1 — le dos s'installe
+    await animerRetournement(img, damageImagePath(token), t.rotation, scene); // 2 — il se retourne
+    await pauseDeScene(scene, t.exposition);           // 4 — la face tirée reste lisible
+    fermerSceneIllustration(scene);
     jetonsReveles.add(token); // le jeton se pose face visible sous le dashboard
     illu.innerHTML = "";
     render();
-  }));
+  })());
 }
 
 // Point de passage UNIQUE des deux pilotes pour tout événement de
