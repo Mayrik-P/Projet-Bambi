@@ -8854,12 +8854,29 @@ function attendreRetourDeMain() {
 
 // Enchaîne `suite` APRÈS la fin des animations en vol, PUIS le
 // battement. Reste strictement synchrone si rien ne vole et que la
-// vitesse est à 0.
-function apresBattement(suite) {
+// durée est à 0.
+//
+// `dureeMs` permet à un appelant d'imposer une autre durée que le
+// réglage Lent/Moyen/Rapide — voir BATTEMENT_PAS_JOUEUR_MS.
+function apresBattement(suite, dureeMs) {
   const attente = attendreAnimations();
-  const battre = () => { if (PACE_MS > 0) setTimeout(suite, PACE_MS); else suite(); };
+  const ms = (dureeMs === undefined) ? PACE_MS : dureeMs;
+  const battre = () => { if (ms > 0) setTimeout(suite, ms); else suite(); };
   if (attente) attente.then(battre); else battre();
 }
+
+// Un pas que le JOUEUR vient de choisir lui-même ne demande aucun temps
+// de lecture : il regardait déjà la case au moment de cliquer. Lui
+// appliquer le réglage de rythme revenait à le faire attendre avant son
+// propre coup suivant — en Lent, une seconde entre chaque case (retour
+// de Mayrik, mesuré). Cette durée est donc FIXE, calée sur le ressenti
+// du mode Rapide, et volontairement pas indexée sur PACE_MS.
+//
+// Ce qui, à l'inverse, garde le réglage : tout ce que la machine décide
+// sans lui — hazards, jets de dés, Slams, déplacements induits — et les
+// pas de l'IA, où voir la voiture avancer case par case est justement
+// l'intérêt du mode Lent.
+const BATTEMENT_PAS_JOUEUR_MS = 200;
 
 // --- GEL DE L'INTERFACE PENDANT UNE SCÈNE --------------------------
 // Sans lui, rien n'empêche un deuxième clic pendant que les dés volent :
@@ -9616,7 +9633,12 @@ function driveHumanStepGenerator(gen, onComplete, answer) {
       G.uiLocked = true; // un pas est en cours de résolution : aucun clic
       appliquerVoileDeGel();
       render();
-      apresBattement(() => driveHumanStepGenerator(gen, onComplete));
+      // Le pas de SA propre voiture, qu'il vient de cliquer, repart
+      // tout de suite (durée fixe) ; tout le reste — hazard, dés,
+      // Slam, déplacement induit, et le pas d'une AUTRE voiture
+      // poussée par un Slam — garde le réglage de rythme.
+      const sonProprePas = outcome.pending.type === "step" && outcome.pending.car && sel.car && outcome.pending.car === sel.car;
+      apresBattement(() => driveHumanStepGenerator(gen, onComplete), sonProprePas ? BATTEMENT_PAS_JOUEUR_MS : undefined);
       return;
     }
     G.uiLocked = false;
