@@ -105,9 +105,14 @@
   #roaddie-module img { width: 100%; height: 100%; object-fit: contain; display: block; }
   /* Module DICETRACK : 1 ou 2 faces, côte à côte ou superposées selon
      la forme que la mise en page lui a donnée. */
+  /* Même padding que le road die (3px) : à côté l'un de l'autre, une
+     marge intérieure différente faisait paraître les dés du dicetrack
+     plus petits que la face du road die alors que leurs boîtes ont
+     exactement le même côté (retour de Mayrik). Le gap est posé par
+     applyLayout pour coller à celui de la mise en page. */
   #dicetrack-module { display: flex; align-items: center; justify-content: center;
     gap: 6px; background: #0d0d10; border: 1px solid #3a3a46; border-radius: 6px;
-    padding: 4px; pointer-events: none; }
+    padding: 3px; pointer-events: none; }
   #dicetrack-module.vertical { flex-direction: column; }
   #dicetrack-module.over-board { background: rgba(13,13,16,0.82); z-index: 5; }
   #dicetrack-module img.dicetrack-face { height: 100%; width: auto; aspect-ratio: 1 / 1;

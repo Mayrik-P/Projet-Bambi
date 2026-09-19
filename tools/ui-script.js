@@ -3121,6 +3121,11 @@ function applyLayout() {
       // Deux dés côte à côte si la boîte est plutôt large, l'un au-dessus
       // de l'autre si elle est plutôt haute.
       diceEl.classList.toggle("vertical", L.zones.dice.h > L.zones.dice.w);
+      // L'écart entre les deux dés est celui de la mise en page : la
+      // boîte du dicetrack vaut deux carrés PLUS un écart, donc avec le
+      // même écart à l'intérieur chaque dé retombe exactement sur le
+      // côté d'un carré — la même taille que la face du road die.
+      diceEl.style.gap = (L.gap || 6) + "px";
     } else diceEl.style.display = "none";
   }
   const illuEl = document.getElementById("illu-module");

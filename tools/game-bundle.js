@@ -3449,20 +3449,32 @@ module.exports = {
 
 
 
+// Unité commune de la grappe dicetrack + speedometer + road die
+// (retour de Mayrik) : le CARRÉ. Le speedometer et le road die valent
+// un carré chacun, le dicetrack en vaut DEUX de large sur UN de haut.
+// La grappe entière forme donc un carré de 2×2 — dicetrack en haut,
+// les deux cadrans dessous — et garde cette répartition quelle que
+// soit la place disponible. Avant, la hauteur du dicetrack était une
+// constante indépendante du côté des cadrans : les trois modules
+// dérivaient les uns par rapport aux autres selon la largeur d'écran.
+const CARRE_MIN = 64, CARRE_TARGET = 88, GAP = 6;
+
 const SPEC = {
   board: { vbW:907.7, vbH:229.3, cellW:37.90, tileW:303.0, cellMin:44, cellMax:92, sliderH:18 },
   dash:  { aspect:871/234, minW:340, minVisible:2 },
   info:  { hTwoLines:48, hOneLine:32, minW:340, oneLineFrom:800 },
   illu:  { min:160, target:200 },
-  dice:  { minW:140, minH:72 },
+  // Dérivés du carré : deux carrés de large, un de haut.
+  carre: { min:CARRE_MIN, target:CARRE_TARGET },
+  dice:  { minW:2*CARRE_MIN + GAP, minH:CARRE_MIN },
   // Deux cadrans carrés de même taille, côte à côte : le dé de round et
   // le compteur de mouvement. L'afficheur ROUND a été supprimé — Mayrik
   // a constaté à l'usage qu'aucune mécanique n'utilise le numéro de
   // manche — et le speedometer a pris sa place, ce qui tombe bien : il
   // réclamait exactement le format du road die.
-  roaddie:{ min:64, target:88 },
-  speedo: { min:64, target:88 },
-  gap: 6
+  roaddie:{ min:CARRE_MIN, target:CARRE_TARGET },
+  speedo: { min:CARRE_MIN, target:CARRE_TARGET },
+  gap: GAP
 };
 // Hauteurs de la FENÊTRE de jeu du plateau (hors curseur de position).
 // La zone rendue vaut celle-ci + `chrome`, qui vaut 18 px quand le
@@ -3510,7 +3522,6 @@ function computeLayout(W, H, players, forced, present){
     const w = W - 2*G;
     let infoH = W >= SPEC.info.oneLineFrom ? SPEC.info.hOneLine : SPEC.info.hTwoLines;
     let drawer = false, illuOver = false, clusterOver = false;
-    const diceH = SPEC.dice.minH + 16;
     // Les cadrans carrés forment une rangée sous le dicetrack, dans la
     // colonne de droite. Ordre voulu par Mayrik : speedometer à gauche,
     // road die à droite.
@@ -3533,9 +3544,12 @@ function computeLayout(W, H, players, forced, present){
         stackW = clusterFlow ? w - illu - G : 0;
       } else { illu = 0; stackW = clusterFlow ? w : 0; }
       if (clusterFlow) {
-        sqSide = carres.length
-          ? Math.min(SPEC.roaddie.target, (stackW - (carres.length - 1)*G) / carres.length) : 0;
-        stackH = (has.dice ? diceH : 0)
+        // Le côté du carré se déduit TOUJOURS d'une grappe de deux
+        // colonnes, même si un seul cadran est présent : c'est ce qui
+        // garantit que le dicetrack fasse exactement deux carrés de
+        // large et un de haut, et que la grappe reste carrée.
+        sqSide = Math.min(SPEC.carre.target, (stackW - G) / 2);
+        stackH = (has.dice ? sqSide : 0)
                + (carres.length ? (has.dice ? G : 0) + sqSide : 0);
       } else { sqSide = 0; stackH = 0; }
       return Math.max(illuFlow ? illu : 0, clusterFlow ? stackH : 0);
@@ -3577,9 +3591,14 @@ function computeLayout(W, H, players, forced, present){
 
     if (illuFlow) put("illu", G, y, illu, illu, SPEC.illu.min, SPEC.illu.min);
     if (clusterFlow) {
-      const sx = G + (illuFlow ? illu + G : 0);
+      // La grappe fait exactement deux carrés de large. Quand la
+      // colonne est plus large que ça (grand écran), on la centre
+      // plutôt que d'étirer le dicetrack tout seul : c'est ce qui le
+      // faisait paraître démesuré à côté des deux cadrans.
+      const clusterW = 2*sqSide + G;
+      const sx = G + (illuFlow ? illu + G : 0) + Math.max(0, (stackW - clusterW)/2);
       let sy = y;
-      if (has.dice) { put("dice", sx, sy, stackW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
+      if (has.dice) { put("dice", sx, sy, clusterW, sqSide, SPEC.dice.minW, SPEC.dice.minH); sy += sqSide + G; }
       carres.forEach((id, i) => put(id, sx + i*(sqSide + G), sy, sqSide, sqSide,
         SPEC[id].min, SPEC[id].min));
     }
@@ -3647,7 +3666,11 @@ function computeLayout(W, H, players, forced, present){
       const ill = Math.min(side, colH - (colNeed - SPEC.illu.min));
       put("illu", sx, y, side, ill, SPEC.illu.min, SPEC.illu.min);
       let sy = y + ill + G;
-      if (has.dice) { put("dice", sx, sy, side, SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH); sy += SPEC.dice.minH + G; }
+      // Même règle qu'en portrait : deux carrés de large, un de haut,
+      // centrés dans la colonne quand celle-ci est plus large.
+      const diceH = Math.min(SPEC.carre.target, (side - G) / 2);
+      const diceW = 2*diceH + G;
+      if (has.dice) { put("dice", sx + Math.max(0, (side - diceW)/2), sy, diceW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
     } else {
       if (has.illu) put("illu", W-G-8-SPEC.illu.min, y+8, SPEC.illu.min, SPEC.illu.min,
                         SPEC.illu.min, SPEC.illu.min, true);
@@ -3668,7 +3691,7 @@ function computeLayout(W, H, players, forced, present){
       const freeW = w - (cols*colW + (cols-1)*G) - G;
       const besoin = carres.length*SPEC.roaddie.min + (carres.length - 1)*G;
       if (freeW >= besoin && !drawer) {
-        const sq = Math.min(SPEC.roaddie.target, (freeW - (carres.length - 1)*G) / carres.length, rowH);
+        const sq = Math.min(SPEC.carre.target, (freeW - (carres.length - 1)*G) / carres.length, rowH);
         const total = carres.length*sq + (carres.length - 1)*G;
         carres.forEach((id, i) => put(id, W - G - total + i*(sq + G), dy + (rowH - sq)/2, sq, sq,
           SPEC[id].min, SPEC[id].min));
@@ -3715,7 +3738,10 @@ function computeLayout(W, H, players, forced, present){
     if (has.illu) {
       // Colonne latérale : illustration, dicetrack, road die, round — chacun son budget.
       const sx = W - sideW - G;
-      const diceH = Math.max(SPEC.dice.minH, Math.min(140, sideW*SPEC.dice.minH/SPEC.dice.minW));
+      // Même règle que dans les deux autres profils : le dicetrack
+      // fait deux carrés de large sur un de haut, et les deux cadrans
+      // qui le suivent font un carré chacun.
+      const diceH = Math.max(SPEC.dice.minH, Math.min(SPEC.carre.target, (sideW - G) / 2));
       const carres = [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean);
       const need = (has.dice ? diceH + G : 0) + (carres.length ? SPEC.roaddie.target + G : 0) + G;
       let sy = G, ill = Math.min(sideW, 400, H - G - need);
@@ -3723,16 +3749,19 @@ function computeLayout(W, H, players, forced, present){
       else { put("illu", W-sideW, H-G-8-SPEC.illu.min, SPEC.illu.min, SPEC.illu.min,
                   SPEC.illu.min, SPEC.illu.min, true);
              steps.push("illustration en surimpression : colonne latérale trop courte"); }
+      const diceW = 2*diceH + G;
       if (has.dice) {
-        if (H - sy - G >= diceH) { put("dice", sx, sy, sideW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
+        if (H - sy - G >= diceH) { put("dice", sx + Math.max(0, (sideW - diceW)/2), sy, diceW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
         else { put("dice", sx+8, H-G-8-SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH,
                     SPEC.dice.minW, SPEC.dice.minH, true); steps.push("dicetrack en surimpression"); }
       }
       // Les cadrans carrés terminent la colonne, côte à côte.
       if (carres.length) {
-        const sq = Math.min(SPEC.roaddie.target, (sideW - (carres.length - 1)*G) / carres.length);
+        const sq = Math.min(SPEC.carre.target, (sideW - G) / 2);
+        const totalSq = 2*sq + G;
+        const sqX = sx + Math.max(0, (sideW - totalSq)/2);
         if (H - sy - G >= sq) {
-          carres.forEach((id, i) => put(id, sx + i*(sq + G), sy, sq, sq, SPEC[id].min, SPEC[id].min));
+          carres.forEach((id, i) => put(id, sqX + i*(sq + G), sy, sq, sq, SPEC[id].min, SPEC[id].min));
         } else {
           carres.forEach((id, i) => put(id, sx + i*(SPEC[id].min + G), H-G-SPEC[id].min,
             SPEC[id].min, SPEC[id].min, SPEC[id].min, SPEC[id].min, true));
