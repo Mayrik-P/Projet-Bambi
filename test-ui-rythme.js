@@ -268,10 +268,14 @@ async function main() {
     !facesAffichees().some((h) => h.includes("damage-dazed.webp")));
 
   // C'est l'événement du moteur qui ouvre et ferme la révélation.
-  // Le jeton ne se pose face visible qu'une fois le retournement joué
-  // dans la fenêtre Illustration : on attend donc l'animation.
+  // Le jeton ne se pose face visible qu'une fois la scène ENTIÈRE
+  // jouée dans la fenêtre Illustration : apparition du dos, puis
+  // retournement, puis exposition de la face tirée. On attend donc la
+  // durée réelle de la scène, lue dans le code plutôt que recopiée en
+  // dur — sans quoi le test casserait au moindre réglage de rythme.
   win7.traiterEvenementPresentation({ type: "damage", car: blesse, token: jeton });
-  await sleep(900);
+  const dureeScene = (() => { const t = win7.dureesRevelation(); return t.apparition + t.rotation + t.exposition; })();
+  await sleep(dureeScene + 400);
   win7.render();
   console.log("Pendant sa résolution, il passe face visible (attendu true) :",
     facesAffichees().some((h) => h.includes("damage-dazed.webp")));
@@ -281,6 +285,103 @@ async function main() {
   console.log("Une fois ses effets finis, il repasse face cachée (attendu true) :",
     !facesAffichees().some((h) => h.includes("damage-dazed.webp")) &&
     facesAffichees().some((h) => h.includes("damage-front.webp")));
+
+  section("Test 8 — Le retour de la main au joueur ne coûte aucun battement");
+
+  // Deux natures d'attente, une seule réglable : PACE_MS sépare deux
+  // étapes que la MACHINE enchaîne, le retour de main n'est qu'une
+  // latence. Ce test mesure la seconde en réglant la première très
+  // haut : si la main revenait après un battement, elle mettrait au
+  // moins 900 ms.
+  console.log("Le battement de retour de main est nul (attendu true) :",
+    win3.eval("BATTEMENT_RENDU_MAIN_MS") === 0);
+
+  const dom8 = makeDom(true);
+  const win8 = dom8.window;
+  win8.newGame();
+  win8.setPaceSpeed("slow"); // 900 ms entre deux étapes machine
+  const G8 = win8.eval("G");
+  G8.allCars.length = 0;
+  const b8 = win8.board();
+  clearHazardsAround(win8, b8, [{ col: 4, row: 3 }, { col: 4, row: 2 }, { col: 4, row: 4 }]);
+  G8.allCars.push(win8.createCar(HUMAN, CAR_SIZE.SMALL, 3, 3));
+  win8.eval("sel = { step: 'move-step', car: G.allCars[0], remaining: 3 }");
+
+  let liberer8;
+  win8.suivreAnimation(new Promise((r) => { liberer8 = r; }));
+  win8.gelerPendantLaScene();
+  const t0 = Date.now();
+  liberer8();
+  await sleep(120);
+  const attenduSansBattement = Date.now() - t0;
+  console.log("La main revient dès la fin de l'animation, pas un battement plus tard (attendu true) :",
+    win8.eval("G").uiLocked === false && attenduSansBattement < 600);
+  console.log("Les destinations sont de nouveau cliquables tout de suite (attendu true) :",
+    win8.highlightedCells().length > 0);
+  console.log("Le rythme machine→machine reste, lui, au réglage choisi (attendu true) :",
+    win8.eval("PACE_MS") === 900);
+
+  section("Test 9 — Révélation d'un jeton : trois temps 1/2/4, et tap pour écourter");
+
+  const dom9 = makeDom(true);
+  const win9 = dom9.window;
+  win9.newGame();
+
+  win9.setPaceSpeed("medium");
+  const tMedium = win9.dureesRevelation();
+  console.log("Les trois temps sont bien dans le rapport 1/2/4 (attendu true) :",
+    tMedium.rotation === 2 * tMedium.apparition && tMedium.exposition === 4 * tMedium.apparition);
+
+  win9.setPaceSpeed("fast");
+  const tFast = win9.dureesRevelation();
+  win9.setPaceSpeed("slow");
+  const tSlow = win9.dureesRevelation();
+  console.log("Le réglage joue sur la révélation, mais moins fort que sur le rythme (attendu true) :",
+    tFast.exposition < tMedium.exposition && tMedium.exposition < tSlow.exposition &&
+    (tSlow.exposition / tFast.exposition) < 2.5); // contre 4,5 pour PACE_PRESETS
+  console.log("Même en Rapide, la face tirée reste lisible plus d'une seconde (attendu true) :",
+    tFast.exposition >= 1000);
+
+  win9.setPaceSpeed("medium");
+  const G9 = win9.eval("G");
+  const blesse9 = G9.allCars.find((c) => c.owner === HUMAN);
+  const jeton9 = { type: "dent" };
+  blesse9.damageTokens.push(jeton9);
+  const faces9 = () => [...win9.document.querySelectorAll("#dashboards-rail image")]
+    .map((e) => e.getAttribute("href") || "").filter((h) => h.includes("damage"));
+
+  win9.traiterEvenementPresentation({ type: "damage", car: blesse9, token: jeton9 });
+  console.log("Une scène est ouverte et son attrapeur de tap est posé (attendu true) :",
+    !!win9.document.getElementById("scene-skip"));
+
+  // Armement : un tap arrivé dans la foulée ne doit pas tuer la scène
+  // avant qu'elle ne s'affiche (cas d'une cascade de dégâts, où deux
+  // scènes s'enchaînent dans la même image).
+  console.log("Un tap immédiat n'écourte pas encore (attendu true) :",
+    win9.sauterSceneIllustration() === false);
+
+  await sleep(250); // scène armée, et encore loin de sa fin (3,5 s)
+  win9.render();
+  console.log("À ce stade la scène joue encore, le jeton n'est pas posé (attendu true) :",
+    !faces9().some((h) => h.includes("damage-dent.webp")));
+
+  // Un clic AILLEURS ne passe pas : seul le rectangle de la fenêtre
+  // Illustration écoute, pour ne pas écourter par erreur quand on tape
+  // pour défiler ou zoomer.
+  const voile9 = win9.document.getElementById("input-shield");
+  if (voile9) voile9.dispatchEvent(new win9.MouseEvent("click", { bubbles: true }));
+  console.log("Un clic sur le voile n'écourte rien (attendu true) :",
+    win9.eval("sceneIllustration") !== null);
+
+  win9.document.getElementById("scene-skip").dispatchEvent(new win9.MouseEvent("click", { bubbles: true }));
+  await sleep(120);
+  win9.render();
+  console.log("Un tap sur la fenêtre Illustration mène directement à l'état final (attendu true) :",
+    faces9().some((h) => h.includes("damage-dent.webp")));
+  console.log("La scène est close et son attrapeur retiré (attendu true) :",
+    win9.eval("sceneIllustration") === null && !win9.document.getElementById("scene-skip"));
+  console.log("Un tap de plus ne fait rien (attendu true) :",
+    win9.sauterSceneIllustration() === false);
 
   console.log("\n=== Fin des tests dédiés (rythme des animations, 4a) ===");
 }
