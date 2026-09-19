@@ -425,6 +425,41 @@ async function main() {
   console.log("Lent et Rapide donnent le même ressenti, à 150 ms près (attendu true) :",
     dRapide !== null && Math.abs(dLent - dRapide) < 150);
 
+  section("Test 11 — Révélation d'un hazard : même scène, mêmes durées, même tap");
+
+  const dom11 = makeDom(true);
+  const win11 = dom11.window;
+  win11.newGame();
+  win11.setPaceSpeed("medium");
+
+  const faceDe = (t) => win11.eval("HAZARD_FACE_IMAGE")[t] || "";
+  console.log("Les cinq types de hazard ont une face, Mine et Wreck compris (attendu true) :",
+    ["blank", "dirt", "oil_slick", "mine", "wreck"].every((t) => faceDe(t).includes("hazard-")));
+  console.log("Seuls Road/Mud/Oil Slick restent posés sur la case (attendu true) :",
+    Object.keys(win11.eval("HAZARD_REVEALED_IMAGE")).sort().join(",") === "blank,dirt,oil_slick");
+
+  const imgIllu = () => { const e = win11.document.querySelector("#illu-module img"); return e ? e.src.split("/").pop() : "(vide)"; };
+
+  // Un Wreck : aucune trace sur le plateau après résolution, la fenêtre
+  // est donc le SEUL endroit où on peut le voir.
+  win11.traiterEvenementPresentation({ type: "hazard", hazardType: "wreck", col: 4, row: 3 });
+  console.log("Le dos générique s'affiche d'abord (attendu true) :", imgIllu() === "hazard-back.webp");
+  console.log("Une scène écourtable est ouverte (attendu true) :", !!win11.document.getElementById("scene-skip"));
+
+  const t11 = win11.dureesRevelation();
+  await sleep(t11.apparition + t11.rotation + 150);
+  console.log("Après le retournement, c'est la face du Wreck (attendu true) :", imgIllu() === "hazard-wreck.webp");
+
+  await sleep(t11.exposition + 250);
+  console.log("La fenêtre se vide et la scène se clôt (attendu true) :",
+    imgIllu() === "(vide)" && win11.eval("sceneIllustration") === null);
+
+  // Un type sans visuel connu (extensions à venir) n'ouvre aucune scène
+  // plutôt que d'afficher une fenêtre vide.
+  win11.traiterEvenementPresentation({ type: "hazard", hazardType: "sandworm", col: 4, row: 3 });
+  console.log("Un hazard sans image connue n'ouvre pas de scène (attendu true) :",
+    win11.eval("sceneIllustration") === null && !win11.document.getElementById("scene-skip"));
+
   console.log("\n=== Fin des tests dédiés (rythme des animations, 4a) ===");
 }
 
