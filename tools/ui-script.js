@@ -1271,6 +1271,7 @@ function newGame() {
   }
   const roundState = createRoundState(PLAYER_NAMES);
   G = { progressionState, allCars, allChoppers, roundState, aiPending: null, aiAnimating: false, uiLocked: false };
+  vehiculeEntrant = null;
   sel = {};
   fullLog = [];
   gameOver = false;
@@ -1538,6 +1539,33 @@ function gelerPendantLaScene() {
   return true;
 }
 
+// Empilement de deux véhicules sur la même case. Jusqu'au chantier 4b,
+// cet empilement n'était visible que pendant la pause de décision de
+// relance d'un Slam — partout ailleurs le Slam se résolvait d'un bloc,
+// trop vite pour qu'on voie quoi que ce soit. Ce n'est plus vrai :
+// chaque pause de rythme expose désormais ce moment, et l'ordre de
+// dessin, qui suivait l'ordre arbitraire de G.allCars, donnait tantôt
+// l'un tantôt l'autre par-dessus (bug signalé par Mayrik).
+//
+// On retient donc le dernier véhicule ARRIVÉ sur une case. C'est très
+// exactement la définition du TOP du dé de Slam : le moteur passe la
+// voiture entrante comme `topCar` à resolveSlamGen, celle déjà présente
+// comme `bottomCar`. Donc le dernier arrivé se dessine par-dessus,
+// toujours — y compris lors d'un Slam en chaîne, où la voiture qui
+// vient d'être percutée devient à son tour l'entrante sur la case
+// suivante.
+let vehiculeEntrant = null;
+
+function noterVehiculeEntrant(evt) {
+  if (!evt) return;
+  if (evt.type === "step" && evt.car) {
+    vehiculeEntrant = evt.car;
+  } else if ((evt.type === "slam-dice" || evt.type === "slam-reroll") && evt.topCar) {
+    // Le moteur le dit lui-même : aucune interprétation de notre côté.
+    vehiculeEntrant = evt.topCar;
+  }
+}
+
 // Fait avancer le générateur du tour IA en cours jusqu'à sa fin OU
 // jusqu'à sa prochaine pause. DEUX types de pause bien distincts :
 //   - {type:"step", ...} : purement informative, aucune décision à
@@ -1559,6 +1587,7 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
   const outcome = driveInteractive(gen, answer);
   if (!outcome.done) {
     if (isPresentationEvent(outcome.pending)) {
+      noterVehiculeEntrant(outcome.pending);
       render(); // affiche IMMÉDIATEMENT la case qui vient d'être atteinte
       // Victoire IMMÉDIATE (retour de Mayrik) : un véhicule — y compris
       // celui du joueur humain, projeté par un Slam pendant le tour de
@@ -1625,6 +1654,7 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
   }
   pushLogLines(outcome.result.log || [], turnLabel);
   checkEnd();
+  vehiculeEntrant = null; // plus aucun empilement possible hors d'un tour
   resetSelection();
   render();
   // Le tour se termine souvent sur un tir : ses dés volent encore au
@@ -1970,6 +2000,7 @@ function driveHumanStepGenerator(gen, onComplete, answer) {
   const outcome = driveInteractive(gen, answer);
   if (!outcome.done) {
     if (isPresentationEvent(outcome.pending)) {
+      noterVehiculeEntrant(outcome.pending);
       // Chantier 4b — LA CONVERGENCE DES DEUX PILOTES. Ce bloc est le
       // jumeau exact de celui de driveAiTurnGenerator : même flux
       // d'événements venu du moteur, même rythme, même traitement. Le
@@ -2193,6 +2224,7 @@ function finishHumanTurn() {
     gameOver = true;
     gameOverInfo = result;
   }
+  vehiculeEntrant = null; // plus aucun empilement possible hors d'un tour
   resetSelection();
 }
 
@@ -2433,20 +2465,19 @@ function renderBoard() {
     svg.appendChild(polyEl);
   }
 
-  // Cas particulier d'empilement : pendant la pause de décision de
-  // relance d'un Slam (voir driveHumanStepGenerator/G.aiPending plus
-  // haut), la voiture ENTRANTE ("car", passée comme topCar à
-  // resolveSlamGen) et celle déjà présente ("occupant"/wreck, passée
-  // comme bottomCar) partagent réellement la même case — aucune des
-  // deux n'a encore bougé, la résolution est en pause en attendant la
-  // réponse du joueur. Convention demandée par Mayrik : la voiture qui
+  // Empilement de deux véhicules sur la même case. Convention demandée
+  // par Mayrik, et qui est aussi celle du dé de Slam : la voiture qui
   // vient de percuter (TOP) se dessine PAR-DESSUS celle qui était déjà
-  // là (BOTTOM). En dehors de cette pause précise, deux voitures ne
-  // partagent jamais la même case (le Slam est entièrement résolu de
-  // façon synchrone), donc ce réordonnancement ne s'applique dans
-  // aucun autre cas.
+  // là (BOTTOM).
+  //
+  // Deux sources, la plus sûre d'abord : le contexte de la décision de
+  // relance en attente, qui nomme explicitement topCar ; sinon le
+  // dernier véhicule arrivé sur une case (voir noterVehiculeEntrant),
+  // qui couvre toutes les autres pauses de rythme ouvertes par le
+  // chantier 4b. Sans empilement, ce réordonnancement ne change
+  // évidemment rien.
   const pendingSlamCtx = (G.aiPending && G.aiPending.ctx) || (sel.pendingHumanSlam && sel.pendingHumanSlam.ctx) || null;
-  const slamTopCar = pendingSlamCtx ? pendingSlamCtx.topCar : null;
+  const slamTopCar = (pendingSlamCtx ? pendingSlamCtx.topCar : null) || vehiculeEntrant;
   const carsInDrawOrder = slamTopCar ? G.allCars.slice().sort((a, b) => (a === slamTopCar ? 1 : 0) - (b === slamTopCar ? 1 : 0)) : G.allCars;
 
   carsInDrawOrder.forEach((car) => {
