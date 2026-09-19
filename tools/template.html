@@ -84,6 +84,36 @@
     padding: 4px; pointer-events: none; overflow: hidden; }
   #illu-module.over-board { background: rgba(13,13,16,0.82); z-index: 5; }
   #illu-module img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  /* Compositions à deux véhicules. Les webp de véhicules ont tous la
+     même résolution native, marges transparentes comprises, et leurs
+     tailles relatives (small/medium/large) sont déjà dessinées dedans :
+     on affiche donc deux boîtes identiques et le rapport de taille se
+     lit tout seul, sans le moindre calcul d'échelle. */
+  #illu-module .illu-scene { position: relative; width: 100%; height: 100%; }
+  #illu-module .illu-demi { position: absolute; display: flex; align-items: center;
+    justify-content: center; transition: transform 420ms cubic-bezier(0.2, 0.7, 0.3, 1); }
+  /* SLAM — moitiés horizontales : percutant en haut, percuté en bas. */
+  #illu-module .illu-haut { left: 0; right: 0; top: 0; height: 50%; }
+  #illu-module .illu-bas { left: 0; right: 0; bottom: 0; height: 50%; }
+  /* Le trait blanc : les véhicules étant vus de DESSUS, rien dans
+     l'image ne dit lequel est au-dessus de l'autre. Le trait force la
+     lecture dessus/dessous (choix de Mayrik). Posé par-dessus les deux
+     webp, d'où son z-index. */
+  #illu-module .illu-trait { position: absolute; left: 0; right: 0; top: 50%;
+    height: 2px; margin-top: -1px; background: #fff; z-index: 2; pointer-events: none; }
+  /* TIR — moitiés verticales : tireur à gauche, cible à droite. */
+  #illu-module .illu-gauche { top: 0; bottom: 0; left: 0; width: 50%; }
+  #illu-module .illu-droite { top: 0; bottom: 0; right: 0; width: 50%; }
+  /* Entrées : la boîte part hors cadre et revient à sa place. */
+  #illu-module .illu-hors-haut { transform: translateY(-160%); }
+  #illu-module .illu-hors-droite { transform: translateX(160%); }
+  #illu-module .illu-hors-gauche { transform: translateX(-160%); }
+  /* Éclair de tir et criblage d'impact : dessinés en code, aucun asset
+     à produire. Le jour où Mayrik dessine un vrai visuel, c'est un
+     remplacement de fichier (voir TIR_FLASH_IMAGE dans ui-script.js). */
+  #illu-module .illu-flash { position: absolute; left: 50%; top: 50%; z-index: 3;
+    transform: translate(-50%, -50%); pointer-events: none; }
+  #illu-module .illu-impact { position: absolute; z-index: 3; pointer-events: none; }
   /* Module SPEEDOMETER : cadran carré au format du road die, avec le
      nombre de cases restantes écrit par-dessus. */
   #speedometer-module { display: flex; align-items: center; justify-content: center;

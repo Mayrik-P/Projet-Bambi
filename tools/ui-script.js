@@ -1879,6 +1879,152 @@ function revelerHazard(hazardType) {
   jouerRevelation(HAZARD_BACK_PATH, face, () => {});
 }
 
+// ===================================================================
+// ILLUSTRATIONS À DEUX VÉHICULES — Slam et tir
+//
+// Ce ne sont PAS des scènes finies comme la révélation d'un jeton :
+// elles n'ont pas de durée propre et ne s'écourtent pas. Elles
+// s'installent, restent tant que la situation dure — le temps que le
+// joueur décide sur le plateau — et disparaissent quand le moteur
+// annonce la résolution. D'où l'absence totale de ouvrirScene/
+// pauseDeScene ici : rien à sauter, et l'interface doit rester vive
+// puisqu'on attend justement un clic.
+//
+// Les deux compositions diffèrent par leur géométrie, pas par leur
+// principe : le Slam empile (dessus/dessous), le tir aligne
+// (tireur derrière, cible devant).
+// ===================================================================
+const ILLU_ENTREE_MS = 420; // doit rester égal à la transition CSS de .illu-demi
+
+// Remplacer ce chemin par un vrai visuel suffira : rien d'autre à
+// changer. Tant qu'il est nul, l'éclair et le criblage sont dessinés
+// en SVG dans le code.
+const TIR_FLASH_IMAGE = null;
+
+function illuScene() {
+  const illu = document.getElementById("illu-module");
+  if (!illu) return null;
+  let scene = illu.querySelector(".illu-scene");
+  if (!scene) {
+    illu.innerHTML = "";
+    scene = document.createElement("div");
+    scene.className = "illu-scene";
+    illu.appendChild(scene);
+  }
+  return scene;
+}
+
+function viderIllustration() {
+  const illu = document.getElementById("illu-module");
+  if (illu) illu.innerHTML = "";
+}
+
+// Pose un véhicule dans une moitié, en le faisant entrer par le côté
+// demandé. Ne fait rien si cette moitié est déjà occupée par le même
+// véhicule : une relance de Slam réémet ses dés, et on ne veut pas
+// rejouer l'entrée à chaque fois.
+function poserVehicule(scene, classeDemi, car, classeHors) {
+  if (!scene || !car) return null;
+  const existant = scene.querySelector("." + classeDemi);
+  if (existant && existant.dataset.carId === String(car.id)) return null;
+  if (existant) existant.remove();
+  const demi = document.createElement("div");
+  demi.className = "illu-demi " + classeDemi + (classeHors ? " " + classeHors : "");
+  demi.dataset.carId = String(car.id);
+  const img = document.createElement("img");
+  img.src = carImagePath(car);
+  img.alt = "";
+  demi.appendChild(img);
+  scene.appendChild(demi);
+  if (!classeHors || !scenePeutAnimer()) return null;
+  // Deux images successives : la première pose la boîte hors cadre,
+  // la seconde retire la classe et laisse la transition CSS jouer.
+  requestAnimationFrame(() => requestAnimationFrame(() => demi.classList.remove(classeHors)));
+  return suivreAnimation(new Promise((r) => setTimeout(r, ILLU_ENTREE_MS)));
+}
+
+function traitDeSlam(scene) {
+  if (!scene || scene.querySelector(".illu-trait")) return;
+  const trait = document.createElement("div");
+  trait.className = "illu-trait";
+  scene.appendChild(trait);
+}
+
+// SLAM. topCar = la voiture entrante, celle qui percute : c'est la
+// même convention que le TOP du dé de Slam et que l'ordre de dessin
+// sur le plateau (le dernier arrivé par-dessus). Elle tombe donc par
+// le HAUT. La percutée, elle, est rattrapée par l'arrière : elle entre
+// par la DROITE.
+function illustrerSlam(topCar, bottomCar) {
+  const scene = illuScene();
+  if (!scene) return;
+  poserVehicule(scene, "illu-bas", bottomCar, "illu-hors-droite");
+  poserVehicule(scene, "illu-haut", topCar, "illu-hors-haut");
+  traitDeSlam(scene);
+}
+
+// TIR, en deux temps. Le tireur entre dès que la phase de tir s'ouvre,
+// pendant que le joueur cherche sa cible sur le plateau ; la cible
+// n'entre qu'une fois désignée. Pendant le tour de l'IA il n'y a pas
+// de phase de choix : les deux arrivent ensemble au lancer de dé, et
+// ce même code s'en charge sans cas particulier, puisque poserVehicule
+// ne pose que ce qui manque.
+function illustrerTireur(shooter) {
+  const scene = illuScene();
+  if (!scene) return;
+  poserVehicule(scene, "illu-gauche", shooter, "illu-hors-gauche");
+}
+
+function illustrerCible(target) {
+  const scene = illuScene();
+  if (!scene) return;
+  poserVehicule(scene, "illu-droite", target, "illu-hors-droite");
+}
+
+// Éclair au départ du coup, puis criblage sur la cible si elle est
+// touchée. Inscrit au registre des animations : le moteur attend donc
+// qu'il soit joué avant d'enchaîner sur le dégât.
+function illustrerCoupDeFeu(shooter, target, touche) {
+  const scene = illuScene();
+  if (!scene) return;
+  poserVehicule(scene, "illu-gauche", shooter, null);
+  poserVehicule(scene, "illu-droite", target, null);
+  if (!scenePeutAnimer()) return;
+  // Un coup de feu efface d'abord les traces du précédent : sans ça un
+  // second tir affichait le criblage de l'ancien, y compris quand il
+  // rate (défaut attrapé au test).
+  scene.querySelectorAll(".illu-flash, .illu-impact").forEach((e) => e.remove());
+  const flash = document.createElement("div");
+  flash.className = "illu-flash";
+  flash.innerHTML = TIR_FLASH_IMAGE
+    ? `<img src="${TIR_FLASH_IMAGE}" alt="">`
+    : `<svg viewBox="0 0 40 40" width="40" height="40"><g fill="#ffe9a8" stroke="#fff" stroke-width="1">
+         <polygon points="20,2 24,16 38,20 24,24 20,38 16,24 2,20 16,16"/>
+       </g></svg>`;
+  scene.appendChild(flash);
+  let criblage = null;
+  if (touche) {
+    criblage = document.createElement("div");
+    criblage.className = "illu-impact";
+    // Criblage de plombs : des éclats CLAIRS, pas des points sombres —
+    // les véhicules sont sombres, un impact noir sur du bleu nuit ne se
+    // voit pas (constaté en capture, corrigé). Concentrés sur la bande
+    // centrale, là où le véhicule occupe réellement la moitié droite.
+    const eclats = [];
+    for (let i = 0; i < 16; i++) {
+      const x = 18 + Math.random() * 68, y = 36 + Math.random() * 28, r = 1.4 + Math.random() * 1.6;
+      eclats.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="#ffe9a8" stroke="#3a2a10" stroke-width="0.6"/>`);
+    }
+    criblage.innerHTML = `<svg viewBox="0 0 100 100" width="100%" height="100%">${eclats.join("")}</svg>`;
+    Object.assign(criblage.style, { right: "0", top: "0", width: "50%", height: "100%" });
+    scene.appendChild(criblage);
+  }
+  suivreAnimation(new Promise((r) => setTimeout(() => {
+    flash.remove(); // l'éclair est bref, le criblage reste sur la cible
+    r();
+  }, 260)));
+}
+
 // Point de passage UNIQUE des deux pilotes pour tout événement de
 // présentation : ce qui est branché ici vaut pour le tour humain comme
 // pour celui de l'IA, sans duplication.
@@ -1888,6 +2034,10 @@ function traiterEvenementPresentation(evt) {
   if (evt.type === "damage" && evt.token) revelerJeton(evt.token);
   else if (evt.type === "damage-resolved" && evt.token) jetonsReveles.delete(evt.token);
   else if (evt.type === "hazard" && evt.hazardType) revelerHazard(evt.hazardType);
+  else if (evt.type === "slam-dice") illustrerSlam(evt.topCar, evt.bottomCar);
+  else if (evt.type === "slam-resolved") viderIllustration();
+  else if (evt.type === "shoot-dice") illustrerCoupDeFeu(evt.shooter, evt.target, evt.hit);
+  else if (evt.type === "shoot-resolved") viderIllustration();
 }
 
 // Fait avancer le générateur du tour IA en cours jusqu'à sa fin OU
@@ -2486,9 +2636,16 @@ function proceedToShootPhase() {
     return;
   }
   sel.step = "shoot";
+  // Le tireur entre en scène TOUT DE SUITE, pendant que le joueur
+  // cherche sa cible sur le plateau — la moitié droite reste vide
+  // jusqu'à ce qu'il en désigne une (spec de Mayrik).
+  illustrerTireur(car);
 }
 
 function pickShootTarget(target) {
+  // Renoncer à tirer : la fenêtre se vide, le tireur n'y reste pas.
+  if (!target) viderIllustration();
+  else illustrerCible(target);
   const gen = executeShootGen(G.progressionState, G.allCars, G.allChoppers, sel.car, target, G.roundState.roundNumber, {
     ...sel.slamOptions,
     isHumanOwner: (owner) => owner === HUMAN,
