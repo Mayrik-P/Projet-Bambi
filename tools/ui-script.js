@@ -2264,11 +2264,74 @@ function offBoardOptionLabel(option) {
   return `Sortir du plateau — ÉLIMINATION (${option.direction})`;
 }
 
+// Décision de relance de Slam en attente, quel que soit le mécanisme
+// de pause (pendant le tour du joueur, ou pendant celui de l'IA quand
+// une voiture du joueur plus grande est impliquée). Factorisé ici
+// parce que DEUX endroits en ont besoin : les marqueurs dessinés sur
+// le plateau, et la case de destination rendue cliquable comme
+// n'importe quelle case de destination de mouvement.
+function pendingSlamContext() {
+  if (choixSlamMasque) return null; // choix déjà fait, voir repondreChoixSlam
+  if (sel.pendingHumanSlam && sel.pendingHumanSlam.ctx) {
+    return { ctx: sel.pendingHumanSlam.ctx, resume: resumeHumanSlamRerollChoice };
+  }
+  if (G.aiPending && G.aiPending.ctx) {
+    return { ctx: G.aiPending.ctx, resume: resumeAiSlamRerollChoice };
+  }
+  return null;
+}
+
+// Case vers laquelle le dé Direction envoie le véhicule. Peut sortir du
+// plateau (bord haut/bas/arrière) : c'est du pur calcul géométrique,
+// l'appelant décide quoi en faire.
+function slamDestination(ctx) {
+  const delta = getDirectionDelta(ctx.directionRoll, ctx.topCar.col, ctx.topCar.row);
+  return { col: ctx.topCar.col + delta.dCol, row: ctx.topCar.row + delta.dRow };
+}
+
+// Retour de Mayrik : les marqueurs doivent disparaître AVANT que le
+// véhicule ne bouge. Avant ce correctif, la reprise du moteur et
+// l'effacement des marqueurs tombaient dans le MÊME rendu, si bien
+// qu'on voyait le véhicule se déplacer avec les marqueurs encore
+// posés par-dessus. On masque donc le choix, on redessine, et on ne
+// reprend la résolution qu'au battement suivant.
+let choixSlamMasque = false;
+
+function repondreChoixSlam(resume, relancer) {
+  if (!scenePeutAnimer()) {
+    // Hors navigateur il n'y a rien à montrer ni à séquencer : on
+    // reprend tout de suite, comportement strictement inchangé.
+    resume(relancer);
+    render();
+    return;
+  }
+  choixSlamMasque = true;
+  render(); // les marqueurs s'effacent ici, et ici seulement
+  apresBattement(() => {
+    choixSlamMasque = false;
+    resume(relancer);
+    render();
+  });
+}
+
 function highlightedCells() {
   // Rythme (4a) : aucune case cliquable tant qu'une animation vole —
   // c'est la protection la plus importante, un clic de trop ici joue un
   // vrai pas de mouvement.
   if (interfaceGelee()) return [];
+  // Décision de relance de Slam : la case de destination est mise en
+  // surbrillance et rendue cliquable comme n'importe quelle case de
+  // destination de mouvement (retour de Mayrik) — cliquer dessus
+  // accepte le résultat. Placé AVANT le test sur sel.step parce que la
+  // pause pendant le tour de l'IA n'a pas d'étape de sélection.
+  const slamEnAttente = pendingSlamContext();
+  if (slamEnAttente) {
+    const dest = slamDestination(slamEnAttente.ctx);
+    if (isOnBoard(board(), dest.col, dest.row)) {
+      return [{ col: dest.col, row: dest.row, onClick: () => repondreChoixSlam(slamEnAttente.resume, false) }];
+    }
+    return [];
+  }
   if (!sel.step) return [];
   const b = board();
   // Retour de Mayrik : dès qu'un dé est posé sur ANY (étape
@@ -2639,57 +2702,43 @@ function renderBoard() {
 
   // Décision de relance de Slam (p.9) : marker-reroll au centre de la
   // case où le Slam a lieu (topCar/bottomCar partagent réellement
-  // cette case pendant la pause, voir plus haut), marker-no derrière
-  // le véhicule qui décide (largerCar) — même convention que partout
-  // ailleurs. Couvre les deux mécanismes de pause existants (pendant
-  // le propre tour du joueur, ou pendant celui de l'IA quand une
-  // voiture du joueur plus grande est impliquée) — jamais réécrits
-  // ici, juste câblés visuellement (retour de Mayrik : objectif à
-  // terme de retirer une bonne partie des textes de l'UI).
-  const pendingSlam = (sel.pendingHumanSlam && sel.pendingHumanSlam.ctx) ? { ctx: sel.pendingHumanSlam.ctx, resume: resumeHumanSlamRerollChoice }
-    : (G.aiPending && G.aiPending.ctx) ? { ctx: G.aiPending.ctx, resume: resumeAiSlamRerollChoice }
-    : null;
+  // cette case pendant la pause, voir plus haut), et la face du dé
+  // Slam sur la case de DESTINATION désignée par le dé Direction.
+  //
+  // Il n'y a PLUS de marker-yes derrière le véhicule (retour de
+  // Mayrik) : en jouant vite, le réflexe est de cliquer le dé visible
+  // sur la case de destination, pas un marqueur posé ailleurs. C'est
+  // donc ce dé qui accepte le résultat, et la case sous lui est mise
+  // en surbrillance comme n'importe quelle case de destination de
+  // mouvement (voir highlightedCells). Ça supprime du même coup la
+  // variante de placement qui décalait marker-yes en rear-left quand
+  // il tombait sur la même case que le dé.
+  //
+  // Couvre les deux mécanismes de pause existants (pendant le propre
+  // tour du joueur, ou pendant celui de l'IA quand une voiture du
+  // joueur plus grande est impliquée) — jamais réécrits ici, juste
+  // câblés visuellement.
+  const pendingSlam = pendingSlamContext();
   if (pendingSlam) {
     const { ctx, resume } = pendingSlam;
     const { cx, cy } = cellCenter(ctx.topCar.col, ctx.topCar.row);
     const rerollPath = "../images/markers/marker-reroll.webp";
     drawImage(svg, rerollPath, cx - MARKER_ICON_SIZE / 2, cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
-    svg.lastElementChild.addEventListener("click", () => { resume(true); render(); });
-    // Face du dé Slam SEULE (pas le dé Direction, qui reste invisible)
-    // sur la case de DESTINATION désignée par le dé Direction — retour
-    // de Mayrik : montre où le véhicule finira sans afficher le dé qui
-    // l'a déterminé. Vient EN PLUS de marker-reroll ci-dessus, ne le
-    // remplace pas. Purement informatif, PAS cliquable (retour de
-    // Mayrik : marker-reroll suffit déjà pour relancer).
-    // Toujours affiché, MÊME si la destination sort du plateau (bord
-    // haut/bas/arrière, retour de Mayrik) : cellCenter est du pur
-    // calcul géométrique, extrapolable sans souci hors limites — en
-    // haut ça tombe sur la bande titre (aucun souci), en bas ça tombe
-    // sur la zone joueur/un dashboard (accepté tel quel).
-    const delta = getDirectionDelta(ctx.directionRoll, ctx.topCar.col, ctx.topCar.row);
-    const dest = { col: ctx.topCar.col + delta.dCol, row: ctx.topCar.row + delta.dRow };
+    svg.lastElementChild.addEventListener("click", () => repondreChoixSlam(resume, true));
+    // Face du dé Slam SEULE (le dé Direction reste invisible) : montre
+    // où le véhicule finira sans afficher le dé qui l'a déterminé.
+    // Toujours affichée, MÊME si la destination sort du plateau (bord
+    // haut/bas/arrière) : cellCenter est du pur calcul géométrique,
+    // extrapolable sans souci hors limites — en haut ça tombe sur la
+    // bande titre (aucun souci), en bas sur la zone joueur (accepté
+    // tel quel). Dans ce cas hors plateau il n'y a pas de case à
+    // mettre en surbrillance, mais le dé reste cliquable : c'est le
+    // seul moyen d'accepter le résultat.
+    const dest = slamDestination(ctx);
     const dc = cellCenter(dest.col, dest.row);
     const slamPath = `../images/dice/die-fx-slam-${ctx.slamRoll}.webp`;
-    drawImage(svg, slamPath, dc.cx - MARKER_ICON_SIZE / 2, dc.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE);
-    const rearArc = getRearArc(ctx.largerCar);
-    const rear = rearArc.find((a) => a.name === "rear");
-    // Retour de Mayrik : si la case de destination du dé Slam est
-    // JUSTEMENT la case "rear" (où va normalement marker-yes), les
-    // deux se superposent et marker-yes cache le dé — on décale alors
-    // marker-yes vers rear-left (toujours juste derrière le véhicule,
-    // mais une case à côté).
-    const rearCoincidesWithSlamDest = rear && rear.col === dest.col && rear.row === dest.row;
-    const yesTarget = rearCoincidesWithSlamDest ? rearArc.find((a) => a.name === "rear-left") : rear;
-    if (yesTarget && isOnBoard(board(), yesTarget.col, yesTarget.row)) {
-      const rc = cellCenter(yesTarget.col, yesTarget.row);
-      // marker-yes (pas marker-no) — retour de Mayrik : même effet
-      // (refuser la relance = garder ce résultat), mais plus clair
-      // pour le joueur formulé comme "j'accepte ce résultat" plutôt
-      // que "je refuse la relance".
-      const yesPath = "../images/markers/marker-yes.webp";
-      drawImage(svg, yesPath, rc.cx - MARKER_ICON_SIZE / 2, rc.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
-      svg.lastElementChild.addEventListener("click", () => { resume(false); render(); });
-    }
+    drawImage(svg, slamPath, dc.cx - MARKER_ICON_SIZE / 2, dc.cy - MARKER_ICON_SIZE / 2, MARKER_ICON_SIZE, MARKER_ICON_SIZE, 'class="clickable"');
+    svg.lastElementChild.addEventListener("click", () => repondreChoixSlam(resume, false));
   }
 
   // Bonus Road (p.11) : plus de choix textuel Oui/Non — marker-road-N
