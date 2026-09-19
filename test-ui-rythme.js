@@ -460,6 +460,60 @@ async function main() {
   console.log("Un hazard sans image connue n'ouvre pas de scène (attendu true) :",
     win11.eval("sceneIllustration") === null && !win11.document.getElementById("scene-skip"));
 
+  section("Test 12 — Illustrations à deux véhicules : Slam et tir");
+
+  const dom12 = makeDom(true);
+  const win12 = dom12.window;
+  win12.newGame();
+  const G12 = win12.eval("G");
+  G12.allCars.length = 0;
+  const b12 = win12.board();
+  clearHazardsAround(win12, b12, [{ col: 4, row: 3 }, { col: 5, row: 3 }]);
+  const gros = win12.createCar(HUMAN, CAR_SIZE.LARGE, 4, 3);
+  const petit = win12.createCar(win12.eval("OPPONENT"), CAR_SIZE.SMALL, 5, 3);
+  G12.allCars.push(gros, petit);
+  const q = (s) => win12.document.querySelector(s);
+
+  // SLAM — topCar = la voiture entrante, celle qui percute : en HAUT,
+  // même convention que le TOP du dé de Slam et que l'ordre de dessin
+  // sur le plateau.
+  win12.traiterEvenementPresentation({ type: "slam-dice", topCar: gros, bottomCar: petit });
+  console.log("Le percutant est dans la moitié haute (attendu true) :",
+    !!q(".illu-haut img") && q(".illu-haut").dataset.carId === String(gros.id));
+  console.log("Le percuté est dans la moitié basse (attendu true) :",
+    !!q(".illu-bas img") && q(".illu-bas").dataset.carId === String(petit.id));
+  console.log("Le trait blanc sépare les deux moitiés (attendu true) :", !!q(".illu-trait"));
+  console.log("Les deux boîtes ont la même taille, l'échelle vient des webp (attendu true) :",
+    q(".illu-haut").className.includes("illu-demi") && q(".illu-bas").className.includes("illu-demi"));
+
+  // Une relance réémet ses dés : la scène ne doit pas se rejouer.
+  const boiteAvant = q(".illu-haut");
+  win12.traiterEvenementPresentation({ type: "slam-dice", topCar: gros, bottomCar: petit, rerolled: true });
+  console.log("Une relance ne rejoue pas l'entrée des véhicules (attendu true) :", q(".illu-haut") === boiteAvant);
+
+  win12.traiterEvenementPresentation({ type: "slam-resolved", topCar: gros, bottomCar: petit });
+  console.log("La résolution vide la fenêtre (attendu true) :", !q("#illu-module .illu-scene"));
+
+  // TIR — le tireur entre seul, la cible n'arrive qu'une fois désignée.
+  win12.illustrerTireur(gros);
+  console.log("Le tireur occupe la moitié gauche, la droite reste vide (attendu true) :",
+    !!q(".illu-gauche img") && !q(".illu-droite"));
+  win12.illustrerCible(petit);
+  console.log("La cible désignée entre par la droite (attendu true) :",
+    !!q(".illu-droite img") && q(".illu-droite").dataset.carId === String(petit.id));
+
+  win12.traiterEvenementPresentation({ type: "shoot-dice", shooter: gros, target: petit, hit: true });
+  console.log("Le coup de feu pose un éclair et un criblage (attendu true) :", !!q(".illu-flash") && !!q(".illu-impact"));
+  await sleep(400);
+  console.log("L'éclair s'efface, le criblage reste sur la cible (attendu true) :", !q(".illu-flash") && !!q(".illu-impact"));
+
+  win12.traiterEvenementPresentation({ type: "shoot-dice", shooter: gros, target: petit, hit: false });
+  await sleep(400);
+  console.log("Un tir manqué ne laisse aucun impact (attendu true) :", !q(".illu-impact"));
+
+  win12.traiterEvenementPresentation({ type: "shoot-resolved", shooter: gros, target: petit, hit: false });
+  console.log("La fin du tir vide la fenêtre (attendu true) :", !q("#illu-module .illu-scene"));
+
   console.log("\n=== Fin des tests dédiés (rythme des animations, 4a) ===");
 }
 
