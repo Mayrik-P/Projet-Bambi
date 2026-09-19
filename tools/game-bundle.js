@@ -724,9 +724,7 @@ function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remain
   // ce pas, jamais recalculée ici.
   if (space.isFinishLine) {
     log.push(`${car.id} atteint la Finish Line — mouvement interrompu immédiatement.`);
-    if (slamOptions.emitSteps) {
-      yield { type: "step", car, col: car.col, row: car.row };
-    }
+    yield* emitEvent(slamOptions, { type: "step", car, col: car.col, row: car.row });
     return { log, remaining: 0, stopped: true, reachedFinishLine: true };
   }
 
@@ -734,14 +732,12 @@ function* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remain
   // de la partie) — demandée par Mayrik le 28/08 pour voir le
   // mouvement de l'IA case par case au lieu d'un saut direct vers la
   // case finale + un pavé de log. N'a lieu QUE si l'appelant le
-  // demande explicitement via `slamOptions.emitSteps` (voir
+  // demande explicitement via `slamOptions.emitEvents` (voir
   // tools/ui-script.js, driveAiTurnGenerator) — absent par défaut,
   // donc AUCUN changement de comportement pour tout code existant
   // (tests, self-play, tour humain click par click qui voit déjà
   // chaque case au fil de ses propres clics).
-  if (slamOptions.emitSteps) {
-    yield { type: "step", car, col: car.col, row: car.row };
-  }
+  yield* emitEvent(slamOptions, { type: "step", car, col: car.col, row: car.row });
 
   // Résolution d'un hazard éventuel (p.7) AVANT la vérification
   // d'occupation : un Wreck fraîchement posé devient lui-même
@@ -1308,8 +1304,63 @@ function rollRoadDie(injectedValue = null) {
 // resolveHazardGen, le cas MINE continue d'appeler applyDamage()
 // directement, sans passer par un générateur.
 // -----------------------------------------------------------------
+// -----------------------------------------------------------------
+// ÉVÉNEMENTS DE PRÉSENTATION (chantier rythme 4b)
+// -----------------------------------------------------------------
+// Deux natures de `yield` circulent maintenant dans la chaîne, et il
+// ne faut jamais les confondre :
+//   - une DÉCISION ({type:"slam-reroll"}) : le moteur ne PEUT PAS
+//     continuer sans la réponse d'un joueur. C'est le contrat décrit
+//     au-dessus, inchangé.
+//   - un ÉVÉNEMENT DE PRÉSENTATION (ci-dessous) : le moteur annonce
+//     ce qu'il vient de faire et s'arrête un instant pour laisser
+//     l'interface le montrer. La valeur renvoyée n'est jamais lue, et
+//     ignorer l'événement ne change STRICTEMENT RIEN au résultat de la
+//     partie.
+//
+// Pourquoi ces événements : sans eux, tous les moments intéressants
+// d'un pas (dés lancés, slam résolu, dégât infligé, tir résolu)
+// avaient lieu à l'intérieur d'un unique {type:"step"}, sans rien à
+// quoi accrocher une pause — le véhicule avait donc déjà bougé pendant
+// que ses dés volaient encore (constat de Mayrik en jouant).
+//
+// Ils ne sont émis QUE si l'appelant le demande via
+// `options.emitEvents` (anciennement `emitSteps`, devenu trop étroit).
+// Absent par défaut : aucun changement de comportement pour les
+// tests, le self-play ou toute API synchrone existante.
+const PRESENTATION_EVENTS = new Set([
+  "step",           // le véhicule vient d'atteindre une case
+  "hazard",         // un hazard vient d'être révélé, avant d'être résolu
+  "slam-dice",      // les dés de slam viennent d'être lancés, avant tout déplacement
+  "slam-resolved",  // le slam est résolu, on sait qui part et dans quelle direction
+  "damage",         // un jeton de dégât vient d'être posé sur un véhicule
+  "shoot-dice",     // le dé de tir vient d'être lancé, avant l'éventuel dégât
+  "shoot-resolved"  // le tir est entièrement résolu
+]);
+
+function isPresentationEvent(value) {
+  return !!value && PRESENTATION_EVENTS.has(value.type);
+}
+
+// À utiliser exclusivement en `yield* emitEvent(options, {...})` : sans
+// l'option, le générateur ne se suspend même pas.
+function* emitEvent(options, event) {
+  if (options && options.emitEvents) {
+    yield event;
+  }
+}
+
 function driveSync(gen) {
-  const result = gen.next();
+  let result = gen.next();
+  // Un appelant synchrone n'a pas d'interface à animer : il traverse
+  // les événements de présentation sans rien en faire. Ça rend
+  // l'émission d'un événement SANS RISQUE depuis n'importe quel point
+  // de la chaîne, y compris un point encore atteignable par une API
+  // synchrone. Seule une vraie décision en attente reste une violation
+  // du contrat.
+  while (!result.done && isPresentationEvent(result.value)) {
+    result = gen.next();
+  }
   if (!result.done) {
     throw new Error("Générateur de résolution interrompu de façon inattendue en mode synchrone (isHumanOwner non fourni) — ceci ne devrait jamais arriver.");
   }
@@ -1391,9 +1442,7 @@ function* forceMoveOneSpaceGen(tile, car, allCars, directionName, options = {}, 
   // détectera la victoire à ce point exact.
   if (space.isFinishLine) {
     log.push(`${car.id} atteint la Finish Line — mouvement interrompu immédiatement.`);
-    if (options.emitSteps) {
-      yield { type: "step", car, col: car.col, row: car.row };
-    }
+    yield* emitEvent(options, { type: "step", car, col: car.col, row: car.row });
     return { log, reachedFinishLine: true };
   }
 
@@ -1402,9 +1451,7 @@ function* forceMoveOneSpaceGen(tile, car, allCars, directionName, options = {}, 
   // Skid, glissade Oil Slick, cascade Dazed via enterAdjacentSpaceGen
   // plus haut) : n'importe quelle case franchie mérite une frame,
   // pas seulement l'avancée normale.
-  if (options.emitSteps) {
-    yield { type: "step", car, col: car.col, row: car.row };
-  }
+  yield* emitEvent(options, { type: "step", car, col: car.col, row: car.row });
 
   // Résolution d'un hazard éventuel (p.7) avant la vérification
   // d'occupation, même logique que dans enterAdjacentSpace.
@@ -1530,6 +1577,12 @@ function* resolveSlamGen(tile, allCars, topCar, bottomCar, options = {}) {
   let { slamRoll, directionRoll, rerollEligible, largerCar, smallerCar, movingCar } = rollSlamDice(topCar, bottomCar, forcedDice);
   log.push(`Dé de slam : ${slamRoll} | Dé de direction : ${directionRoll}`);
 
+  // Les dés SONT LANCÉS, mais personne n'a encore bougé : c'est ici que
+  // l'interface peut les montrer en vol et attendre qu'ils se posent.
+  // Avant ce chantier, ce moment n'existait pas — le déplacement induit
+  // suivait dans la même foulée.
+  yield* emitEvent(options, { type: "slam-dice", topCar, bottomCar, largerCar, smallerCar, movingCar, slamRoll, directionRoll, rerolled: false });
+
   if (rerollEligible) {
     const ctx = { largerCar, smallerCar, slamRoll, directionRoll, movingCar, topCar, bottomCar };
     const wantsReroll = isHumanOwner(largerCar.owner)
@@ -1541,11 +1594,14 @@ function* resolveSlamGen(tile, allCars, topCar, bottomCar, options = {}) {
       slamRoll = rerolled.slamRoll;
       directionRoll = rerolled.directionRoll;
       log.push(`Relance → Dé de slam : ${slamRoll} | Dé de direction : ${directionRoll}`);
+      yield* emitEvent(options, { type: "slam-dice", topCar, bottomCar, largerCar, smallerCar, movingCar, slamRoll, directionRoll, rerolled: true });
     }
   }
 
   const finalResult = yield* finalizeSlamGen(tile, allCars, slamRoll, directionRoll, topCar, bottomCar, options);
   log.push(...finalResult.log);
+
+  yield* emitEvent(options, { type: "slam-resolved", topCar, bottomCar, movingCar: finalResult.movingCar, direction: finalResult.direction });
 
   return { log, movingCar: finalResult.movingCar, direction: finalResult.direction, frontExitInfo: finalResult.frontExitInfo };
 }
@@ -1914,6 +1970,11 @@ function* resolveHazardGen(tile, allCars, car, remaining, options = {}) {
   }
 
   const hazardType = cell.hazard;
+
+  // Le hazard est RÉVÉLÉ mais pas encore résolu : le moment exact où
+  // l'interface doit l'illustrer (chantier 4c), avant tout dé et tout
+  // déplacement.
+  yield* emitEvent(options, { type: "hazard", car, hazardType, col: car.col, row: car.row });
   log.push(`${car.id} déclenche un hazard : ${hazardType}`);
 
   switch (hazardType) {
@@ -2375,6 +2436,11 @@ function* applyDamageGen(car, options = {}) {
   car.damageTokens.push({ type: tokenType });
   log.push(`${car.id} reçoit un dégât — jeton ${tokenType} (total : ${car.damageTokens.length}/2)`);
 
+  // Le jeton est posé : l'interface peut le révéler sous le dashboard
+  // AVANT l'effet qu'il déclenche (Skid, Shrapnel…), qui bougera
+  // peut-être encore des véhicules juste après.
+  yield* emitEvent(options, { type: "damage", car, tokenType, tokenCount: car.damageTokens.length });
+
   if (car.damageTokens.length >= 2) {
     car.status = CAR_STATUS.INOPERABLE;
     car.facingReversed = true; // "Turn the car to face backward on the road tile" (p.6)
@@ -2441,14 +2507,22 @@ function* resolveShootGen(tile, allCars, shooter, target, options = {}) {
     (roll === "small-medium" && (target.size === CAR_SIZE.SMALL || target.size === CAR_SIZE.MEDIUM)) ||
     roll === target.size;
 
+  // Le dé de tir est lancé et on sait déjà s'il touche, mais le dégât
+  // n'est pas encore appliqué : l'interface montre le dé, puis le
+  // résultat, au lieu des deux d'un coup.
+  yield* emitEvent(options, { type: "shoot-dice", shooter, target, roll, hit: isHit });
+
   if (!isHit) {
     log.push(`Raté — le dé ne correspond pas à la taille de ${target.id}`);
+    yield* emitEvent(options, { type: "shoot-resolved", shooter, target, hit: false });
     return { log, hit: false };
   }
 
   log.push(`Touché !`);
   const dmgResult = yield* applyDamageGen(target, { ...options, tile, allCars });
   log.push(...dmgResult.log);
+
+  yield* emitEvent(options, { type: "shoot-resolved", shooter, target, hit: true });
 
   return { log, hit: true, damageResult: dmgResult };
 }
@@ -3180,6 +3254,8 @@ module.exports = {
   setMovesObserver,
 
   driveSync,
+  isPresentationEvent,
+  PRESENTATION_EVENTS,
   TERRAIN,
   MOVE_COST,
   CAR_SIZE,
@@ -6307,7 +6383,7 @@ function* executeDecisionGen(progressionState, roundState, allCars, allChoppers,
   const shootTargetFn = (currentCar, cars) => chooseShootTarget(currentCar.col, currentCar.row, currentCar.owner, cars);
 
   let effectiveDieValue = decision.dieValue;
-  const slamOptions = { decideReroll: decideSlamRerollDefault, isHumanOwner: options.isHumanOwner, emitSteps: options.emitSteps };
+  const slamOptions = { decideReroll: decideSlamRerollDefault, isHumanOwner: options.isHumanOwner, emitEvents: options.emitEvents };
 
   if (command && !isCoastTurn) {
     drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);

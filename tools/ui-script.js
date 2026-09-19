@@ -1353,7 +1353,7 @@ function playAiTurn() {
   // sur le même état de jeu.
   const gen = executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, PLAYER_NAMES, cp, decision, {
     isHumanOwner: (owner) => owner === HUMAN,
-    emitSteps: true // pause visuelle case par case (voir driveAiTurnGenerator) — jamais activé côté self-play/tests
+    emitEvents: true // pauses visuelles du tour (voir driveAiTurnGenerator) — jamais activé côté self-play/tests
   });
   driveAiTurnGenerator(gen, `Round ${G.roundState.roundNumber} — ${cp}`, decision);
 }
@@ -1558,7 +1558,7 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
   G.aiAnimating = true;
   const outcome = driveInteractive(gen, answer);
   if (!outcome.done) {
-    if (outcome.pending.type === "step") {
+    if (isPresentationEvent(outcome.pending)) {
       render(); // affiche IMMÉDIATEMENT la case qui vient d'être atteinte
       // Victoire IMMÉDIATE (retour de Mayrik) : un véhicule — y compris
       // celui du joueur humain, projeté par un Slam pendant le tour de
@@ -1969,17 +1969,40 @@ function resumeMovementLoopOrStop(remainingAfter) {
 function driveHumanStepGenerator(gen, onComplete, answer) {
   const outcome = driveInteractive(gen, answer);
   if (!outcome.done) {
+    if (isPresentationEvent(outcome.pending)) {
+      // Chantier 4b — LA CONVERGENCE DES DEUX PILOTES. Ce bloc est le
+      // jumeau exact de celui de driveAiTurnGenerator : même flux
+      // d'événements venu du moteur, même rythme, même traitement. Le
+      // tour humain n'est plus piloté par l'interface pendant que celui
+      // de l'IA est piloté par le moteur — les deux sont désormais
+      // pilotés par le moteur, et la SEULE différence qui reste entre
+      // eux est l'origine des décisions (un clic ici, la politique IA
+      // là), ce qui est exactement la différence qui doit rester.
+      //
+      // Conséquence directe, et c'est tout l'objet du chantier : les
+      // dés d'un Slam tombent AVANT le déplacement qu'ils provoquent,
+      // y compris pendant le tour du joueur.
+      G.uiLocked = true; // un pas est en cours de résolution : aucun clic
+      appliquerVoileDeGel();
+      render();
+      apresBattement(() => driveHumanStepGenerator(gen, onComplete));
+      return;
+    }
+    G.uiLocked = false;
     sel.pendingHumanSlam = { gen, ctx: outcome.pending, onComplete };
     sel.step = "slam-reroll-choice";
+    render();
     gelerPendantLaScene(); // voir la même attente côté IA : on répond après avoir vu les dés
     return;
   }
   sel.pendingHumanSlam = null;
+  G.uiLocked = false;
   onComplete(outcome.result);
   // La case suivante ne redevient cliquable qu'une fois les dés de ce
   // pas posés et le battement écoulé. Sans animation en cours, rien
   // n'est gelé et le clic suivant reste immédiat : c'est le joueur qui
   // donne le tempo tant que le jeu ne fait rien tout seul.
+  render();
   gelerPendantLaScene();
 }
 
@@ -1996,7 +2019,13 @@ function pickEntryRow(option) {
   const damageBefore = sel.car.damageTokens.length;
   const gen = executeEntryStepGen(G.progressionState, G.allCars, sel.car, remainingBefore, option.entryRow, {
     ...sel.slamOptions,
-    isHumanOwner: (owner) => owner === HUMAN
+    isHumanOwner: (owner) => owner === HUMAN,
+    // Chantier 4b : le tour humain reçoit EXACTEMENT le même flux
+    // d'événements que celui de l'IA (voir driveHumanStepGenerator).
+    // Conditionné à scenePeutAnimer() : hors navigateur il n'y a rien à
+    // montrer ni à attendre, le moteur n'émet donc rien et le tour
+    // humain reste strictement synchrone, comme avant ce chantier.
+    emitEvents: scenePeutAnimer()
   });
   driveHumanStepGenerator(gen, (result) => {
     if (sel.car.damageTokens.length > damageBefore) sel.hadDamage = true;
@@ -2009,7 +2038,13 @@ function pickMoveStep(option) {
   const damageBefore = sel.car.damageTokens.length;
   const gen = executeMoveStepGen(G.progressionState, G.allCars, G.allChoppers, PLAYER_NAMES, sel.car, remainingBefore, option.direction, {
     ...sel.slamOptions,
-    isHumanOwner: (owner) => owner === HUMAN
+    isHumanOwner: (owner) => owner === HUMAN,
+    // Chantier 4b : le tour humain reçoit EXACTEMENT le même flux
+    // d'événements que celui de l'IA (voir driveHumanStepGenerator).
+    // Conditionné à scenePeutAnimer() : hors navigateur il n'y a rien à
+    // montrer ni à attendre, le moteur n'émet donc rien et le tour
+    // humain reste strictement synchrone, comme avant ce chantier.
+    emitEvents: scenePeutAnimer()
   });
   driveHumanStepGenerator(gen, (result) => {
     if (sel.car.damageTokens.length > damageBefore) sel.hadDamage = true;
@@ -2096,7 +2131,13 @@ function proceedToShootPhase() {
 function pickShootTarget(target) {
   const gen = executeShootGen(G.progressionState, G.allCars, G.allChoppers, sel.car, target, G.roundState.roundNumber, {
     ...sel.slamOptions,
-    isHumanOwner: (owner) => owner === HUMAN
+    isHumanOwner: (owner) => owner === HUMAN,
+    // Chantier 4b : le tour humain reçoit EXACTEMENT le même flux
+    // d'événements que celui de l'IA (voir driveHumanStepGenerator).
+    // Conditionné à scenePeutAnimer() : hors navigateur il n'y a rien à
+    // montrer ni à attendre, le moteur n'émet donc rien et le tour
+    // humain reste strictement synchrone, comme avant ce chantier.
+    emitEvents: scenePeutAnimer()
   });
   driveHumanStepGenerator(gen, (result) => {
     logTurn(result.log || []);
