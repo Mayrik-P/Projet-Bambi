@@ -383,6 +383,48 @@ async function main() {
   console.log("Un tap de plus ne fait rien (attendu true) :",
     win9.sauterSceneIllustration() === false);
 
+  section("Test 10 — Le pas que le joueur choisit lui-même a un rythme fixe");
+
+  // Mesuré sur le vrai bundle : du clic sur une case de destination
+  // jusqu'au retour des cases cliquables. Avant ce réglage, ce délai
+  // valait PACE_MS (≈1 s en Lent) — le joueur attendait avant son
+  // propre coup suivant.
+  async function delaiPasJoueur(vitesse) {
+    const d = makeDom(true);
+    const w = d.window;
+    w.newGame();
+    w.setPaceSpeed(vitesse);
+    const Gm = w.eval("G");
+    Gm.allCars.length = 0;
+    const bm = w.board();
+    clearHazardsAround(w, bm, [{ col: 4, row: 3 }, { col: 5, row: 3 }, { col: 6, row: 3 }]);
+    const voiture = w.createCar(HUMAN, CAR_SIZE.MEDIUM, 4, 3);
+    Gm.allCars.push(voiture);
+    Object.assign(w.eval("sel"), {
+      mode: "normal", commandAvailable: false, car: voiture, dieValue: 3, remaining: 3,
+      slamOptions: { decideReroll: w.decideSlamRerollDefault }, roadEligible: false,
+      hadSlam: false, hadDamage: false, roadBonusOffered: true, inRoadBonus: false, step: "move-step"
+    });
+    w.render();
+    const t0 = Date.now();
+    w.pickMoveStep({ direction: "front", col: 5, row: 3, outcome: "normal", cost: 1 });
+    w.render();
+    let delai = null;
+    for (let i = 0; i < 300; i++) {
+      if (voiture.col === 5 && w.highlightedCells().length > 0) { delai = Date.now() - t0; break; }
+      await sleep(10);
+    }
+    return delai;
+  }
+
+  const dLent = await delaiPasJoueur("slow");
+  const dRapide = await delaiPasJoueur("fast");
+  console.log("Le battement du pas joueur est fixe, hors réglage (attendu true) :",
+    win3.eval("BATTEMENT_PAS_JOUEUR_MS") === 200);
+  console.log("En Lent, les destinations reviennent en moins de 600 ms (attendu true) :", dLent !== null && dLent < 600);
+  console.log("Lent et Rapide donnent le même ressenti, à 150 ms près (attendu true) :",
+    dRapide !== null && Math.abs(dLent - dRapide) < 150);
+
   console.log("\n=== Fin des tests dédiés (rythme des animations, 4a) ===");
 }
 
