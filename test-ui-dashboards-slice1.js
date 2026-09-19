@@ -465,6 +465,20 @@ const casesSlam12 = win.highlightedCells();
 console.log("La case de destination est proposée comme case cliquable (attendu true) :",
   casesSlam12.length === 1 && casesSlam12[0].col === destCol && casesSlam12[0].row === destRow);
 
+// Ordre des calques (retour de Mayrik) : contrairement à toutes les
+// autres cases surlignées, celle-ci passe SOUS les véhicules — la case
+// où un Slam envoie un véhicule peut être déjà occupée, et la
+// surbrillance masquait justement l'occupant, qui est une information
+// décisive pour accepter ou relancer.
+const enfants12 = [...boardEl3.children];
+const iSurbrillance12 = enfants12.findIndex((e) => e.tagName === "polygon" && e.getAttribute("fill") === "#b0d458");
+const iDernierVehicule12 = enfants12.map((e) => (e.innerHTML || "").includes("/vehicles/")).lastIndexOf(true);
+const iDe12 = enfants12.indexOf(slamFaceImgs[0]);
+console.log("Ordre des calques : plateau < surbrillance < véhicules < dé Slam (attendu true) :",
+  iSurbrillance12 >= 0 && iDernierVehicule12 > iSurbrillance12 && iDe12 > iDernierVehicule12);
+console.log("La surbrillance n'est peinte qu'UNE fois (pas redessinée par-dessus) (attendu true) :",
+  enfants12.filter((e) => e.tagName === "polygon" && e.getAttribute("fill") === "#b0d458").length === 1);
+
 click(dom, slamFaceImgs[0]);
 sel = win.eval("sel");
 console.log("Cliquer le dé Slam a bien répondu 'j'accepte ce résultat' (pause terminée) (attendu true) :", !sel.pendingHumanSlam);
