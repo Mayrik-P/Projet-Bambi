@@ -1714,6 +1714,7 @@ const PRESENTATION_EVENTS = new Set([
   "slam-dice",      // les dés de slam viennent d'être lancés, avant tout déplacement
   "slam-resolved",  // le slam est résolu, on sait qui part et dans quelle direction
   "damage",         // un jeton de dégât vient d'être posé sur un véhicule
+  "damage-resolved",// ses effets sont finis : le jeton peut repasser face cachée
   "shoot-dice",     // le dé de tir vient d'être lancé, avant l'éventuel dégât
   "shoot-resolved"  // le tir est entièrement résolu
 ]);
@@ -2518,7 +2519,13 @@ function* resolveDamageTokenGen(tile, allCars, car, tokenType, options = {}) {
           allCars,
           forcedDice,
           decideReroll: options.decideReroll,
-          isHumanOwner: options.isHumanOwner
+          isHumanOwner: options.isHumanOwner,
+          // Sans ce relais, le dégât infligé EN CASCADE par le
+          // Shrapnel n'émettait aucun événement : l'interface voyait
+          // le jeton de la voiture touchée apparaître sans révélation
+          // ni pause (les options sont reconstruites à la main ici,
+          // pas propagées par ...options).
+          emitEvents: options.emitEvents
         });
         log.push(...hitResult.log);
       } else {
@@ -2813,13 +2820,20 @@ function* applyDamageGen(car, options = {}) {
     }
   }
 
-  car.damageTokens.push({ type: tokenType });
+  // La direction est CONSERVÉE dans le jeton (chantier 4c) : les six
+  // jetons Skid portent chacun une direction fixe imprimée dessus
+  // (p.12) et ont donc six images distinctes. Sans cette donnée,
+  // l'interface saurait qu'il s'agit d'un Skid mais pas lequel
+  // montrer. Absente pour tous les autres types.
+  const token = { type: tokenType };
+  if (skidDirection) token.skidDirection = skidDirection;
+  car.damageTokens.push(token);
   log.push(`${car.id} reçoit un dégât — jeton ${tokenType} (total : ${car.damageTokens.length}/2)`);
 
   // Le jeton est posé : l'interface peut le révéler sous le dashboard
   // AVANT l'effet qu'il déclenche (Skid, Shrapnel…), qui bougera
   // peut-être encore des véhicules juste après.
-  yield* emitEvent(options, { type: "damage", car, tokenType, tokenCount: car.damageTokens.length });
+  yield* emitEvent(options, { type: "damage", car, token, tokenType, skidDirection: skidDirection || null, tokenCount: car.damageTokens.length });
 
   if (car.damageTokens.length >= 2) {
     car.status = CAR_STATUS.INOPERABLE;
@@ -2831,6 +2845,13 @@ function* applyDamageGen(car, options = {}) {
     const effectResult = yield* resolveDamageTokenGen(options.tile, options.allCars, car, tokenType, { ...options, skidDirection });
     log.push(...effectResult.log);
   }
+
+  // Les effets de CE jeton sont entièrement appliqués : l'interface
+  // peut le remettre face cachée (chantier 4c). Émis après l'effet, et
+  // donc après l'éventuelle cascade qu'il a provoquée — un jeton
+  // déclenché par un autre se retourne ainsi avant celui qui l'a
+  // déclenché, ce qui est l'ordre réel des choses.
+  yield* emitEvent(options, { type: "damage-resolved", car, token, tokenType });
 
   return { log, applied: true };
 }
