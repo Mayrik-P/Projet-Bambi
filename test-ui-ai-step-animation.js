@@ -49,7 +49,7 @@ async function main() {
   const decision = { car: aiCar, dieValue: 3, command: null, isEntry: false, isCoast: false, destination: { path: ["front", "front", "front"] }, slam: null, roadBonusPath: null };
   const gen = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, win.eval("PLAYER_NAMES"), OPPONENT, decision, {
     isHumanOwner: (owner) => owner === HUMAN,
-    emitSteps: true
+    emitEvents: true
   });
 
   const colsSeenDuringAnimation = [];
@@ -78,7 +78,7 @@ async function main() {
   console.log("G.aiAnimating est repassé à false (attendu true) :", win.eval("G").aiAnimating === false);
   console.log("Le bouton redevient cliquable, plus de 'AI is playing' (attendu true) :", !dashboardsText(dom).includes("AI is playing"));
 
-  section("Test 2 — Non-régression : sans emitSteps (via executeDecisionGen direct, comme avant), aucun setTimeout, résolution immédiate");
+  section("Test 2 — Non-régression : sans emitEvents (via executeDecisionGen direct, comme avant), aucun setTimeout, résolution immédiate");
 
   const dom2 = makeDom();
   const win2 = dom2.window;
@@ -94,7 +94,7 @@ async function main() {
   const decision2 = { car: aiCar2, dieValue: 1, command: null, isEntry: false, isCoast: false, destination: { path: ["front"] }, slam: null, roadBonusPath: null };
   const gen2 = win2.executeDecisionGen(G2.progressionState, G2.roundState, G2.allCars, G2.allChoppers, win2.eval("PLAYER_NAMES"), OPPONENT, decision2, {
     isHumanOwner: (owner) => owner === HUMAN
-    // pas de emitSteps : comportement d'avant cette fonctionnalité
+    // pas de emitEvents : comportement d'avant cette fonctionnalité
   });
   win2.driveAiTurnGenerator(gen2, "Test non-régression", decision2);
   console.log("Résolu immédiatement, sans attendre (attendu true) :", aiCar2.col === 4);

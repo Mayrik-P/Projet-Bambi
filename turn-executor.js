@@ -132,7 +132,7 @@ function* executeDecisionGen(progressionState, roundState, allCars, allChoppers,
   const shootTargetFn = (currentCar, cars) => ai.chooseShootTarget(currentCar.col, currentCar.row, currentCar.owner, cars);
 
   let effectiveDieValue = decision.dieValue;
-  const slamOptions = { decideReroll: ai.decideSlamRerollDefault, isHumanOwner: options.isHumanOwner, emitSteps: options.emitSteps };
+  const slamOptions = { decideReroll: ai.decideSlamRerollDefault, isHumanOwner: options.isHumanOwner, emitEvents: options.emitEvents };
 
   if (command && !isCoastTurn) {
     drawSpecificDieFromPool(roundState.dicePool, currentPlayer, command.dieValue);

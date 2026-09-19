@@ -1295,7 +1295,7 @@ const decision39 = { car: aiCar39, dieValue: 3, command: { type: "nitro", dieVal
 decision39.roundAtStart = G.roundState.roundNumber;
 win.eval("function __setAiDecision(d) { currentAiDecision = d; }");
 win.__setAiDecision(decision39); // même chose que playAiTurn() ferait AVANT de lancer le générateur
-const gen39 = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, win.eval("PLAYER_NAMES"), OPPONENT, decision39, { isHumanOwner: (o) => o === HUMAN, emitSteps: true });
+const gen39 = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, win.eval("PLAYER_NAMES"), OPPONENT, decision39, { isHumanOwner: (o) => o === HUMAN, emitEvents: true });
 win.driveAiTurnGenerator(gen39, "Test — dé visible avant/pendant mouvement", decision39);
 
 console.log("L'animation est bien en cours (pas encore terminée) (attendu true) :", win.eval("G.aiAnimating") === true);

@@ -1,6 +1,6 @@
 /**
  * Test dédié — pause visuelle case par case pendant le tour de l'IA
- * (demande de Mayrik, 28/08) : `options.emitSteps` fait `yield` un
+ * (demande de Mayrik, 28/08) : `options.emitEvents` fait `yield` un
  * objet {type:"step", car, col, row} à CHAQUE case franchie durant le
  * mouvement (normale, forcée par un Slam/Skid/Oil Slick), sans jamais
  * affecter les règles ni l'issue de la partie. Absent par défaut —
@@ -47,11 +47,11 @@ function clearHazardsAlong(progressionState, cells) {
 }
 
 // -----------------------------------------------------------------
-// TEST 1 — emitSteps: true -> une pause "step" par case franchie,
+// TEST 1 — emitEvents: true -> une pause "step" par case franchie,
 // avec la position déjà mise à jour à CHAQUE pause (pas seulement à
 // la toute fin).
 // -----------------------------------------------------------------
-section("Test 1 — emitSteps:true : une pause par case, position déjà à jour à chaque pause");
+section("Test 1 — emitEvents: true : une pause par case, position déjà à jour à chaque pause");
 
 let progressionState = freshProgressionState();
 clearHazardsAlong(progressionState, [{ col: 4, row: 3 }, { col: 5, row: 3 }, { col: 6, row: 3 }]);
@@ -68,7 +68,7 @@ const decision = {
 
 const gen = executeDecisionGen(progressionState, roundState, allCars, [], ["Vous", "IA"], "IA", decision, {
   isHumanOwner: (owner) => owner === "Vous",
-  emitSteps: true
+  emitEvents: true
 });
 
 const positionsSeenAtPause = [];
@@ -85,12 +85,12 @@ console.log("Positions vues, dans l'ordre (attendu 4,5,6 en colonne) :", positio
 console.log("La voiture est bien arrivée en (col 6, row 3) au final (attendu true) :", aiCar.col === 6 && aiCar.row === 3);
 
 // -----------------------------------------------------------------
-// TEST 2 — Non-régression : SANS emitSteps (comportement par défaut,
+// TEST 2 — Non-régression : SANS emitEvents (comportement par défaut,
 // tout le code existant), AUCUNE pause de type "step" ne doit jamais
 // apparaître — seul un Slam impliquant une voiture humaine pourrait
 // encore mettre en pause (type "slam-reroll", inchangé).
 // -----------------------------------------------------------------
-section("Test 2 — Sans emitSteps : aucune pause 'step', comportement 100% inchangé");
+section("Test 2 — Sans emitEvents : aucune pause 'step', comportement 100% inchangé");
 
 progressionState = freshProgressionState();
 clearHazardsAlong(progressionState, [{ col: 4, row: 3 }, { col: 5, row: 3 }, { col: 6, row: 3 }]);
@@ -102,7 +102,7 @@ roundState.dicePool["IA"] = [3, 4, 4, 1];
 const decision2 = { car: aiCar2, dieValue: 3, command: null, isEntry: false, isCoast: false, destination: { path: ["front", "front", "front"] }, slam: null, roadBonusPath: null };
 const gen2 = executeDecisionGen(progressionState, roundState, allCars, [], ["Vous", "IA"], "IA", decision2, {
   isHumanOwner: (owner) => owner === "Vous"
-  // pas de emitSteps
+  // pas de emitEvents
 });
 let stepPauses2 = 0;
 let outcome2 = driveInteractive(gen2);
@@ -114,11 +114,11 @@ console.log("Aucune pause 'step' obtenue (attendu 0) :", stepPauses2);
 console.log("La voiture est bien arrivée au bon endroit malgré tout (attendu true) :", aiCar2.col === 6 && aiCar2.row === 3);
 
 // -----------------------------------------------------------------
-// TEST 3 — emitSteps + Slam en cours de route : les deux types de
+// TEST 3 — emitEvents + Slam en cours de route : les deux types de
 // pause ({type:"step"} et {type:"slam-reroll"}) doivent cohabiter
 // sans se marcher dessus dans la même exécution.
 // -----------------------------------------------------------------
-section("Test 3 — emitSteps + Slam contre une voiture humaine plus grande en cours de route : les 2 types de pause cohabitent");
+section("Test 3 — emitEvents + Slam contre une voiture humaine plus grande en cours de route : les 2 types de pause cohabitent");
 
 progressionState = freshProgressionState();
 clearHazardsAlong(progressionState, [{ col: 4, row: 3 }, { col: 5, row: 3 }]);
@@ -131,7 +131,7 @@ roundState.dicePool["IA"] = [2, 4, 4, 1];
 const decision3 = { car: aiCar3, dieValue: 2, command: null, isEntry: false, isCoast: false, destination: { path: ["front", "front"] }, slam: null, roadBonusPath: null };
 const gen3 = executeDecisionGen(progressionState, roundState, allCars, [], ["Vous", "IA"], "IA", decision3, {
   isHumanOwner: (owner) => owner === "Vous",
-  emitSteps: true
+  emitEvents: true
 });
 const typesSeen = [];
 let outcome3 = driveInteractive(gen3);

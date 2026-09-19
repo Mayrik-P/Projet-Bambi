@@ -91,7 +91,7 @@ async function main() {
   const decision = { car: aiCar, dieValue: 3, command: null, isEntry: false, isCoast: false, destination: { path: ["front", "front", "front"] }, slam: null, roadBonusPath: null };
   const gen = win.executeDecisionGen(G.progressionState, G.roundState, G.allCars, G.allChoppers, win.eval("PLAYER_NAMES"), OPPONENT, decision, {
     isHumanOwner: (owner) => owner === HUMAN,
-    emitSteps: true
+    emitEvents: true
   });
 
   // Animation factice inscrite au registre AVANT le lancement : elle
