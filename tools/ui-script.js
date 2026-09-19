@@ -2314,6 +2314,18 @@ function repondreChoixSlam(resume, relancer) {
   });
 }
 
+// Peinture d'une case surlignée. Factorisée parce qu'elle est posée à
+// DEUX profondeurs différentes selon le cas — voir les deux passages
+// dans renderBoard.
+function peindreSurbrillance(svg, col, row) {
+  const polyEl = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  polyEl.setAttribute("points", pts2s(cellPoly(col, row)));
+  polyEl.setAttribute("fill", "#b0d458");
+  polyEl.setAttribute("fill-opacity", "0.55");
+  polyEl.setAttribute("pointer-events", "none"); // le clic reste géré par le polygone de la case
+  svg.appendChild(polyEl);
+}
+
 function highlightedCells() {
   // Rythme (4a) : aucune case cliquable tant qu'une animation vole —
   // c'est la protection la plus importante, un clic de trop ici joue un
@@ -2528,6 +2540,20 @@ function renderBoard() {
     svg.appendChild(polyEl);
   }
 
+  // Surbrillance de la case de destination d'un Slam : elle passe SOUS
+  // les véhicules, contrairement à toutes les autres (retour de
+  // Mayrik). La raison tient à une différence de nature : une case de
+  // destination de mouvement est forcément VIDE, alors que la case où
+  // un Slam envoie un véhicule peut très bien être déjà occupée — et
+  // c'est une information décisive pour accepter ou relancer. Peinte
+  // par-dessus, la surbrillance masquait justement le véhicule qui s'y
+  // trouve. Ordre voulu : plateau < surbrillance < véhicule < dé Slam.
+  const slamEnCours = pendingSlamContext();
+  const destSousVehicules = slamEnCours ? slamDestination(slamEnCours.ctx) : null;
+  if (destSousVehicules) {
+    peindreSurbrillance(svg, destSousVehicules.col, destSousVehicules.row);
+  }
+
   // Empilement de deux véhicules sur la même case. Convention demandée
   // par Mayrik, et qui est aussi celle du dé de Slam : la voiture qui
   // vient de percuter (TOP) se dessine PAR-DESSUS celle qui était déjà
@@ -2631,13 +2657,10 @@ function renderBoard() {
   // la marge hors grille (sortie par l'avant) : un seul passage
   // couvre les deux cas, plus besoin de logique séparée.
   for (const h of highlights) {
-    const poly = cellPoly(h.col, h.row);
-    const polyEl = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-    polyEl.setAttribute("points", pts2s(poly));
-    polyEl.setAttribute("fill", "#b0d458");
-    polyEl.setAttribute("fill-opacity", "0.55");
-    polyEl.setAttribute("pointer-events", "none");
-    svg.appendChild(polyEl);
+    // Sauf la destination d'un Slam, déjà peinte plus haut SOUS les
+    // véhicules : la repeindre ici annulerait tout l'intérêt.
+    if (destSousVehicules && h.col === destSousVehicules.col && h.row === destSousVehicules.row) continue;
+    peindreSurbrillance(svg, h.col, h.row);
   }
 
   // Phase de tir normale (S7, après mouvement) ET arc de tir Airstrike
