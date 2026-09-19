@@ -243,6 +243,45 @@ async function main() {
   console.log("Le topCar annoncé avec les dés de slam fait foi (attendu true) :",
     parLesDes.entrant > parLesDes.dejaLa);
 
+  section("Test 7 — Jeton de dégât : face visible pendant sa résolution, face cachée sinon");
+
+  const dom7 = makeDom(true);
+  const win7 = dom7.window;
+  win7.newGame();
+
+  console.log("Un Dent donne son image propre (attendu true) :",
+    win7.damageImagePath({ type: "dent" }).endsWith("damage-dent.webp"));
+  console.log("Un Skid donne la face de SA direction, pas une générique (attendu true) :",
+    win7.damageImagePath({ type: "skid", skidDirection: "rear-left" }).endsWith("damage-skid-rear-left.webp"));
+  console.log("Sans jeton, c'est le dos (attendu true) :", win7.damageImagePath(null).endsWith("damage-front.webp"));
+
+  const G7 = win7.eval("G");
+  const blesse = G7.allCars.find((c) => c.owner === HUMAN);
+  const jeton = { type: "dazed" };
+  blesse.damageTokens.push(jeton);
+  const facesAffichees = () => [...win7.document.querySelectorAll("#dashboards-rail image")]
+    .map((e) => e.getAttribute("href") || "").filter((h) => h.includes("damage"));
+
+  win7.render();
+  console.log("Hors résolution, le jeton est face cachée (attendu true) :",
+    facesAffichees().some((h) => h.includes("damage-front.webp")) &&
+    !facesAffichees().some((h) => h.includes("damage-dazed.webp")));
+
+  // C'est l'événement du moteur qui ouvre et ferme la révélation.
+  // Le jeton ne se pose face visible qu'une fois le retournement joué
+  // dans la fenêtre Illustration : on attend donc l'animation.
+  win7.traiterEvenementPresentation({ type: "damage", car: blesse, token: jeton });
+  await sleep(900);
+  win7.render();
+  console.log("Pendant sa résolution, il passe face visible (attendu true) :",
+    facesAffichees().some((h) => h.includes("damage-dazed.webp")));
+
+  win7.traiterEvenementPresentation({ type: "damage-resolved", car: blesse, token: jeton });
+  win7.render();
+  console.log("Une fois ses effets finis, il repasse face cachée (attendu true) :",
+    !facesAffichees().some((h) => h.includes("damage-dazed.webp")) &&
+    facesAffichees().some((h) => h.includes("damage-front.webp")));
+
   console.log("\n=== Fin des tests dédiés (rythme des animations, 4a) ===");
 }
 
