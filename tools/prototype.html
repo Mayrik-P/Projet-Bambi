@@ -7466,10 +7466,28 @@ const HAZARD_BACK_PATH = "../images/hazards/hazard-back.webp";
 // jamais renseigner cell.revealedHazard) — Wreck redevient une vraie
 // voiture (wreckCar, déjà gérée par carImagePath), Mine disparaît
 // purement et simplement, comme au livret.
-const HAZARD_REVEALED_IMAGE = {
+// Face imprimée de chaque type de hazard. Sert à la révélation dans la
+// fenêtre Illustration, donc elle couvre les CINQ types — y compris
+// Mine et Wreck, dont les images étaient présentes dans le dépôt sans
+// jamais s'afficher nulle part, puisque le moteur les défausse ou les
+// transforme aussitôt. La fenêtre est la seule occasion de les voir.
+const HAZARD_FACE_IMAGE = {
   blank: "../images/hazards/hazard-road.webp",
   dirt: "../images/hazards/hazard-mud.webp",
-  oil_slick: "../images/hazards/hazard-oilslick.webp"
+  oil_slick: "../images/hazards/hazard-oilslick.webp",
+  mine: "../images/hazards/hazard-mine.webp",
+  wreck: "../images/hazards/hazard-wreck.webp"
+};
+
+// Sous-ensemble qui reste POSÉ sur le plateau, face visible, pour le
+// reste de la partie (p.7). Deux notions distinctes qu'il ne faut pas
+// fusionner malgré le recouvrement : l'une dit « à quoi ressemble ce
+// jeton », l'autre « ce jeton reste-t-il sur la case ». Les chemins,
+// eux, n'ont qu'une source.
+const HAZARD_REVEALED_IMAGE = {
+  blank: HAZARD_FACE_IMAGE.blank,
+  dirt: HAZARD_FACE_IMAGE.dirt,
+  oil_slick: HAZARD_FACE_IMAGE.oil_slick
 };
 
 // Particularité du jeu physique, confirmée par Mayrik : la Finish
@@ -9152,25 +9170,51 @@ function dureesRevelation() {
   };
 }
 
-function revelerJeton(token) {
+// La scène de révélation, indépendante de ce qu'elle révèle : un dos
+// s'installe, se retourne, et la face reste exposée. `onFin` est joué à
+// la toute fin — c'est lui, et lui seul, qui dit ce que devient le
+// jeton une fois révélé, puisque ça diffère selon les cas :
+//   - jeton de DÉGÂT : il va se poser face visible sous le dashboard,
+//     où il n'était pas ;
+//   - jeton de HAZARD : il est déjà sur sa case, et c'est le moteur qui
+//     décide juste après s'il y reste face visible (Road/Mud/Oil Slick)
+//     ou s'il disparaît (Mine/Wreck). Il n'y a donc rien à faire ici :
+//     la fenêtre se vide, le plateau reprend la main.
+// Le moteur attend la fin de cette scène avant de résoudre l'effet
+// (elle est inscrite au registre des animations en vol), donc la case
+// montre encore son dos pendant toute la révélation — c'est cohérent,
+// et ça ne demande aucun séquencement supplémentaire.
+function jouerRevelation(dos, face, onFin) {
   const illu = document.getElementById("illu-module");
-  if (!illu || !scenePeutAnimer()) { jetonsReveles.add(token); return; }
+  if (!illu || !face || !scenePeutAnimer()) { onFin(); return; }
   illu.innerHTML = "";
   const img = document.createElement("img");
-  img.src = DAMAGE_FRONT;
+  img.src = dos;
   img.alt = "";
   illu.appendChild(img);
   const t = dureesRevelation();
   const scene = ouvrirSceneIllustration();
   suivreAnimation((async () => {
-    await pauseDeScene(scene, t.apparition);           // 1 — le dos s'installe
-    await animerRetournement(img, damageImagePath(token), t.rotation, scene); // 2 — il se retourne
-    await pauseDeScene(scene, t.exposition);           // 4 — la face tirée reste lisible
+    await pauseDeScene(scene, t.apparition);   // 1 — le dos s'installe
+    await animerRetournement(img, face, t.rotation, scene); // 2 — il se retourne
+    await pauseDeScene(scene, t.exposition);   // 4 — la face tirée reste lisible
     fermerSceneIllustration(scene);
-    jetonsReveles.add(token); // le jeton se pose face visible sous le dashboard
+    onFin();
     illu.innerHTML = "";
     render();
   })());
+}
+
+function revelerJeton(token) {
+  jouerRevelation(DAMAGE_FRONT, damageImagePath(token), () => jetonsReveles.add(token));
+}
+
+// Même principe, même durées, même tap pour écourter : un hazard qu'on
+// vient de déclencher se retourne dans la fenêtre avant d'être résolu.
+function revelerHazard(hazardType) {
+  const face = HAZARD_FACE_IMAGE[hazardType];
+  if (!face) return; // type sans visuel connu (extensions à venir) : aucune scène plutôt qu'une fenêtre vide
+  jouerRevelation(HAZARD_BACK_PATH, face, () => {});
 }
 
 // Point de passage UNIQUE des deux pilotes pour tout événement de
@@ -9181,6 +9225,7 @@ function traiterEvenementPresentation(evt) {
   if (!evt) return;
   if (evt.type === "damage" && evt.token) revelerJeton(evt.token);
   else if (evt.type === "damage-resolved" && evt.token) jetonsReveles.delete(evt.token);
+  else if (evt.type === "hazard" && evt.hazardType) revelerHazard(evt.hazardType);
 }
 
 // Fait avancer le générateur du tour IA en cours jusqu'à sa fin OU
