@@ -3449,21 +3449,29 @@ module.exports = {
 
 
 
-// Unité commune de la grappe dicetrack + speedometer + road die
-// (retour de Mayrik) : le CARRÉ. Le speedometer et le road die valent
-// un carré chacun, le dicetrack en vaut DEUX de large sur UN de haut.
-// La grappe entière forme donc un carré de 2×2 — dicetrack en haut,
-// les deux cadrans dessous — et garde cette répartition quelle que
-// soit la place disponible. Avant, la hauteur du dicetrack était une
-// constante indépendante du côté des cadrans : les trois modules
-// dérivaient les uns par rapport aux autres selon la largeur d'écran.
+// Unité commune de TOUS les modules secondaires (retour de Mayrik) :
+// le CARRÉ. Le plateau et le rail des joueurs gardent leurs propres
+// règles ; tout le reste se compte en carrés, ce qui rend leurs
+// tailles comparables entre elles quelle que soit la place :
+//
+//   speedometer  1 carré
+//   road die     1 carré
+//   dicetrack    2 carrés (2×1, à plat)
+//   illustration 4 carrés (2×2, donc carrée elle aussi)
+//
+// Ces huit carrés forment une grappe unique qui se pose soit à plat
+// (4 de large sur 2 de haut, en portrait), soit debout (2 de large sur
+// 4 de haut, dans une colonne latérale). Avant, chaque module avait sa
+// propre taille cible indépendante : l'illustration visait 200 px là
+// où les cadrans en visaient 88, et la grappe ne tombait jamais juste.
 const CARRE_MIN = 64, CARRE_TARGET = 88, GAP = 6;
 
 const SPEC = {
   board: { vbW:907.7, vbH:229.3, cellW:37.90, tileW:303.0, cellMin:44, cellMax:92, sliderH:18 },
   dash:  { aspect:871/234, minW:340, minVisible:2 },
   info:  { hTwoLines:48, hOneLine:32, minW:340, oneLineFrom:800 },
-  illu:  { min:160, target:200 },
+  // Dérivée du carré, comme tout le reste : 2×2.
+  illu:  { min:2*64 + 6, target:2*88 + 6 },
   // Dérivés du carré : deux carrés de large, un de haut.
   carre: { min:CARRE_MIN, target:CARRE_TARGET },
   dice:  { minW:2*CARRE_MIN + GAP, minH:CARRE_MIN },
@@ -3526,33 +3534,34 @@ function computeLayout(W, H, players, forced, present){
     // colonne de droite. Ordre voulu par Mayrik : speedometer à gauche,
     // road die à droite.
     const carres = [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean);
-    const carresMinW = carres.length
-      ? carres.length*SPEC.roaddie.min + (carres.length - 1)*G : 0;
-    const stackMinW = Math.max(has.dice ? SPEC.dice.minW : 0, carresMinW);
     let illu = 0, stackW = 0, sqSide = 0, stackH = 0;
     let illuFlow = false, clusterFlow = false;
 
+    // La grappe se pose À PLAT en portrait : l'illustration occupe ses
+    // 2 colonnes de carrés à gauche, le dicetrack et les deux cadrans
+    // les 2 colonnes de droite. Le côté du carré est ce qui rend tous
+    // ces modules comparables — il se déduit de la largeur disponible
+    // divisée par le nombre de colonnes réellement demandées.
     function layoutMedia(){
       illuFlow = has.illu && !illuOver;
-      clusterFlow = stackMinW > 0 && !clusterOver;
-      if (illuFlow) {
-        illu = clusterFlow ? Math.min(SPEC.illu.target, w - G - stackMinW) : Math.min(SPEC.illu.target, w);
-        if (clusterFlow && illu < SPEC.illu.min) {
-          clusterOver = true; clusterFlow = false; illu = Math.min(SPEC.illu.target, w);
-          steps.push("dicetrack et cadrans en surimpression : largeur insuffisante à côté de l'illustration");
-        }
-        stackW = clusterFlow ? w - illu - G : 0;
-      } else { illu = 0; stackW = clusterFlow ? w : 0; }
-      if (clusterFlow) {
-        // Le côté du carré se déduit TOUJOURS d'une grappe de deux
-        // colonnes, même si un seul cadran est présent : c'est ce qui
-        // garantit que le dicetrack fasse exactement deux carrés de
-        // large et un de haut, et que la grappe reste carrée.
-        sqSide = Math.min(SPEC.carre.target, (stackW - G) / 2);
-        stackH = (has.dice ? sqSide : 0)
-               + (carres.length ? (has.dice ? G : 0) + sqSide : 0);
-      } else { sqSide = 0; stackH = 0; }
-      return Math.max(illuFlow ? illu : 0, clusterFlow ? stackH : 0);
+      clusterFlow = (has.dice || carres.length > 0) && !clusterOver;
+      const cols = (illuFlow ? 2 : 0) + (clusterFlow ? 2 : 0);
+      if (!cols) { illu = 0; stackW = 0; sqSide = 0; stackH = 0; return 0; }
+      sqSide = Math.min(SPEC.carre.target, (w - (cols - 1)*G) / cols);
+      // Sous le carré minimum, la grappe passe en surimpression plutôt
+      // que de réduire tout le monde en dessous du lisible.
+      if (sqSide < SPEC.carre.min && illuFlow && clusterFlow) {
+        clusterOver = true; clusterFlow = false;
+        steps.push("dicetrack et cadrans en surimpression : largeur insuffisante à côté de l'illustration");
+        return layoutMedia();
+      }
+      const deuxCarres = 2*sqSide + G;
+      illu = illuFlow ? deuxCarres : 0;
+      stackW = clusterFlow ? deuxCarres : 0;
+      stackH = clusterFlow
+        ? (has.dice ? sqSide : 0) + (carres.length ? (has.dice ? G : 0) + sqSide : 0)
+        : 0;
+      return Math.max(illuFlow ? illu : 0, stackH);
     }
     let mediaH = layoutMedia();
 
@@ -3589,16 +3598,17 @@ function computeLayout(W, H, players, forced, present){
     y += boardH + G;
     put("info", G, y, w, infoH, SPEC.info.minW, SPEC.info.hOneLine); y += infoH + G;
 
-    if (illuFlow) put("illu", G, y, illu, illu, SPEC.illu.min, SPEC.illu.min);
+    // Grappe centrée dans la largeur : au-delà du carré cible on ne
+    // l'étire pas, on laisse la marge des deux côtés plutôt que de
+    // gonfler un module par rapport aux autres.
+    const grappeW = (illuFlow ? illu : 0) + (clusterFlow ? stackW : 0)
+                  + ((illuFlow && clusterFlow) ? G : 0);
+    const gx = G + Math.max(0, (w - grappeW)/2);
+    if (illuFlow) put("illu", gx, y, illu, illu, SPEC.illu.min, SPEC.illu.min);
     if (clusterFlow) {
-      // La grappe fait exactement deux carrés de large. Quand la
-      // colonne est plus large que ça (grand écran), on la centre
-      // plutôt que d'étirer le dicetrack tout seul : c'est ce qui le
-      // faisait paraître démesuré à côté des deux cadrans.
-      const clusterW = 2*sqSide + G;
-      const sx = G + (illuFlow ? illu + G : 0) + Math.max(0, (stackW - clusterW)/2);
+      const sx = gx + (illuFlow ? illu + G : 0);
       let sy = y;
-      if (has.dice) { put("dice", sx, sy, clusterW, sqSide, SPEC.dice.minW, SPEC.dice.minH); sy += sqSide + G; }
+      if (has.dice) { put("dice", sx, sy, stackW, sqSide, SPEC.dice.minW, SPEC.dice.minH); sy += sqSide + G; }
       carres.forEach((id, i) => put(id, sx + i*(sqSide + G), sy, sqSide, sqSide,
         SPEC[id].min, SPEC[id].min));
     }
@@ -3660,17 +3670,17 @@ function computeLayout(W, H, players, forced, present){
     put("board", G, y, boardW, boardH, Math.round(SPEC.board.tileW*boardScale(boardH)), boardMin(boardW));
     // La colonne droite s'étend sur la hauteur du plateau ET de la bande d'info.
     const colH = boardH + G + infoH, sx = G + boardW + G;
-    const colNeed = SPEC.illu.min + (has.dice ? SPEC.dice.minH + G : 0);
+    // Colonne DEBOUT : deux carrés de large. L'illustration en occupe
+    // 2×2, donc elle est carrée ; le dicetrack 2×1 juste dessous.
+    const sqCol = Math.min(SPEC.carre.target, (side - G) / 2);
+    const deuxCarresCol = 2*sqCol + G;
+    const colNeed = deuxCarresCol + (has.dice ? sqCol + G : 0);
     const colOk = sideFlow && colH >= colNeed;
     if (colOk) {
-      const ill = Math.min(side, colH - (colNeed - SPEC.illu.min));
-      put("illu", sx, y, side, ill, SPEC.illu.min, SPEC.illu.min);
-      let sy = y + ill + G;
-      // Même règle qu'en portrait : deux carrés de large, un de haut,
-      // centrés dans la colonne quand celle-ci est plus large.
-      const diceH = Math.min(SPEC.carre.target, (side - G) / 2);
-      const diceW = 2*diceH + G;
-      if (has.dice) { put("dice", sx + Math.max(0, (side - diceW)/2), sy, diceW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
+      const cx = sx + Math.max(0, (side - deuxCarresCol)/2);
+      put("illu", cx, y, deuxCarresCol, deuxCarresCol, SPEC.illu.min, SPEC.illu.min);
+      let sy = y + deuxCarresCol + G;
+      if (has.dice) { put("dice", cx, sy, deuxCarresCol, sqCol, SPEC.dice.minW, SPEC.dice.minH); sy += sqCol + G; }
     } else {
       if (has.illu) put("illu", W-G-8-SPEC.illu.min, y+8, SPEC.illu.min, SPEC.illu.min,
                         SPEC.illu.min, SPEC.illu.min, true);
@@ -3706,7 +3716,11 @@ function computeLayout(W, H, players, forced, present){
   else { /* wide */
     // Colonne latérale seulement si l'illustration est là (même raison
     // qu'en paysage) ; sinon le plateau prend toute la largeur.
-    const sideW = has.illu ? Math.max(340, Math.min(420, W*0.26)) : 0;
+    // La colonne latérale vaut exactement la grappe : deux carrés de
+    // large. Elle prenait jusqu'à 420 px du temps où l'illustration
+    // avait sa propre taille cible — c'est autant de largeur rendue au
+    // plateau, qui en fait bien meilleur usage.
+    const sideW = has.illu ? 2*SPEC.carre.target + G : 0;
     const leftW = has.illu ? W - sideW - 3*G : W - 2*G;
     let infoH = SPEC.info.hOneLine;
     let cols = 2, colW = (leftW - G)/2;
@@ -3716,10 +3730,16 @@ function computeLayout(W, H, players, forced, present){
     let rows = Math.ceil(players/cols);
     const rest = () => H - (infoH + rows*rowH + (rows-1)*G + 4*G);
     let boardH = rest(), guard = 0;
-    while (boardH < boardMin(leftW) && guard++ < 4) {
+    while (boardH < boardMin(leftW) && guard++ < 5) {
       if (chrome) { chrome = 0;
         steps.push("curseur de position en surimpression sur le plateau"); }
       else if (rows > 1) { rows--; steps.push("une rangée de dashboards sur deux, les autres au défilement"); }
+      // Sur un écran très large et court, les dashboards s'étirent avec
+      // la largeur et leur hauteur finit par manger les 6 rangées. Même
+      // échelon qu'en paysage : on les ramène à leur largeur minimale
+      // plutôt que de sacrifier le plateau.
+      else if (colW > SPEC.dash.minW) { colW = SPEC.dash.minW; rowH = colW/SPEC.dash.aspect;
+        steps.push("dashboards ramenés à leur largeur minimale"); }
       else break;
       boardH = rest();
     }
@@ -3737,31 +3757,29 @@ function computeLayout(W, H, players, forced, present){
 
     if (has.illu) {
       // Colonne latérale : illustration, dicetrack, road die, round — chacun son budget.
-      const sx = W - sideW - G;
-      // Même règle que dans les deux autres profils : le dicetrack
-      // fait deux carrés de large sur un de haut, et les deux cadrans
-      // qui le suivent font un carré chacun.
-      const diceH = Math.max(SPEC.dice.minH, Math.min(SPEC.carre.target, (sideW - G) / 2));
+      // Colonne DEBOUT, comme en paysage : 2 carrés de large,
+      // l'illustration carrée (2×2) en haut, puis le dicetrack (2×1),
+      // puis les deux cadrans (1+1).
+      const sq = Math.min(SPEC.carre.target, (sideW - G) / 2);
+      const deuxCarres = 2*sq + G;
+      const sx = W - G - deuxCarres;
+      const diceH = sq;
       const carres = [has.speedo && "speedo", has.roaddie && "roaddie"].filter(Boolean);
-      const need = (has.dice ? diceH + G : 0) + (carres.length ? SPEC.roaddie.target + G : 0) + G;
-      let sy = G, ill = Math.min(sideW, 400, H - G - need);
-      if (ill >= SPEC.illu.min) { put("illu", sx, sy, sideW, ill, SPEC.illu.min, SPEC.illu.min); sy += ill + G; }
+      const need = (has.dice ? diceH + G : 0) + (carres.length ? sq + G : 0) + G;
+      let sy = G, ill = deuxCarres;
+      if (H - G - need >= ill) { put("illu", sx, sy, ill, ill, SPEC.illu.min, SPEC.illu.min); sy += ill + G; }
       else { put("illu", W-sideW, H-G-8-SPEC.illu.min, SPEC.illu.min, SPEC.illu.min,
                   SPEC.illu.min, SPEC.illu.min, true);
              steps.push("illustration en surimpression : colonne latérale trop courte"); }
-      const diceW = 2*diceH + G;
       if (has.dice) {
-        if (H - sy - G >= diceH) { put("dice", sx + Math.max(0, (sideW - diceW)/2), sy, diceW, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
+        if (H - sy - G >= diceH) { put("dice", sx, sy, deuxCarres, diceH, SPEC.dice.minW, SPEC.dice.minH); sy += diceH + G; }
         else { put("dice", sx+8, H-G-8-SPEC.dice.minH, SPEC.dice.minW, SPEC.dice.minH,
                     SPEC.dice.minW, SPEC.dice.minH, true); steps.push("dicetrack en surimpression"); }
       }
       // Les cadrans carrés terminent la colonne, côte à côte.
       if (carres.length) {
-        const sq = Math.min(SPEC.carre.target, (sideW - G) / 2);
-        const totalSq = 2*sq + G;
-        const sqX = sx + Math.max(0, (sideW - totalSq)/2);
         if (H - sy - G >= sq) {
-          carres.forEach((id, i) => put(id, sqX + i*(sq + G), sy, sq, sq, SPEC[id].min, SPEC[id].min));
+          carres.forEach((id, i) => put(id, sx + i*(sq + G), sy, sq, sq, SPEC[id].min, SPEC[id].min));
         } else {
           carres.forEach((id, i) => put(id, sx + i*(SPEC[id].min + G), H-G-SPEC[id].min,
             SPEC[id].min, SPEC[id].min, SPEC[id].min, SPEC[id].min, true));
