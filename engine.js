@@ -1330,6 +1330,8 @@ const PRESENTATION_EVENTS = new Set([
   "slam-dice",      // les dés de slam viennent d'être lancés, avant tout déplacement
   "slam-resolved",  // le slam est résolu, on sait qui part et dans quelle direction
   "damage",         // un jeton de dégât vient d'être posé sur un véhicule
+  "damage-resolved",// ses effets sont finis : le jeton peut repasser face cachée
+  "effect-dice",    // dés d'un effet (Oil Slick, Shrapnel, Dazed, Blast Off) lancés, avant tout déplacement
   "shoot-dice",     // le dé de tir vient d'être lancé, avant l'éventuel dégât
   "shoot-resolved"  // le tir est entièrement résolu
 ]);
@@ -1889,6 +1891,10 @@ function setupTileProgressionFromRawData(rawTileDataList, options = {}) {
 function* resolveOilSlickSlideGen(tile, allCars, car, remaining, options, log) {
   const direction = rollDirectionDie(options.forcedDice?.oilSlickDirection);
   log.push(`Glissade Oil Slick en ${direction} (ne coûte aucun déplacement)`);
+  // Le dé est lancé, la glissade n'a pas encore eu lieu (retour de
+  // Mayrik : le véhicule partait en même temps que le dé volait, on ne
+  // voyait donc jamais le résultat avant son effet).
+  yield* emitEvent(options, { type: "effect-dice", car, source: "oil-slick", direction });
   const slideResult = yield* forceMoveOneSpaceGen(tile, car, allCars, direction, options);
   log.push(...slideResult.log);
 
@@ -2103,6 +2109,7 @@ function* resolveDamageTokenGen(tile, allCars, car, tokenType, options = {}) {
       // bord du plateau (auquel cas rien ne se passe).
       const direction = rollDirectionDie(forcedDice.shrapnelDirection);
       log.push(`${car.id} — jeton SHRAPNEL : direction ${direction}`);
+      yield* emitEvent(options, { type: "effect-dice", car, source: "shrapnel", direction });
       // La grille est en quinconce : le décalage de colonne d'une
       // direction diagonale dépend de la parité de la rangée COURANTE
       // à chaque case franchie (pas une seule fois) — voir
@@ -2134,7 +2141,13 @@ function* resolveDamageTokenGen(tile, allCars, car, tokenType, options = {}) {
           allCars,
           forcedDice,
           decideReroll: options.decideReroll,
-          isHumanOwner: options.isHumanOwner
+          isHumanOwner: options.isHumanOwner,
+          // Sans ce relais, le dégât infligé EN CASCADE par le
+          // Shrapnel n'émettait aucun événement : l'interface voyait
+          // le jeton de la voiture touchée apparaître sans révélation
+          // ni pause (les options sont reconstruites à la main ici,
+          // pas propagées par ...options).
+          emitEvents: options.emitEvents
         });
         log.push(...hitResult.log);
       } else {
@@ -2166,6 +2179,7 @@ function* resolveDamageTokenGen(tile, allCars, car, tokenType, options = {}) {
       // restants (ex. slam).
       let remaining = rollStuntDie(forcedDice.dazedStunt);
       log.push(`${car.id} — jeton DAZED : dé de cascade = ${remaining}`);
+      yield* emitEvent(options, { type: "effect-dice", car, source: "dazed", distance: remaining });
       let step = 0;
       while (remaining > 0) {
         const forcedStepDirection = forcedDice.dazedDirections ? forcedDice.dazedDirections[step] : null;
@@ -2174,6 +2188,10 @@ function* resolveDamageTokenGen(tile, allCars, car, tokenType, options = {}) {
         const targetCol = car.col + delta.dCol;
         const targetRow = car.row + delta.dRow;
         log.push(`  Étape ${step + 1} — direction ${direction}`);
+        // La direction est RELANCÉE à chaque case : chaque relance
+        // mérite sa propre pause, sinon le véhicule part avant qu'on
+        // ait lu le dé.
+        yield* emitEvent(options, { type: "effect-dice", car, source: "dazed", direction, step: step + 1 });
 
         const stepResult = yield* enterAdjacentSpaceGen(tile, car, allCars, targetCol, targetRow, remaining, options);
         log.push(...stepResult.log);
@@ -2196,6 +2214,7 @@ function* resolveDamageTokenGen(tile, allCars, car, tokenType, options = {}) {
       const direction = rollDirectionDie(forcedDice.blastOffDirection);
       const distance = rollStuntDie(forcedDice.blastOffStunt);
       log.push(`${car.id} — jeton BLAST OFF : direction ${direction}, distance ${distance} (cases intermédiaires ignorées)`);
+      yield* emitEvent(options, { type: "effect-dice", car, source: "blast-off", direction, distance });
       // La grille est en quinconce : le décalage de colonne d'un pas
       // diagonal dépend de la parité de la rangée COURANTE à CHAQUE
       // pas, donc on ne peut pas multiplier un delta fixe par la
@@ -2429,13 +2448,20 @@ function* applyDamageGen(car, options = {}) {
     }
   }
 
-  car.damageTokens.push({ type: tokenType });
+  // La direction est CONSERVÉE dans le jeton (chantier 4c) : les six
+  // jetons Skid portent chacun une direction fixe imprimée dessus
+  // (p.12) et ont donc six images distinctes. Sans cette donnée,
+  // l'interface saurait qu'il s'agit d'un Skid mais pas lequel
+  // montrer. Absente pour tous les autres types.
+  const token = { type: tokenType };
+  if (skidDirection) token.skidDirection = skidDirection;
+  car.damageTokens.push(token);
   log.push(`${car.id} reçoit un dégât — jeton ${tokenType} (total : ${car.damageTokens.length}/2)`);
 
   // Le jeton est posé : l'interface peut le révéler sous le dashboard
   // AVANT l'effet qu'il déclenche (Skid, Shrapnel…), qui bougera
   // peut-être encore des véhicules juste après.
-  yield* emitEvent(options, { type: "damage", car, tokenType, tokenCount: car.damageTokens.length });
+  yield* emitEvent(options, { type: "damage", car, token, tokenType, skidDirection: skidDirection || null, tokenCount: car.damageTokens.length });
 
   if (car.damageTokens.length >= 2) {
     car.status = CAR_STATUS.INOPERABLE;
@@ -2447,6 +2473,13 @@ function* applyDamageGen(car, options = {}) {
     const effectResult = yield* resolveDamageTokenGen(options.tile, options.allCars, car, tokenType, { ...options, skidDirection });
     log.push(...effectResult.log);
   }
+
+  // Les effets de CE jeton sont entièrement appliqués : l'interface
+  // peut le remettre face cachée (chantier 4c). Émis après l'effet, et
+  // donc après l'éventuelle cascade qu'il a provoquée — un jeton
+  // déclenché par un autre se retourne ainsi avant celui qui l'a
+  // déclenché, ce qui est l'ordre réel des choses.
+  yield* emitEvent(options, { type: "damage-resolved", car, token, tokenType });
 
   return { log, applied: true };
 }

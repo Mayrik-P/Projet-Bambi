@@ -27,7 +27,7 @@
 const {
   createTestTile, createCar, CAR_SIZE, HAZARD_TYPES,
   moveCar, moveCarGen, resolveShoot, resolveShootGen,
-  isPresentationEvent, TOKEN_TYPES, getSpace
+  isPresentationEvent, TOKEN_TYPES, getSpace, applyDamageGen
 } = require("./engine.js");
 
 function section(title) { console.log("\n=== " + title + " ==="); }
@@ -270,4 +270,120 @@ const evtDes3 = petitContreEpave.evenements.find((e) => e.type === "slam-dice");
 console.log("Small contre épave Small : aucune relance possible (attendu true) :",
   !!evtDes3 && evtDes3.largerCar === null && evtDes3.smallerCar === null);
 
-console.log("\n=== Fin des tests dédiés (événements de présentation, 4b) ===");
+
+// -----------------------------------------------------------------
+section("Test 7 — Jeton de dégât : direction du Skid conservée, et fin de résolution annoncée");
+
+// Chantier 4c. Deux besoins de l'interface, tous deux invisibles ici :
+//   - les six jetons Skid ont chacun une direction fixe imprimée (p.12)
+//     et donc six images distinctes : la direction doit survivre dans
+//     le jeton, pas seulement servir au calcul du déplacement ;
+//   - le jeton reste face visible tant que SES effets s'appliquent, il
+//     faut donc savoir quand ils sont finis.
+
+tile = createTestTile(8, 6);
+const skide = createCar("Vous", CAR_SIZE.MEDIUM, 3, 3);
+cars = [skide];
+const genSkid = applyDamageGen(skide, {
+  tile, allCars: cars,
+  tokenType: TOKEN_TYPES.SKID,
+  skidDirection: "rear-left",
+  emitEvents: true
+});
+const skid = collecter(genSkid);
+const suite7 = types(skid.evenements);
+console.log("Séquence observée :", suite7.join(" → "));
+
+const evtSkid = skid.evenements.find((e) => e.type === "damage");
+console.log("La direction du Skid est portée par l'événement (attendu true) :", !!evtSkid && evtSkid.skidDirection === "rear-left");
+console.log("...et conservée dans le jeton lui-même (attendu true) :",
+  skide.damageTokens.length === 1 && skide.damageTokens[0].skidDirection === "rear-left");
+console.log("Un jeton sans direction n'en invente pas (attendu true) :", (() => {
+  const t = createTestTile(8, 6);
+  const c = createCar("Vous", CAR_SIZE.MEDIUM, 3, 3);
+  const g = applyDamageGen(c, { tile: t, allCars: [c], tokenType: TOKEN_TYPES.DENT, emitEvents: true });
+  collecter(g);
+  return c.damageTokens[0].skidDirection === undefined;
+})());
+
+console.log("La fin de résolution est annoncée (attendu true) :", suite7.includes("damage-resolved"));
+console.log("...APRÈS les déplacements provoqués par le jeton (attendu true) :",
+  suite7.lastIndexOf("step") >= 0 && suite7.indexOf("damage-resolved") > suite7.lastIndexOf("step"));
+console.log("...et une seule fois (attendu true) :", suite7.filter((t) => t === "damage-resolved").length === 1);
+
+// Cascade : un Shrapnel touche une autre voiture, qui prend un DENT.
+// Le jeton déclenché doit se retourner AVANT celui qui l'a déclenché.
+tile = createTestTile(8, 6);
+const source = createCar("IA", CAR_SIZE.MEDIUM, 3, 3);
+const touchee = createCar("Vous", CAR_SIZE.SMALL, 5, 3);
+cars = [source, touchee];
+const genCascade = applyDamageGen(source, {
+  tile, allCars: cars,
+  tokenType: TOKEN_TYPES.SHRAPNEL,
+  forcedDice: { shrapnelDirection: "front" },
+  emitEvents: true
+});
+const cascade = collecter(genCascade);
+const suite8 = types(cascade.evenements);
+console.log("\nSéquence de cascade :", suite8.join(" → "));
+console.log("Deux jetons posés, deux fins de résolution (attendu true) :",
+  suite8.filter((t) => t === "damage").length === 2 && suite8.filter((t) => t === "damage-resolved").length === 2);
+console.log("Le jeton déclenché se retourne AVANT celui qui l'a déclenché (attendu true) :",
+  suite8.indexOf("damage-resolved") < suite8.lastIndexOf("damage-resolved") &&
+  suite8.lastIndexOf("damage") < suite8.indexOf("damage-resolved"));
+
+
+// -----------------------------------------------------------------
+section("Test 8 — Dés d'effet : annoncés AVANT le déplacement qu'ils provoquent");
+
+// Retour de Mayrik en jouant : sur un Oil Slick, le véhicule partait
+// en même temps que le dé volait — on ne voyait jamais le résultat
+// avant son effet. Même manque pour Shrapnel, Dazed et Blast Off, qui
+// lancent eux aussi des dés décidant d'un déplacement.
+
+function premierIndex(suite, t) { return suite.indexOf(t); }
+
+// Oil Slick : la case est transformée puis la voiture glisse.
+tile = createTestTile(8, 6);
+const glisseur = createCar("Vous", CAR_SIZE.MEDIUM, 3, 3);
+cars = [glisseur];
+getSpace(tile, 4, 3).hazard = HAZARD_TYPES.OIL_SLICK;
+const genOil = moveCarGen(tile, glisseur, 1, ["front"], cars, {
+  forcedDice: { oilSlickDirection: "front-left" },
+  emitEvents: true
+});
+const oil = collecter(genOil);
+const suiteOil = types(oil.evenements);
+console.log("Séquence Oil Slick :", suiteOil.join(" → "));
+const iDesOil = premierIndex(suiteOil, "effect-dice");
+console.log("Le dé de glissade est annoncé (attendu true) :", iDesOil >= 0);
+const evtOil = oil.evenements[iDesOil];
+console.log("L'événement dit d'où il vient et ce qu'il donne (attendu true) :",
+  !!evtOil && evtOil.source === "oil-slick" && evtOil.direction === "front-left" && evtOil.car === glisseur);
+console.log("Le hazard est révélé AVANT son dé (attendu true) :",
+  premierIndex(suiteOil, "hazard") >= 0 && premierIndex(suiteOil, "hazard") < iDesOil);
+// Le pas d'ARRIVÉE sur la case du hazard précède légitimement le dé ;
+// c'est le pas de la GLISSADE qui doit venir après.
+const pasApresDe = suiteOil.filter((t, i) => t === "step" && i > iDesOil).length;
+console.log("La glissade elle-même a lieu APRÈS le dé (attendu true) :", pasApresDe > 0);
+
+// Dazed : un dé de cascade, puis une direction relancée à chaque case.
+tile = createTestTile(8, 6);
+const sonne = createCar("Vous", CAR_SIZE.MEDIUM, 3, 3);
+cars = [sonne];
+const genDazed = applyDamageGen(sonne, {
+  tile, allCars: cars,
+  tokenType: TOKEN_TYPES.DAZED,
+  forcedDice: { dazedStunt: 2, dazedDirections: ["front", "front"] },
+  emitEvents: true
+});
+const dazed = collecter(genDazed);
+const suiteDazed = types(dazed.evenements);
+console.log("\nSéquence Dazed :", suiteDazed.join(" → "));
+const desDazed = dazed.evenements.filter((e) => e.type === "effect-dice");
+console.log("Un dé de cascade + une direction par case (attendu true) :",
+  desDazed.length === 3 && desDazed[0].distance === 2 && desDazed[1].step === 1 && desDazed[2].step === 2);
+console.log("Chaque direction est annoncée avant le pas qu'elle provoque (attendu true) :",
+  suiteDazed.indexOf("effect-dice") < suiteDazed.indexOf("step"));
+
+console.log("\n=== Fin des tests dédiés (événements de présentation, 4b et 4c) ===");
