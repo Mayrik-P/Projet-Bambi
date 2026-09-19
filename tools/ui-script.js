@@ -984,7 +984,8 @@ function renderDashboards() {
       // ne distingue visuellement un jeton réparable d'un jeton juste
       // affiché (autre retour de Mayrik).
       if (car) {
-        const damagePath = "../images/damage/damage-front.webp";
+        // Face visible pendant la résolution du jeton, face cachée le
+        // reste du temps (chantier 4c).
         const isRepairable = playerName === HUMAN && repairTargetStep && myRepairable.has(car);
         const drawToken = (box, tokenValue) => {
           if (isRepairable) {
@@ -995,6 +996,7 @@ function renderDashboards() {
             const rx = box.x + box.w / 2 - rw / 2, ry = box.y + box.h / 2 - rh / 2;
             svg.insertAdjacentHTML("beforeend", `<rect x="${rx.toFixed(1)}" y="${ry.toFixed(1)}" width="${rw.toFixed(1)}" height="${rh.toFixed(1)}" rx="6" fill="#b0d458" fill-opacity="0.55" stroke="#b0d458" stroke-width="2"/>`);
           }
+          const damagePath = jetonsReveles.has(tokenValue) ? damageImagePath(tokenValue) : DAMAGE_FRONT;
           drawImage(svg, damagePath, box.x, box.y, box.w, box.h, isRepairable ? 'class="clickable"' : 'pointer-events="none"');
           if (isRepairable) svg.lastElementChild.addEventListener("click", () => { pickRepairTarget(car, tokenValue); render(); });
         };
@@ -1272,6 +1274,7 @@ function newGame() {
   const roundState = createRoundState(PLAYER_NAMES);
   G = { progressionState, allCars, allChoppers, roundState, aiPending: null, aiAnimating: false, uiLocked: false };
   vehiculeEntrant = null;
+  jetonsReveles.clear();
   sel = {};
   fullLog = [];
   gameOver = false;
@@ -1566,6 +1569,100 @@ function noterVehiculeEntrant(evt) {
   }
 }
 
+// ===================================================================
+// RÉVÉLATION DES JETONS DE DÉGÂT (chantier 4c)
+//
+// Séquence voulue par Mayrik : le dos du jeton apparaît dans la
+// fenêtre Illustration, s'y retourne pour révéler sa vraie face, puis
+// le jeton va se poser FACE VISIBLE sous le dashboard du véhicule
+// touché, où il reste tant que ses effets s'appliquent. Dès que sa
+// résolution est finie, il repasse face cachée.
+//
+// Les deux bornes viennent du moteur et de nulle part ailleurs :
+// l'événement `damage` pose le jeton, `damage-resolved` clôt sa
+// résolution (voir engine.js). Dans une cascade, un jeton déclenché
+// par un autre se retourne donc avant celui qui l'a déclenché.
+// ===================================================================
+const DAMAGE_FRONT = "../images/damage/damage-front.webp";
+
+// Jetons actuellement FACE VISIBLE. On y met l'objet jeton lui-même,
+// pas son type : deux jetons de même type coexistent sous un dashboard
+// et n'ont aucune raison d'être révélés en même temps.
+const jetonsReveles = new Set();
+
+function damageImagePath(token) {
+  if (!token || !token.type) return DAMAGE_FRONT;
+  // Les six jetons Skid portent chacun une direction imprimée : c'est
+  // pour ça que le moteur conserve skidDirection (chantier 4c).
+  if (token.type === "skid" && token.skidDirection) {
+    return `../images/damage/damage-skid-${token.skidDirection}.webp`;
+  }
+  return `../images/damage/damage-${token.type}.webp`;
+}
+
+// Retournement en 2D PUR, sans transformation 3D : le projet est
+// intégralement plat, et introduire un rendu en perspective pour un
+// seul effet ferait cohabiter deux modèles.
+//
+// La méthode : écraser horizontalement de 1 vers 0, ÉCHANGER l'image
+// pile au passage par zéro — donc pendant qu'elle est invisible — puis
+// rouvrir de 0 vers 1 avec l'autre face. L'œil reconstitue un
+// retournement alors qu'aucun pixel n'a quitté le plan. C'est le
+// passage par zéro qui offre cet instant d'échange gratuit, ce que ne
+// permet pas une rotation 3D.
+//
+// Deux détails qui font toute la différence :
+//   - la seconde moitié repart de 0 vers +1, JAMAIS vers -1 : sinon la
+//     face révélée s'affiche en miroir (l'erreur classique quand on
+//     recopie un effet d'icône qui se contente de mirroiter) ;
+//   - un léger étirement vertical au moment le plus mince, et une
+//     courbe d'accélération qui rend le milieu du retournement rapide :
+//     c'est ce qui donne l'illusion de relief sans aucune 3D.
+function animerRetournement(el, faceArriere, totalMs) {
+  return new Promise((resolve) => {
+    const t0 = performance.now();
+    let echange = false;
+    function frame(now) {
+      const t = Math.min(1, (now - t0) / totalMs);
+      const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2)/2;
+      const sx = Math.abs(1 - 2*e); // 1 → 0 → 1
+      if (!echange && e >= 0.5) { el.src = faceArriere; echange = true; }
+      el.style.transform = `scaleX(${sx.toFixed(3)}) scaleY(${(1 + 0.12*(1 - sx)).toFixed(3)})`;
+      if (t < 1) requestAnimationFrame(frame);
+      else { el.style.transform = ""; resolve(); }
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+// Joue la révélation dans la fenêtre Illustration, puis pose le jeton
+// face visible sous le dashboard. S'inscrit au registre des animations
+// en vol : le système de rythme l'attend donc sans une ligne de plus.
+function revelerJeton(token) {
+  const illu = document.getElementById("illu-module");
+  if (!illu || !scenePeutAnimer()) { jetonsReveles.add(token); return; }
+  illu.innerHTML = "";
+  const img = document.createElement("img");
+  img.src = DAMAGE_FRONT;
+  img.alt = "";
+  illu.appendChild(img);
+  suivreAnimation(animerRetournement(img, damageImagePath(token), Math.max(240, PACE_MS)).then(() => {
+    jetonsReveles.add(token); // le jeton se pose face visible sous le dashboard
+    illu.innerHTML = "";
+    render();
+  }));
+}
+
+// Point de passage UNIQUE des deux pilotes pour tout événement de
+// présentation : ce qui est branché ici vaut pour le tour humain comme
+// pour celui de l'IA, sans duplication.
+function traiterEvenementPresentation(evt) {
+  noterVehiculeEntrant(evt);
+  if (!evt) return;
+  if (evt.type === "damage" && evt.token) revelerJeton(evt.token);
+  else if (evt.type === "damage-resolved" && evt.token) jetonsReveles.delete(evt.token);
+}
+
 // Fait avancer le générateur du tour IA en cours jusqu'à sa fin OU
 // jusqu'à sa prochaine pause. DEUX types de pause bien distincts :
 //   - {type:"step", ...} : purement informative, aucune décision à
@@ -1587,7 +1684,7 @@ function driveAiTurnGenerator(gen, turnLabel, decision, answer) {
   const outcome = driveInteractive(gen, answer);
   if (!outcome.done) {
     if (isPresentationEvent(outcome.pending)) {
-      noterVehiculeEntrant(outcome.pending);
+      traiterEvenementPresentation(outcome.pending);
       render(); // affiche IMMÉDIATEMENT la case qui vient d'être atteinte
       // Victoire IMMÉDIATE (retour de Mayrik) : un véhicule — y compris
       // celui du joueur humain, projeté par un Slam pendant le tour de
@@ -2000,7 +2097,7 @@ function driveHumanStepGenerator(gen, onComplete, answer) {
   const outcome = driveInteractive(gen, answer);
   if (!outcome.done) {
     if (isPresentationEvent(outcome.pending)) {
-      noterVehiculeEntrant(outcome.pending);
+      traiterEvenementPresentation(outcome.pending);
       // Chantier 4b — LA CONVERGENCE DES DEUX PILOTES. Ce bloc est le
       // jumeau exact de celui de driveAiTurnGenerator : même flux
       // d'événements venu du moteur, même rythme, même traitement. Le
