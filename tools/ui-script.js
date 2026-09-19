@@ -3054,15 +3054,13 @@ function setupBoardScroll() {
 // CONTENEURS. Le SVG des dashboards n'est dimensionné que par son
 // propre zoom (voir setDashboardsZoom), jamais par la mise en page.
 //
-// MODULES DÉCLARÉS PRÉSENTS : illustration, dicetrack et road die
-// n'existent pas encore dans le DOM — le moteur ne leur réserve donc
-// aucune place (pas de boîte vide) et rend leur part aux autres.
-// Chaque étape suivante n'aura qu'à passer son drapeau à true.
-// dashMode "block" : les dashboards restent un SVG unique pour
-// l'instant ; le passage au rail (un SVG par joueur) viendra avec sa
-// propre étape.
+// MODULES DÉCLARÉS PRÉSENTS : tous existent désormais dans le DOM.
+// L'illustration est le dernier à rejoindre la mise en page (chantier
+// 4c) ; sa place est réservée EN PERMANENCE, même quand elle est vide
+// (choix de Mayrik), pour que la mise en page ne se réorganise pas à
+// chaque révélation.
 // -------------------------------------------------------------------
-const LAYOUT_PRESENT = { illu: false, dice: true, roaddie: true, speedo: true, dashMode: "rail" };
+const LAYOUT_PRESENT = { illu: true, dice: true, roaddie: true, speedo: true, dashMode: "rail" };
 let lastLayout = null;
 
 function applyBoardSizing() { applyLayout(); }
@@ -3124,6 +3122,13 @@ function applyLayout() {
       // de l'autre si elle est plutôt haute.
       diceEl.classList.toggle("vertical", L.zones.dice.h > L.zones.dice.w);
     } else diceEl.style.display = "none";
+  }
+  const illuEl = document.getElementById("illu-module");
+  if (illuEl) {
+    if (L.zones.illu) {
+      place(illuEl, L.zones.illu);
+      illuEl.classList.toggle("over-board", !!L.zones.illu.overlay);
+    } else illuEl.style.display = "none";
   }
   const roadEl = document.getElementById("roaddie-module");
   if (roadEl) {

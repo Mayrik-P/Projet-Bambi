@@ -72,8 +72,18 @@
      overflow maîtrisé évitent qu'un contenu trop grand repousse sa
      propre boîte. */
   #board-viewport, #info-band, #dashboards-viewport, #speedometer-module,
-  #roaddie-module, #dicetrack-module, #board-position-slider {
+  #roaddie-module, #dicetrack-module, #illu-module, #board-position-slider {
     position: absolute; min-height: 0; box-sizing: border-box; }
+  /* Module ILLUSTRATION : carré, garde sa place en permanence même
+     vide (choix de Mayrik) — la mise en page ne doit pas se
+     réorganiser à chaque révélation. Sert aujourd'hui à la révélation
+     des jetons de dégât ; l'illustration des Slams et des hazards
+     viendra s'y afficher de la même façon. */
+  #illu-module { display: flex; align-items: center; justify-content: center;
+    background: #0d0d10; border: 1px solid #3a3a46; border-radius: 6px;
+    padding: 4px; pointer-events: none; overflow: hidden; }
+  #illu-module.over-board { background: rgba(13,13,16,0.82); z-index: 5; }
+  #illu-module img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
   /* Module SPEEDOMETER : cadran carré au format du road die, avec le
      nombre de cases restantes écrit par-dessus. */
   #speedometer-module { display: flex; align-items: center; justify-content: center;
@@ -348,6 +358,12 @@
        direction, cascade, tir), affichés en grand jusqu'au lancer
        suivant. Rempli par showDiceTrack(). -->
   <div id="dicetrack-module"></div>
+
+  <!-- Module ILLUSTRATION : montre ce qui vient de se passer, au moment
+       où ça se passe — aujourd'hui la révélation d'un jeton de dégât,
+       demain les Slams et les hazards. Vide entre deux révélations,
+       mais sa place reste réservée. -->
+  <div id="illu-module"></div>
 
   <!-- Zone 3 : dashboards des joueurs — librement zoomables/déplaçables
        (Panzoom), contenus à cette seule zone. Le double-tap/double-clic
